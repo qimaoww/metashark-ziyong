@@ -52,6 +52,9 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private static readonly Action<ILogger, string, Exception?> LogPageMissing =
             LoggerMessage.Define<string>(LogLevel.Error, new EventId(7, nameof(GetMovieAsync)), "获取不到douban页面内容，可能触发douban防爬或页面结构已改变! url: {Url}");
 
+        private static readonly Action<ILogger, string, Exception?> LogPageBlocked =
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(12, nameof(GetMovieAsync)), "douban页面被禁止访问或触发风控，已跳过刮削. url: {Url}");
+
         private static readonly Action<ILogger, string, Exception?> LogCelebrityPhotosError =
             LoggerMessage.Define<string>(LogLevel.Error, new EventId(8, nameof(GetCelebrityPhotosAsync)), "GetCelebrityPhotosAsync error. cid: {CelebrityId}");
 
@@ -358,6 +361,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
             movie = new DoubanSubject();
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (IsBlockedPage(body))
+            {
+                LogPageBlocked(this.logger, url, null);
+                return null;
+            }
+
             var context = BrowsingContext.New();
             var doc = await context.OpenAsync(req => req.Content(body), cancellationToken).ConfigureAwait(false);
             var contentNode = doc.QuerySelector("#content");
@@ -992,6 +1001,20 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return MetaSharkPlugin.Instance?.Configuration.EnableDoubanAvoidRiskControl ?? false;
         }
 
+        private static bool IsBlockedPage(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                return false;
+            }
+
+            return body.Contains("sec.douban.com", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("禁止访问豆瓣", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("检测到有异常请求", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("有异常请求从你的 IP 发出", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("有异常请求从这台机器发出", StringComparison.OrdinalIgnoreCase);
+        }
+
         private string FormatOverview(string intro)
         {
             intro = intro.Replace("©豆瓣", string.Empty, StringComparison.Ordinal);
@@ -1001,6 +1024,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private string GetTitle(string body)
         {
             var title = string.Empty;
+
+            if (IsBlockedPage(body))
+            {
+                return string.Empty;
+            }
 
             var keyword = Match(body, this.regKeywordMeta);
             if (!string.IsNullOrEmpty(keyword))
