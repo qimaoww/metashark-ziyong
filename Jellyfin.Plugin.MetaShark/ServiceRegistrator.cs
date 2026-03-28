@@ -7,8 +7,8 @@ namespace Jellyfin.Plugin.MetaShark
     using System;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Workers;
-    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Plugins;
     using MediaBrowser.Controller.Providers;
