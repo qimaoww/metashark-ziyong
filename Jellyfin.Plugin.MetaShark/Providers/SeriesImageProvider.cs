@@ -49,6 +49,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(item);
             var sid = item.GetProviderId(DoubanProviderId);
+            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
             this.Log($"GetImages for item: {item.Name} lang: {item.GetPreferredMetadataLanguage()} [metaSource]: {metaSource}");
             if (metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
@@ -56,28 +57,34 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (primary == null || string.IsNullOrEmpty(primary.Img))
                 {
-                    return Enumerable.Empty<RemoteImageInfo>();
-                }
-
-                var res = new List<RemoteImageInfo>
-                {
-                    new RemoteImageInfo
+                    if (string.IsNullOrEmpty(tmdbId))
                     {
-                        ProviderName = this.Name,
-                        Url = this.GetDoubanPoster(primary),
-                        Type = ImageType.Primary,
-                        Language = item.GetPreferredMetadataLanguage(),
-                    },
-                };
+                        return Enumerable.Empty<RemoteImageInfo>();
+                    }
 
-                var backdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
-                var logoImgs = await this.GetLogos(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
-                res.AddRange(backdropImgs);
-                res.AddRange(logoImgs);
-                return res;
+                    metaSource = MetaSource.Tmdb;
+                }
+                else
+                {
+                    var res = new List<RemoteImageInfo>
+                    {
+                        new RemoteImageInfo
+                        {
+                            ProviderName = this.Name,
+                            Url = this.GetDoubanPoster(primary),
+                            Type = ImageType.Primary,
+                            Language = item.GetPreferredMetadataLanguage(),
+                        },
+                    };
+
+                    var backdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
+                    var logoImgs = await this.GetLogos(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
+                    res.AddRange(backdropImgs);
+                    res.AddRange(logoImgs);
+                    return res;
+                }
             }
 
-            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             if (metaSource == MetaSource.Tmdb && !string.IsNullOrEmpty(tmdbId))
             {
                 var language = item.GetPreferredMetadataLanguage();
