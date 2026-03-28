@@ -11,6 +11,8 @@ using Moq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -118,6 +120,45 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                 var str = result.ToJson();
                 Console.WriteLine(result.ToJson());
+            }).GetAwaiter().GetResult();
+        }
+
+        [TestMethod]
+        public void TestGetMetadataFallsBackToTmdbWhenDoubanBlocked()
+        {
+            var info = new MovieInfo()
+            {
+                Name = "秒速5厘米",
+                MetadataLanguage = "zh",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, "2043546" },
+                    { MetadataProvider.Tmdb.ToString(), "38142" },
+                },
+            };
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = DoubanApiTestHelper.CreateBlockedDoubanApi(loggerFactory);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var omdbApi = new OmdbApi(loggerFactory);
+            var imdbApi = new ImdbApi(loggerFactory);
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    var provider = new MovieProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var result = await provider.GetMetadata(info, CancellationToken.None);
+                    Assert.IsNotNull(result.Item);
+                    Assert.AreEqual("38142", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.IsTrue(result.HasMetadata);
+                }
+                catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests
+                    || ex.Message.Contains("429", StringComparison.Ordinal))
+                {
+                    Assert.Inconclusive("TMDb rate limited (429)." + ex.Message);
+                }
             }).GetAwaiter().GetResult();
         }
 
