@@ -118,6 +118,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var subject = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (subject == null)
                 {
+                    if (!string.IsNullOrEmpty(tmdbId))
+                    {
+                        return await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                    }
+
                     return result;
                 }
 
