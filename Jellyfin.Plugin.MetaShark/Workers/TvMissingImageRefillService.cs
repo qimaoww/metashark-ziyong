@@ -24,14 +24,20 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private static readonly Action<ILogger, int, Exception?> LogScanCandidates =
             LoggerMessage.Define<int>(LogLevel.Information, new EventId(1, nameof(QueueMissingImagesForFullLibraryScan)), "Found {Count} TV items for missing image refill scan.");
 
-        private static readonly Action<ILogger, string, Guid, Exception?> LogQueuedRefresh =
-            LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(2, nameof(QueueMissingImagesForFullLibraryScan)), "Queueing TV missing-image refill for {Name} ({Id}).");
+        private static readonly Action<ILogger, string, Guid, string, Exception?> LogQueuedRefresh =
+            LoggerMessage.Define<string, Guid, string>(LogLevel.Debug, new EventId(2, nameof(QueueMissingImagesForFullLibraryScan)), "Queueing TV missing-image refill for {Name} ({Id}) with missing images {MissingImages}.");
 
         private static readonly Action<ILogger, Guid, Exception?> LogSkipEmptyId =
             LoggerMessage.Define<Guid>(LogLevel.Debug, new EventId(3, nameof(QueueMissingImagesForUpdatedItem)), "Skipping TV missing-image refill for empty Id ({Id}).");
 
         private static readonly Action<ILogger, string, Exception?> LogSkipDisabledImageFetcher =
             LoggerMessage.Define<string>(LogLevel.Debug, new EventId(4, nameof(QueueMissingImagesForUpdatedItem)), "Skipping TV missing-image refill because image fetcher is disabled for {Name}.");
+
+        private static readonly Action<ILogger, string, Guid, Exception?> LogSkipNoMissingImages =
+            LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(5, nameof(QueueIfMissingAndEnabled)), "Skipping TV missing-image refill for {Name} ({Id}) because no supported images are missing.");
+
+        private static readonly Action<ILogger, string, Guid, ItemUpdateType, Exception?> LogSkipImageUpdate =
+            LoggerMessage.Define<string, Guid, ItemUpdateType>(LogLevel.Debug, new EventId(6, nameof(QueueMissingImagesForUpdatedItem)), "Skipping TV missing-image refill for {Name} ({Id}) because update reason is {UpdateReason}.");
 
         private readonly ILogger<TvMissingImageRefillService> logger;
         private readonly ILibraryManager libraryManager;
@@ -72,12 +78,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             ArgumentNullException.ThrowIfNull(e);
             cancellationToken.ThrowIfCancellationRequested();
 
+            var item = e.Item;
             if (e.UpdateReason == ItemUpdateType.ImageUpdate)
             {
+                LogSkipImageUpdate(this.logger, item?.Name ?? string.Empty, item?.Id ?? Guid.Empty, e.UpdateReason, null);
                 return;
             }
 
-            this.QueueIfMissingAndEnabled(e.Item);
+            this.QueueIfMissingAndEnabled(item);
         }
 
         private List<BaseItem> GetTvItemsForRefill()
@@ -113,8 +121,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            if (!TvImageSupport.GetMissingImages(item).Any())
+            var missingImages = TvImageSupport.GetMissingImages(item).ToArray();
+            if (missingImages.Length == 0)
             {
+                LogSkipNoMissingImages(this.logger, item.Name ?? string.Empty, item.Id, null);
                 return;
             }
 
@@ -126,7 +136,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 ReplaceAllImages = false,
             };
 
-            LogQueuedRefresh(this.logger, item.Name ?? string.Empty, item.Id, null);
+            LogQueuedRefresh(this.logger, item.Name ?? string.Empty, item.Id, string.Join(",", missingImages), null);
             this.providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.Normal);
         }
 

@@ -25,7 +25,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void QueueMissingImages_FullScan_QueuesSeriesWhenPrimaryIsMissingAndImageFetcherEnabled()
         {
-            var series = new Series { Id = Guid.NewGuid(), Path = "/library/tv/series-a" };
+            var series = new Series { Id = Guid.NewGuid(), Name = "Series A", Path = "/library/tv/series-a" };
 
             var libraryManagerStub = new Mock<ILibraryManager>();
             libraryManagerStub
@@ -39,7 +39,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
 
-            var service = CreateService(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object);
+            var service = CreateServiceWithLogger(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object, out var loggerStub);
 
             service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
@@ -53,12 +53,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         !opt.ReplaceAllMetadata),
                     RefreshPriority.Normal),
                 Times.Once);
+
+            VerifyLoggedMessage(loggerStub, LogLevel.Debug, "Primary,Backdrop,Logo", Times.Once());
         }
 
         [TestMethod]
         public void QueueMissingImages_FullScan_DoesNotQueueWhenSeriesAlreadyHasAllSupportedImages()
         {
-            var series = new Series { Id = Guid.NewGuid(), Path = "/library/tv/series-a" };
+            var series = new Series { Id = Guid.NewGuid(), Name = "Series A", Path = "/library/tv/series-a" };
             series.SetImagePath(ImageType.Primary, "https://example.com/images/series-a-primary.jpg");
             series.SetImagePath(ImageType.Backdrop, "https://example.com/images/series-a-backdrop.jpg");
             series.SetImagePath(ImageType.Logo, "https://example.com/images/series-a-logo.png");
@@ -75,13 +77,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
 
-            var service = CreateService(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object);
+            var service = CreateServiceWithLogger(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object, out var loggerStub);
 
             service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
             providerManagerStub.Verify(
                 x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
                 Times.Never);
+
+            VerifyLoggedMessage(loggerStub, LogLevel.Debug, "no supported images are missing", Times.Once());
         }
 
         [TestMethod]
@@ -194,7 +198,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void QueueMissingImages_ItemUpdate_DoesNotQueueForImageUpdateReason()
         {
-            var series = new Series { Id = Guid.NewGuid(), Path = "/library/tv/series-a" };
+            var series = new Series { Id = Guid.NewGuid(), Name = "Series A", Path = "/library/tv/series-a" };
 
             var providerManagerStub = new Mock<IProviderManager>();
             var baseItemManagerStub = new Mock<IBaseItemManager>();
@@ -202,7 +206,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
 
-            var service = CreateService(new Mock<ILibraryManager>().Object, providerManagerStub.Object, baseItemManagerStub.Object);
+            var service = CreateServiceWithLogger(new Mock<ILibraryManager>().Object, providerManagerStub.Object, baseItemManagerStub.Object, out var loggerStub);
 
             service.QueueMissingImagesForUpdatedItem(new ItemChangeEventArgs
             {
@@ -214,6 +218,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             providerManagerStub.Verify(
                 x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
                 Times.Never);
+
+            VerifyLoggedMessage(loggerStub, LogLevel.Debug, "ImageUpdate", Times.Once());
         }
 
         [TestMethod]
@@ -274,6 +280,38 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 providerManager,
                 baseItemManager,
                 new Mock<IFileSystem>().Object);
+        }
+
+        private static TvMissingImageRefillService CreateServiceWithLogger(
+            ILibraryManager libraryManager,
+            IProviderManager providerManager,
+            IBaseItemManager baseItemManager,
+            out Mock<ILogger> loggerStub)
+        {
+            loggerStub = new Mock<ILogger>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var loggerFactoryStub = new Mock<ILoggerFactory>();
+            loggerFactoryStub.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(loggerStub.Object);
+
+            return new TvMissingImageRefillService(
+                loggerFactoryStub.Object,
+                libraryManager,
+                providerManager,
+                baseItemManager,
+                new Mock<IFileSystem>().Object);
+        }
+
+        private static void VerifyLoggedMessage(Mock<ILogger> loggerStub, LogLevel level, string fragment, Times times)
+        {
+            loggerStub.Verify(
+                x => x.Log(
+                    level,
+                    It.IsAny<EventId>(),
+                    It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(fragment, StringComparison.Ordinal)),
+                    It.IsAny<Exception>(),
+                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+                times);
         }
     }
 }
