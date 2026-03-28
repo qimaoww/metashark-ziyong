@@ -357,13 +357,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
             var url = $"https://movie.douban.com/subject/{sid}/";
             var response = await this.httpClient.GetAsync(new Uri(url), cancellationToken).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
 
             movie = new DoubanSubject();
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            if (IsBlockedPage(body))
+            var body = await this.ReadBodyUnlessBlockedAsync(response, url, cancellationToken).ConfigureAwait(false);
+            if (body == null)
             {
-                LogPageBlocked(this.logger, url, null);
                 return null;
             }
 
@@ -471,7 +469,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return new List<DoubanCelebrity>();
             }
 
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var body = await this.ReadBodyUnlessBlockedAsync(response, url, cancellationToken).ConfigureAwait(false);
+            if (body == null)
+            {
+                return list;
+            }
+
             var context = BrowsingContext.New();
             var doc = await context.OpenAsync(req => req.Content(body), cancellationToken).ConfigureAwait(false);
 
@@ -548,10 +551,14 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
             var url = $"https://www.douban.com/personage/{id}/";
             var response = await this.httpClient.GetAsync(new Uri(url), cancellationToken).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
+
+            var body = await this.ReadBodyUnlessBlockedAsync(response, url, cancellationToken).ConfigureAwait(false);
+            if (body == null)
+            {
+                return null;
+            }
 
             celebrity = new DoubanCelebrity();
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var context = BrowsingContext.New();
             var doc = await context.OpenAsync(req => req.Content(body), cancellationToken).ConfigureAwait(false);
             var contentNode = doc.QuerySelector("#content");
@@ -688,7 +695,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     return list;
                 }
 
-                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var body = await this.ReadBodyUnlessBlockedAsync(response, url, cancellationToken).ConfigureAwait(false);
+                if (body == null)
+                {
+                    return list;
+                }
+
                 var context = BrowsingContext.New();
                 var doc = await context.OpenAsync(req => req.Content(body), cancellationToken).ConfigureAwait(false);
                 var elements = doc.QuerySelectorAll(".poster-col3>li");
@@ -758,7 +770,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return list;
             }
 
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var body = await this.ReadBodyUnlessBlockedAsync(response, url, cancellationToken).ConfigureAwait(false);
+            if (body == null)
+            {
+                return list;
+            }
+
             var context = BrowsingContext.New();
             var doc = await context.OpenAsync(req => req.Content(body), cancellationToken).ConfigureAwait(false);
             var elements = doc.QuerySelectorAll("div.article .result");
@@ -809,7 +826,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     return list;
                 }
 
-                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var body = await this.ReadBodyUnlessBlockedAsync(response, url, cancellationToken).ConfigureAwait(false);
+                if (body == null)
+                {
+                    return list;
+                }
+
                 var context = BrowsingContext.New();
                 var doc = await context.OpenAsync(req => req.Content(body), cancellationToken).ConfigureAwait(false);
                 var elements = doc.QuerySelectorAll(".poster-col3>li");
@@ -1013,6 +1035,23 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 || body.Contains("检测到有异常请求", StringComparison.OrdinalIgnoreCase)
                 || body.Contains("有异常请求从你的 IP 发出", StringComparison.OrdinalIgnoreCase)
                 || body.Contains("有异常请求从这台机器发出", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task<string?> ReadBodyUnlessBlockedAsync(HttpResponseMessage response, string url, CancellationToken cancellationToken)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (IsBlockedPage(body))
+            {
+                LogPageBlocked(this.logger, url, null);
+                return null;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                response.EnsureSuccessStatusCode();
+            }
+
+            return body;
         }
 
         private string FormatOverview(string intro)
