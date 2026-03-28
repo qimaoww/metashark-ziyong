@@ -5,6 +5,7 @@
 namespace Jellyfin.Plugin.MetaShark
 {
     using System;
+    using System.IO;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Workers;
     using MediaBrowser.Controller;
@@ -23,6 +24,19 @@ namespace Jellyfin.Plugin.MetaShark
 
             serviceCollection.AddHostedService<BoxSetManager>();
             serviceCollection.AddHostedService<TvMissingImageRefillItemUpdatedWorker>();
+            serviceCollection.AddSingleton<ITvImageRefillStateStore>((ctx) =>
+            {
+                var dataFolderPath = MetaSharkPlugin.Instance?.DataFolderPath;
+                if (string.IsNullOrWhiteSpace(dataFolderPath))
+                {
+                    dataFolderPath = Path.Combine(Path.GetTempPath(), MetaSharkPlugin.PluginName);
+                }
+
+                return new FileTvImageRefillStateStore(
+                    Path.Combine(dataFolderPath, "tv-image-refill-state.json"),
+                    ctx.GetRequiredService<ILoggerFactory>());
+            });
+            serviceCollection.AddSingleton<ITvImageRefillOutcomeReporter, TvImageRefillOutcomeReporter>();
             serviceCollection.AddSingleton<ITvMissingImageRefillService, TvMissingImageRefillService>();
             serviceCollection.AddSingleton((ctx) =>
             {
