@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
     public interface ITvImageRefillStateStore
     {
-        TvImageRefillState? Get(Guid itemId);
+        TvImageRefillState? GetState(Guid itemId);
 
         void Save(TvImageRefillState state);
 

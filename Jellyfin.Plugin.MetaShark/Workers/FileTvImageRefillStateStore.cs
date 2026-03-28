@@ -35,7 +35,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.logger = loggerFactory.CreateLogger<FileTvImageRefillStateStore>();
         }
 
-        public TvImageRefillState? Get(Guid itemId)
+        public TvImageRefillState? GetState(Guid itemId)
         {
             if (itemId == Guid.Empty)
             {
@@ -124,7 +124,19 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 this.states = JsonSerializer.Deserialize<Dictionary<Guid, TvImageRefillState>>(json, SerializerOptions)
                     ?? new Dictionary<Guid, TvImageRefillState>();
             }
-            catch (Exception ex)
+            catch (IOException ex)
+            {
+                LogStateLoadFailed(this.logger, this.stateFilePath, ex);
+                this.states = new Dictionary<Guid, TvImageRefillState>();
+                this.Persist();
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                LogStateLoadFailed(this.logger, this.stateFilePath, ex);
+                this.states = new Dictionary<Guid, TvImageRefillState>();
+                this.Persist();
+            }
+            catch (JsonException ex)
             {
                 LogStateLoadFailed(this.logger, this.stateFilePath, ex);
                 this.states = new Dictionary<Guid, TvImageRefillState>();

@@ -17,8 +17,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
-    using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.Configuration;
+    using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.IO;
     using Microsoft.Extensions.Logging;
 
@@ -134,7 +134,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
 
             var fingerprint = TvImageRefillFingerprint.Create(item);
-            var state = this.retryStateStore.Get(item.Id);
+            var state = this.retryStateStore.GetState(item.Id);
             if (state != null && !string.Equals(state.Fingerprint, fingerprint, StringComparison.Ordinal))
             {
                 this.retryStateStore.Remove(item.Id);

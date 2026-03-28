@@ -26,7 +26,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            var current = this.stateStore.Get(item.Id);
+            var current = this.stateStore.GetState(item.Id);
             this.stateStore.Save(new TvImageRefillState
             {
                 ItemId = item.Id,
@@ -59,7 +59,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            var current = this.stateStore.Get(item.Id);
+            var current = this.stateStore.GetState(item.Id);
             this.stateStore.Save(new TvImageRefillState
             {
                 ItemId = item.Id,
