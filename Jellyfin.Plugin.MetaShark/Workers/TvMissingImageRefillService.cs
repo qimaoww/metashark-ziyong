@@ -6,15 +6,18 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
     using System.Collections.Generic;
+    using System.IO;
     using System.Linq;
     using System.Threading;
     using Jellyfin.Data.Enums;
+    using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
+    using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.Configuration;
     using MediaBrowser.Model.IO;
     using Microsoft.Extensions.Logging;
@@ -39,18 +42,26 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private static readonly Action<ILogger, string, Guid, ItemUpdateType, Exception?> LogSkipImageUpdate =
             LoggerMessage.Define<string, Guid, ItemUpdateType>(LogLevel.Debug, new EventId(6, nameof(QueueMissingImagesForUpdatedItem)), "Skipping TV missing-image refill for {Name} ({Id}) because update reason is {UpdateReason}.");
 
+        private static readonly Action<ILogger, string, Guid, string, Exception?> LogSkipHardMiss =
+            LoggerMessage.Define<string, Guid, string>(LogLevel.Debug, new EventId(7, nameof(QueueIfMissingAndEnabled)), "Skipping TV missing-image refill for {Name} ({Id}) because state is hard miss: {Reason}.");
+
+        private static readonly Action<ILogger, string, Guid, DateTimeOffset, Exception?> LogSkipCooldown =
+            LoggerMessage.Define<string, Guid, DateTimeOffset>(LogLevel.Debug, new EventId(8, nameof(QueueIfMissingAndEnabled)), "Skipping TV missing-image refill for {Name} ({Id}) because cooldown is active until {NextRetryAtUtc}.");
+
         private readonly ILogger<TvMissingImageRefillService> logger;
         private readonly ILibraryManager libraryManager;
         private readonly IProviderManager providerManager;
         private readonly IBaseItemManager baseItemManager;
         private readonly IFileSystem fileSystem;
+        private readonly ITvImageRefillStateStore retryStateStore;
 
         public TvMissingImageRefillService(
             ILoggerFactory loggerFactory,
             ILibraryManager libraryManager,
             IProviderManager providerManager,
             IBaseItemManager baseItemManager,
-            IFileSystem fileSystem)
+            IFileSystem fileSystem,
+            ITvImageRefillStateStore? retryStateStore = null)
         {
             ArgumentNullException.ThrowIfNull(loggerFactory);
 
@@ -59,6 +70,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.providerManager = providerManager;
             this.baseItemManager = baseItemManager;
             this.fileSystem = fileSystem;
+            this.retryStateStore = retryStateStore ?? new FileTvImageRefillStateStore(
+                Path.Combine(Path.GetTempPath(), MetaSharkPlugin.PluginName, $"tv-image-refill-state-{Guid.NewGuid():N}.json"),
+                loggerFactory);
         }
 
         public void QueueMissingImagesForFullLibraryScan(CancellationToken cancellationToken)
@@ -81,6 +95,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             var item = e.Item;
             if (e.UpdateReason == ItemUpdateType.ImageUpdate)
             {
+                if (item != null && item.Id != Guid.Empty)
+                {
+                    this.retryStateStore.Remove(item.Id);
+                }
+
                 LogSkipImageUpdate(this.logger, item?.Name ?? string.Empty, item?.Id ?? Guid.Empty, e.UpdateReason, null);
                 return;
             }
@@ -114,6 +133,31 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
+            var fingerprint = TvImageRefillFingerprint.Create(item);
+            var state = this.retryStateStore.Get(item.Id);
+            if (state != null && !string.Equals(state.Fingerprint, fingerprint, StringComparison.Ordinal))
+            {
+                this.retryStateStore.Remove(item.Id);
+                state = null;
+            }
+
+            if (this.TryHandleStructuralHardMiss(item, fingerprint, state))
+            {
+                return;
+            }
+
+            if (state?.Status == TvImageRefillStatus.HardMiss)
+            {
+                LogSkipHardMiss(this.logger, item.Name ?? string.Empty, item.Id, state.LastReason, null);
+                return;
+            }
+
+            if (state?.Status == TvImageRefillStatus.CoolingDown && state.NextRetryAtUtc.HasValue && state.NextRetryAtUtc.Value > DateTimeOffset.UtcNow)
+            {
+                LogSkipCooldown(this.logger, item.Name ?? string.Empty, item.Id, state.NextRetryAtUtc.Value, null);
+                return;
+            }
+
             var typeOptions = this.GetTypeOptions(item);
             if (!this.baseItemManager.IsImageFetcherEnabled(item, typeOptions, MetaSharkPlugin.PluginName))
             {
@@ -124,6 +168,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             var missingImages = TvImageSupport.GetMissingImages(item).ToArray();
             if (missingImages.Length == 0)
             {
+                this.retryStateStore.Remove(item.Id);
                 LogSkipNoMissingImages(this.logger, item.Name ?? string.Empty, item.Id, null);
                 return;
             }
@@ -136,8 +181,43 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 ReplaceAllImages = false,
             };
 
+            this.retryStateStore.Save(new TvImageRefillState
+            {
+                ItemId = item.Id,
+                Fingerprint = fingerprint,
+                Status = TvImageRefillStatus.CoolingDown,
+                AttemptCount = (state?.AttemptCount ?? 0) + 1,
+                LastReason = "QueuedRefresh",
+                NextRetryAtUtc = DateTimeOffset.UtcNow.AddMinutes(30),
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            });
+
             LogQueuedRefresh(this.logger, item.Name ?? string.Empty, item.Id, string.Join(",", missingImages), null);
             this.providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.Normal);
+        }
+
+        private bool TryHandleStructuralHardMiss(BaseItem item, string fingerprint, TvImageRefillState? currentState)
+        {
+            if (item is not Episode episode)
+            {
+                return false;
+            }
+
+            if (episode.IndexNumber is <= 0)
+            {
+                this.retryStateStore.Save(new TvImageRefillState
+                {
+                    ItemId = item.Id,
+                    Fingerprint = fingerprint,
+                    Status = TvImageRefillStatus.HardMiss,
+                    AttemptCount = currentState?.AttemptCount ?? 0,
+                    LastReason = "InvalidEpisodeNumber",
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                });
+                return true;
+            }
+
+            return false;
         }
 
         private TypeOptions? GetTypeOptions(BaseItem item)
