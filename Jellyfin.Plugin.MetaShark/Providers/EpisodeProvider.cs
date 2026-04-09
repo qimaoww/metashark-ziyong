@@ -131,17 +131,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             result.HasMetadata = true;
             result.QueriedById = true;
 
-            if (!string.IsNullOrEmpty(episodeResult.Overview))
-            {
-                // if overview is non-empty, we can assume that localized data was returned
-                result.ResultLanguage = info.MetadataLanguage;
-            }
+            var overviewDecision = ResolveEpisodeOverviewPersistence(info.MetadataLanguage, episodeResult.Overview);
 
             var item = new Episode
             {
                 IndexNumber = episodeNumber,
                 ParentIndexNumber = seasonNumber,
             };
+
+            item.Overview = overviewDecision.Overview;
+
+            if (!string.IsNullOrEmpty(overviewDecision.ResultLanguage))
+            {
+                result.ResultLanguage = overviewDecision.ResultLanguage;
+            }
 
             if (seasonNumber == 0 && Config.EnableTvdbSpecialsWithinSeasons)
             {
@@ -186,12 +189,32 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             item.PremiereDate = episodeResult.AirDate;
             item.ProductionYear = episodeResult.AirDate?.Year;
             item.Name = episodeResult.Name;
-            item.Overview = episodeResult.Overview;
             item.CommunityRating = (float)System.Math.Round(episodeResult.VoteAverage, 1);
 
             result.Item = item;
 
             return result;
+        }
+
+        internal static (string? Overview, string? ResultLanguage) ResolveEpisodeOverviewPersistence(string? metadataLanguage, string? overview)
+        {
+            if (string.IsNullOrWhiteSpace(overview))
+            {
+                return (null, null);
+            }
+
+            var trimmedOverview = overview.Trim();
+            var normalizedMetadataLanguage = string.IsNullOrWhiteSpace(metadataLanguage) ? null : metadataLanguage;
+            var isChineseRequest = metadataLanguage != null
+                && (metadataLanguage.Equals("zh", StringComparison.OrdinalIgnoreCase)
+                    || metadataLanguage.StartsWith("zh-", StringComparison.OrdinalIgnoreCase));
+
+            if (isChineseRequest && !trimmedOverview.HasChinese())
+            {
+                return (null, null);
+            }
+
+            return (trimmedOverview, normalizedMetadataLanguage);
         }
 
         /// <summary>
