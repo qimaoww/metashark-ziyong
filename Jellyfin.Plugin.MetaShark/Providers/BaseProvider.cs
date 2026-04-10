@@ -29,6 +29,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Microsoft.Extensions.Logging;
     using TMDbLib.Objects.General;
     using TMDbLib.Objects.Languages;
+    using TMDbLib.Objects.TvShows;
 
     public abstract class BaseProvider
     {
@@ -424,7 +425,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
         }
 
-        protected async Task<TMDbLib.Objects.Search.TvSeasonEpisode?> GetEpisodeAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? language, string? imageLanguages, CancellationToken cancellationToken)
+        protected async Task<TvEpisode?> GetEpisodeAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? language, string? imageLanguages, CancellationToken cancellationToken)
         {
             if (!seasonNumber.HasValue || !episodeNumber.HasValue)
             {
@@ -433,6 +434,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var normalizedLanguage = language ?? string.Empty;
             var normalizedImageLanguages = imageLanguages ?? string.Empty;
+            var resolvedSeasonNumber = seasonNumber.Value;
+            var resolvedEpisodeNumber = episodeNumber.Value;
+            var resolvedByEpisodeGroupMapping = false;
             var seriesId = seriesTmdbId.ToString(CultureInfo.InvariantCulture);
             if (TmdbEpisodeGroupMapping.TryGetGroupId(Config.TmdbEpisodeGroupMap, seriesId, out var groupId))
             {
@@ -449,26 +453,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     if (ep is not null)
                     {
                         this.Log("TMDb episode group mapping resolved: seriesId={0} groupId={1} season={2} episode={3} -> S{4}E{5}", seriesId, groupId, seasonNumber, episodeNumber, ep.SeasonNumber, ep.EpisodeNumber);
-                        var result = await this.TmdbApi
-                            .GetSeasonAsync(seriesTmdbId, ep.SeasonNumber, normalizedLanguage, normalizedImageLanguages, cancellationToken)
-                            .ConfigureAwait(false);
-                        if (result == null || result.Episodes == null)
-                        {
-                            return null;
-                        }
-
-                        if (ep.EpisodeNumber > result.Episodes.Count)
-                        {
-                            return null;
-                        }
-
-                        return result.Episodes[ep.EpisodeNumber - 1];
+                        resolvedSeasonNumber = ep.SeasonNumber;
+                        resolvedEpisodeNumber = ep.EpisodeNumber;
+                        resolvedByEpisodeGroupMapping = true;
                     }
                 }
             }
 
             // 根据剧集组获取对应的剧集信息
-            if (!string.IsNullOrWhiteSpace(displayOrder))
+            if (!resolvedByEpisodeGroupMapping && !string.IsNullOrWhiteSpace(displayOrder))
             {
                 var group = await this.TmdbApi
                     .GetSeriesGroupAsync(seriesTmdbId, displayOrder, normalizedLanguage, normalizedImageLanguages, cancellationToken)
@@ -481,40 +474,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var ep = season?.Episodes.Find(e => e.Order == episodeNumber - 1);
                     if (ep is not null)
                     {
-                        // 利用season缓存取剧集信息会更快
-                        var result = await this.TmdbApi
-                            .GetSeasonAsync(seriesTmdbId, ep.SeasonNumber, normalizedLanguage, normalizedImageLanguages, cancellationToken)
-                            .ConfigureAwait(false);
-                        if (result == null || result.Episodes == null)
-                        {
-                            return null;
-                        }
-
-                        if (ep.EpisodeNumber > result.Episodes.Count)
-                        {
-                            return null;
-                        }
-
-                        return result.Episodes[ep.EpisodeNumber - 1];
+                        this.Log("TMDb display order mapping resolved: seriesId={0} displayOrder={1} season={2} episode={3} -> S{4}E{5}", seriesId, displayOrder, seasonNumber, episodeNumber, ep.SeasonNumber, ep.EpisodeNumber);
+                        resolvedSeasonNumber = ep.SeasonNumber;
+                        resolvedEpisodeNumber = ep.EpisodeNumber;
                     }
                 }
             }
 
-            // 利用season缓存取剧集信息会更快
-            var seasonResult = await this.TmdbApi
-                .GetSeasonAsync(seriesTmdbId, seasonNumber.Value, normalizedLanguage, normalizedImageLanguages, cancellationToken)
+            return await this.TmdbApi
+                .GetEpisodeAsync(seriesTmdbId, resolvedSeasonNumber, resolvedEpisodeNumber, normalizedLanguage, normalizedImageLanguages, cancellationToken)
                 .ConfigureAwait(false);
-            if (seasonResult == null || seasonResult.Episodes == null)
-            {
-                return null;
-            }
-
-            if (episodeNumber.Value > seasonResult.Episodes.Count)
-            {
-                return null;
-            }
-
-            return seasonResult.Episodes[episodeNumber.Value - 1];
         }
 
         protected async Task<string?> GuessByDoubanAsync(ItemLookupInfo info, CancellationToken cancellationToken)
