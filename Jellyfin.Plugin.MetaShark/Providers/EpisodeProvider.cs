@@ -9,6 +9,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System.IO;
     using System.Linq;
     using System.Net.Http;
+    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
@@ -131,7 +132,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             result.HasMetadata = true;
             result.QueriedById = true;
 
-            var overviewDecision = ResolveEpisodeOverviewPersistence(info.MetadataLanguage, episodeResult.Overview);
+            var episodeItem = this.LibraryManager.FindByPath(info.Path, false) as Episode;
+            var seriesOverview = episodeItem?.Series?.Overview;
+            var seasonPath = this.GetOriginalSeasonPath(info);
+            var seasonItem = !string.IsNullOrWhiteSpace(seasonPath) ? this.LibraryManager.FindByPath(seasonPath, true) as Season : null;
+            var seasonOverview = seasonItem?.Overview;
+            var overviewDecision = ResolveEpisodeOverviewPersistence(info.MetadataLanguage, episodeResult.Overview, seriesOverview, seasonOverview);
 
             var item = new Episode
             {
@@ -194,27 +200,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             result.Item = item;
 
             return result;
-        }
-
-        internal static (string? Overview, string? ResultLanguage) ResolveEpisodeOverviewPersistence(string? metadataLanguage, string? overview)
-        {
-            if (string.IsNullOrWhiteSpace(overview))
-            {
-                return (null, null);
-            }
-
-            var trimmedOverview = overview.Trim();
-            var normalizedMetadataLanguage = string.IsNullOrWhiteSpace(metadataLanguage) ? null : metadataLanguage;
-            var isChineseRequest = metadataLanguage != null
-                && (metadataLanguage.Equals("zh", StringComparison.OrdinalIgnoreCase)
-                    || metadataLanguage.StartsWith("zh-", StringComparison.OrdinalIgnoreCase));
-
-            if (isChineseRequest && !trimmedOverview.HasChinese())
-            {
-                return (null, null);
-            }
-
-            return (trimmedOverview, normalizedMetadataLanguage);
         }
 
         /// <summary>
@@ -329,6 +314,37 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             GC.SuppressFinalize(this);
         }
 
+        internal static (string? Overview, string? ResultLanguage) ResolveEpisodeOverviewPersistence(string? metadataLanguage, string? overview, string? seriesOverview, string? seasonOverview)
+        {
+            if (string.IsNullOrWhiteSpace(overview))
+            {
+                return (null, null);
+            }
+
+            var trimmedOriginalOverview = overview.Trim();
+            var normalizedMetadataLanguage = string.IsNullOrWhiteSpace(metadataLanguage) ? null : metadataLanguage;
+            var isChineseRequest = metadataLanguage != null
+                && (metadataLanguage.Equals("zh", StringComparison.OrdinalIgnoreCase)
+                    || metadataLanguage.StartsWith("zh-", StringComparison.OrdinalIgnoreCase));
+
+            if (isChineseRequest && !trimmedOriginalOverview.HasChinese())
+            {
+                return (null, null);
+            }
+
+            var normalizedOverview = NormalizeOverviewForComparison(trimmedOriginalOverview);
+            var normalizedSeriesOverview = NormalizeOverviewForComparison(seriesOverview);
+            var normalizedSeasonOverview = NormalizeOverviewForComparison(seasonOverview);
+
+            if ((normalizedOverview != null && IsOverviewTooSimilarToParent(normalizedOverview, normalizedSeriesOverview))
+                || (normalizedOverview != null && IsOverviewTooSimilarToParent(normalizedOverview, normalizedSeasonOverview)))
+            {
+                return (null, null);
+            }
+
+            return (trimmedOriginalOverview, normalizedMetadataLanguage);
+        }
+
         protected virtual void Dispose(bool disposing)
         {
             if (disposing)
@@ -366,6 +382,56 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var expiredOption = new MemoryCacheEntryOptions() { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) };
             this.memoryCache.Set<int>(cacheKey, videoFilesCount, expiredOption);
             return videoFilesCount;
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1308:Normalize strings to uppercase", Justification = "Overview comparison contract requires lowercase normalization.")]
+        private static string? NormalizeOverviewForComparison(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            var trimmedValue = value.Trim()
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Replace('\t', ' ');
+            var builder = new StringBuilder(trimmedValue.Length);
+            var previousWasWhitespace = false;
+
+            foreach (var character in trimmedValue)
+            {
+                if (char.IsWhiteSpace(character))
+                {
+                    if (!previousWasWhitespace)
+                    {
+                        builder.Append(' ');
+                        previousWasWhitespace = true;
+                    }
+
+                    continue;
+                }
+
+                builder.Append(character);
+                previousWasWhitespace = false;
+            }
+
+            return builder.ToString().ToLowerInvariant();
+        }
+
+        private static bool IsOverviewTooSimilarToParent(string normalizedOverview, string? normalizedParentOverview)
+        {
+            if (normalizedOverview == null || normalizedParentOverview == null)
+            {
+                return false;
+            }
+
+            if (normalizedOverview == normalizedParentOverview)
+            {
+                return true;
+            }
+
+            return normalizedOverview.Distance(normalizedParentOverview) >= 0.95;
         }
 
         private async Task<TvdbSpecialPlacement?> TryBuildTvdbSpecialPlacementAsync(
