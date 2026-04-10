@@ -23,6 +23,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using MediaBrowser.Model.Providers;
     using Microsoft.AspNetCore.Http;
     using Microsoft.Extensions.Logging;
+    using TMDbLib.Objects.Search;
     using TMDbLib.Objects.TvShows;
     using MetadataProvider = MediaBrowser.Model.Entities.MetadataProvider;
 
@@ -41,7 +42,42 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(searchInfo);
             this.Log($"GetSearchResults of [name]: {searchInfo.Name}");
             var result = new List<RemoteSearchResult>();
-            if (string.IsNullOrEmpty(searchInfo.Name))
+            var hasExactTmdbHit = false;
+            var hasUsableTitle = !string.IsNullOrWhiteSpace(searchInfo.Name);
+
+            if (Config.EnableTmdb)
+            {
+                var tmdbIdStr = searchInfo.GetProviderId(MetadataProvider.Tmdb);
+                var formattedTmdbId = FormatProviderIdForLog(tmdbIdStr);
+                if (string.IsNullOrWhiteSpace(tmdbIdStr))
+                {
+                    this.Log($"GetSearchResults skipping explicit TMDb ID match: provider id empty/whitespace (raw provider id: {formattedTmdbId}), fallbackToTitleSearch: {hasUsableTitle}");
+                }
+                else if (!int.TryParse(tmdbIdStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId))
+                {
+                    this.Log($"GetSearchResults skipping explicit TMDb ID match: invalid provider id {formattedTmdbId}, fallbackToTitleSearch: {hasUsableTitle}");
+                }
+                else if (tmdbId <= 0)
+                {
+                    this.Log($"GetSearchResults skipping explicit TMDb ID match: non-positive provider id {formattedTmdbId}, fallbackToTitleSearch: {hasUsableTitle}");
+                }
+                else
+                {
+                    this.Log($"GetSearchResults trying exact TMDb ID match: {tmdbId}");
+                    var tvShow = await this.TmdbApi.GetSeriesAsync(tmdbId, searchInfo.MetadataLanguage, searchInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+                    if (tvShow != null)
+                    {
+                        result.Add(this.MapTmdbSeriesSearchResult(tvShow));
+                        hasExactTmdbHit = true;
+                    }
+                    else
+                    {
+                        this.Log($"GetSearchResults exact TMDb ID match returned no series for provider id {formattedTmdbId}, fallbackToTitleSearch: {hasUsableTitle}");
+                    }
+                }
+            }
+
+            if (!hasUsableTitle)
             {
                 return result;
             }
@@ -63,19 +99,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 尝试从tmdb搜索
             if (Config.EnableTmdbSearch)
             {
-                var tmdbList = await this.TmdbApi.SearchSeriesAsync(searchInfo.Name, searchInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
-                result.AddRange(tmdbList.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x =>
+                if (hasExactTmdbHit)
                 {
-                    return new RemoteSearchResult
-                    {
-                        // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了和电影保持一致并唯一
-                        ProviderIds = new Dictionary<string, string> { { MetadataProvider.Tmdb.ToString(), x.Id.ToString(CultureInfo.InvariantCulture) }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{x.Id}" } },
-                        Name = string.Format(CultureInfo.InvariantCulture, "[TMDB]{0}", x.Name ?? x.OriginalName),
-                        ImageUrl = this.TmdbApi.GetPosterUrl(x.PosterPath)?.ToString(),
-                        Overview = x.Overview,
-                        ProductionYear = x.FirstAirDate?.Year,
-                    };
-                }));
+                    this.Log("GetSearchResults skipping TMDb title search after exact TMDb ID hit");
+                }
+                else
+                {
+                    var tmdbList = await this.TmdbApi.SearchSeriesAsync(searchInfo.Name, searchInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+                    result.AddRange(tmdbList.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x => this.MapTmdbSeriesSearchResult(x)));
+                }
             }
 
             return result;
@@ -200,6 +232,63 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             this.Log($"匹配失败！可检查下年份是否与豆瓣一致，是否需要登录访问. [name]: {info.Name} [year]: {info.Year}");
             return result;
+        }
+
+        private RemoteSearchResult MapTmdbSeriesSearchResult(SearchTv searchResult)
+        {
+            return this.MapTmdbSeriesSearchResult(
+                searchResult.Id,
+                searchResult.Name,
+                searchResult.OriginalName,
+                searchResult.PosterPath,
+                searchResult.Overview,
+                searchResult.FirstAirDate);
+        }
+
+        private RemoteSearchResult MapTmdbSeriesSearchResult(TvShow seriesResult)
+        {
+            return this.MapTmdbSeriesSearchResult(
+                seriesResult.Id,
+                seriesResult.Name,
+                seriesResult.OriginalName,
+                seriesResult.PosterPath,
+                seriesResult.Overview,
+                seriesResult.FirstAirDate);
+        }
+
+        private RemoteSearchResult MapTmdbSeriesSearchResult(int tmdbId, string? name, string? originalName, string? posterPath, string? overview, DateTime? firstAirDate)
+        {
+            return new RemoteSearchResult
+            {
+                // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了和电影保持一致并唯一
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { MetadataProvider.Tmdb.ToString(), tmdbId.ToString(CultureInfo.InvariantCulture) },
+                    { MetaSharkPlugin.ProviderId, $"Tmdb_{tmdbId}" },
+                },
+                Name = string.Format(CultureInfo.InvariantCulture, "[TMDB]{0}", name ?? originalName),
+                ImageUrl = string.IsNullOrEmpty(posterPath) ? null : this.TmdbApi.GetPosterUrl(posterPath)?.ToString(),
+                Overview = overview,
+                ProductionYear = firstAirDate?.Year,
+            };
+        }
+
+        private static string FormatProviderIdForLog(string? providerId)
+        {
+            if (providerId == null)
+            {
+                return "'<null>'";
+            }
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "'{0}'",
+                providerId
+                    .Replace("\\", "\\\\", StringComparison.Ordinal)
+                    .Replace("\r", "\\r", StringComparison.Ordinal)
+                    .Replace("\n", "\\n", StringComparison.Ordinal)
+                    .Replace("\t", "\\t", StringComparison.Ordinal)
+                    .Replace(" ", "\\u0020", StringComparison.Ordinal));
         }
 
         private async Task<MetadataResult<Series>> GetMetadataByTmdb(string? tmdbId, ItemLookupInfo info, CancellationToken cancellationToken)
