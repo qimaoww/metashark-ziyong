@@ -7,6 +7,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System;
     using System.Collections.Generic;
     using System.Linq;
+    using Jellyfin.Plugin.MetaShark.Core;
     using MediaBrowser.Model.Providers;
 
     public static class EnumerableExtensions
@@ -22,7 +23,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 requestedLanguages = new[] { "en" };
             }
 
-            var requestedLanguagePriorityMap = new Dictionary<string, int>();
+            var requestedLanguagePriorityMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var genericRequestedLanguagePriorityMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < requestedLanguages.Length; i++)
             {
                 if (string.IsNullOrEmpty(requestedLanguages[i]))
@@ -30,7 +32,19 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     continue;
                 }
 
-                requestedLanguagePriorityMap.Add(NormalizeLanguage(requestedLanguages[i]), MaxPriority - i);
+                var normalizedLanguage = NormalizeLanguage(requestedLanguages[i]);
+                if (string.IsNullOrEmpty(normalizedLanguage) || requestedLanguagePriorityMap.ContainsKey(normalizedLanguage))
+                {
+                    continue;
+                }
+
+                requestedLanguagePriorityMap.Add(normalizedLanguage, MaxPriority - i);
+                var genericLanguage = GetGenericLanguage(normalizedLanguage);
+                if (!string.Equals(genericLanguage, normalizedLanguage, StringComparison.OrdinalIgnoreCase)
+                    && !genericRequestedLanguagePriorityMap.ContainsKey(genericLanguage))
+                {
+                    genericRequestedLanguagePriorityMap.Add(genericLanguage, (MaxPriority - i) - requestedLanguages.Length);
+                }
             }
 
             return remoteImageInfos.OrderByDescending(delegate(RemoteImageInfo i)
@@ -40,12 +54,19 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     return 3;
                 }
 
-                if (requestedLanguagePriorityMap.TryGetValue(NormalizeLanguage(i.Language), out int priority))
+                var normalizedImageLanguage = NormalizeLanguage(i.Language);
+                if (requestedLanguagePriorityMap.TryGetValue(normalizedImageLanguage, out int priority))
                 {
                     return priority;
                 }
 
-                return string.Equals(i.Language, "en", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
+                if (string.Equals(normalizedImageLanguage, GetGenericLanguage(normalizedImageLanguage), StringComparison.OrdinalIgnoreCase)
+                    && genericRequestedLanguagePriorityMap.TryGetValue(normalizedImageLanguage, out priority))
+                {
+                    return priority;
+                }
+
+                return string.Equals(normalizedImageLanguage, "en", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
             }).ThenByDescending((RemoteImageInfo i) => i.CommunityRating.GetValueOrDefault()).ThenByDescending((RemoteImageInfo i) => i.VoteCount.GetValueOrDefault());
         }
 
@@ -56,7 +77,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return language;
             }
 
-            return language.Split('-')[0].ToUpperInvariant();
+            return ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
+        }
+
+        private static string GetGenericLanguage(string language)
+        {
+            if (string.IsNullOrEmpty(language))
+            {
+                return language;
+            }
+
+            return language.Split('-')[0].ToLowerInvariant();
         }
     }
 }

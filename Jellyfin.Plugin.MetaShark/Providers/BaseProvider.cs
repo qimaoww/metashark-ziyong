@@ -338,6 +338,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         /// <returns>The language code.</returns>
         protected static string AdjustImageLanguage(string imageLanguage, string requestLanguage)
         {
+            if (string.Equals(imageLanguage, "zh", StringComparison.OrdinalIgnoreCase)
+                && ChineseLocalePolicy.IsChineseRequest(requestLanguage)
+                && !string.Equals(requestLanguage, "zh", StringComparison.OrdinalIgnoreCase))
+            {
+                return imageLanguage;
+            }
+
             if (!string.IsNullOrEmpty(imageLanguage)
                 && !string.IsNullOrEmpty(requestLanguage)
                 && requestLanguage.Length > 2

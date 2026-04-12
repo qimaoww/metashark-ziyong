@@ -17,10 +17,71 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldKeepOverview_WhenRequestedLanguageIsZhAndOverviewContainsChinese()
         {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh-CN", "重逢的一集", null, null);
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh-CN", "这一集讲述两个年轻人为了一辆车展开较量。", null, null);
 
-            Assert.AreEqual("重逢的一集", result.Overview);
+            Assert.AreEqual("这一集讲述两个年轻人为了一辆车展开较量。", result.Overview);
             Assert.AreEqual("zh-CN", result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldRejectOverview_WhenStrictZhCnOverviewUsesTraditionalChinese()
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh-CN", "這一集講述兩個年輕人為了一輛車展開較量。", null, null);
+
+            Assert.AreEqual(null, result.Overview);
+            Assert.AreEqual(null, result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldRejectOverview_WhenTraditionalChineseOverviewMatchesParentOverviewUnderStrictZhCn()
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
+                "zh-CN",
+                "這一集講述兩個年輕人為了一輛車展開較量。",
+                "這一集講述兩個年輕人為了一輛車展開較量。",
+                null);
+
+            Assert.AreEqual(null, result.Overview);
+            Assert.AreEqual(null, result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldRejectOverview_WhenTraditionalChineseMissesLegacyBlacklistUnderStrictZhCn()
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
+                "zh-CN",
+                "这个角色很厲害，也令人驚訝。",
+                null,
+                null);
+
+            Assert.AreEqual(null, result.Overview);
+            Assert.AreEqual(null, result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldRejectOverview_WhenTraditionalChinesePreviouslyReliedOnAmbiguousHansEvidence()
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
+                "zh-CN",
+                "皇后回宮",
+                null,
+                null);
+
+            Assert.AreEqual(null, result.Overview);
+            Assert.AreEqual(null, result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldRejectOverview_WhenChineseTextHasNoDistinctHansEvidenceUnderStrictZhCn()
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
+                "zh-CN",
+                "千里之外",
+                null,
+                null);
+
+            Assert.AreEqual(null, result.Overview);
+            Assert.AreEqual(null, result.ResultLanguage);
         }
 
         [TestMethod]

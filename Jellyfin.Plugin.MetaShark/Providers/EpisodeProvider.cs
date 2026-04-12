@@ -322,12 +322,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var trimmedOriginalOverview = overview.Trim();
-            var normalizedMetadataLanguage = string.IsNullOrWhiteSpace(metadataLanguage) ? null : metadataLanguage;
-            var isChineseRequest = metadataLanguage != null
-                && (metadataLanguage.Equals("zh", StringComparison.OrdinalIgnoreCase)
-                    || metadataLanguage.StartsWith("zh-", StringComparison.OrdinalIgnoreCase));
+            var normalizedMetadataLanguage = string.IsNullOrWhiteSpace(metadataLanguage) ? null : ChineseLocalePolicy.CanonicalizeLanguage(metadataLanguage);
+            var isChineseRequest = ChineseLocalePolicy.IsChineseRequest(normalizedMetadataLanguage);
 
             if (isChineseRequest && !trimmedOriginalOverview.HasChinese())
+            {
+                return (null, null);
+            }
+
+            if (ChineseLocalePolicy.IsAllowedForStrictZhCn(normalizedMetadataLanguage)
+                && !ChineseLocalePolicy.IsTextAllowedForStrictZhCn(trimmedOriginalOverview))
             {
                 return (null, null);
             }

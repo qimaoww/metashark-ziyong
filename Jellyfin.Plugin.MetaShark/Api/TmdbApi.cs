@@ -16,6 +16,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Configuration;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
     using Microsoft.Extensions.Caching.Memory;
     using Microsoft.Extensions.Logging;
@@ -1074,17 +1075,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return language;
             }
 
-            // They require this to be uppercase
-            // Everything after the hyphen must be written in uppercase due to a way TMDB wrote their api.
-            // See here: https://www.themoviedb.org/talk/5119221d760ee36c642af4ad?page=3#56e372a0c3a3685a9e0019ab
-            var parts = language.Split('-');
-
-            if (parts.Length == 2)
-            {
-                language = parts[0] + "-" + parts[1].ToUpperInvariant();
-            }
-
-            return language;
+            return ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
         }
 
         private static string? GetImageLanguagesParam(string preferredLanguage)
@@ -1102,30 +1093,36 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 foreach (var lang in parts)
                 {
                     var l = NormalizeLanguage(lang);
+                    if (string.IsNullOrWhiteSpace(l))
+                    {
+                        continue;
+                    }
 
-                    // like en-US
+                    AddLanguageIfMissing(languages, l);
+
                     if (l.Length == 5)
                     {
-                        // Currently, TMDB supports 2-letter language codes only
-                        // They are planning to change this in the future, thus we're
-                        // supplying both codes if we're having a 5-letter code.
-                        languages.Add(l.Substring(0, 2));
-                    }
-                    else
-                    {
-                        languages.Add(l);
+                        AddLanguageIfMissing(languages, l.Substring(0, 2));
                     }
                 }
             }
 
-            languages.Add("null");
+            AddLanguageIfMissing(languages, "null");
 
             if (!languages.Contains("en"))
             {
-                languages.Add("en");
+                AddLanguageIfMissing(languages, "en");
             }
 
             return string.Join(',', languages);
+        }
+
+        private static void AddLanguageIfMissing(ICollection<string> languages, string language)
+        {
+            if (!languages.Contains(language, StringComparer.OrdinalIgnoreCase))
+            {
+                languages.Add(language);
+            }
         }
 
         private static bool IsEnable()
