@@ -10,10 +10,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - uses: actions/setup-dotnet@v3
+      - uses: actions/setup-dotnet@v5
         id: dotnet
         with:
           dotnet-version: 8.0.x

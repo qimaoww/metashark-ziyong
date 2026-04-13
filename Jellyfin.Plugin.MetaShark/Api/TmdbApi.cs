@@ -1117,7 +1117,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return string.Join(',', languages);
         }
 
-        private static void AddLanguageIfMissing(ICollection<string> languages, string language)
+        private static void AddLanguageIfMissing(List<string> languages, string language)
         {
             if (!languages.Contains(language, StringComparer.OrdinalIgnoreCase))
             {

@@ -7,3 +7,4 @@ artifacts
 metashark/
 *.json
 .vscode
+.sisyphus/

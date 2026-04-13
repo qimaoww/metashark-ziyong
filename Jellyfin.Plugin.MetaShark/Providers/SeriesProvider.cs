@@ -234,6 +234,24 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return result;
         }
 
+        private static string FormatProviderIdForLog(string? providerId)
+        {
+            if (providerId == null)
+            {
+                return "'<null>'";
+            }
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "'{0}'",
+                providerId
+                    .Replace("\\", "\\\\", StringComparison.Ordinal)
+                    .Replace("\r", "\\r", StringComparison.Ordinal)
+                    .Replace("\n", "\\n", StringComparison.Ordinal)
+                    .Replace("\t", "\\t", StringComparison.Ordinal)
+                    .Replace(" ", "\\u0020", StringComparison.Ordinal));
+        }
+
         private RemoteSearchResult MapTmdbSeriesSearchResult(SearchTv searchResult)
         {
             return this.MapTmdbSeriesSearchResult(
@@ -271,24 +289,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 Overview = overview,
                 ProductionYear = firstAirDate?.Year,
             };
-        }
-
-        private static string FormatProviderIdForLog(string? providerId)
-        {
-            if (providerId == null)
-            {
-                return "'<null>'";
-            }
-
-            return string.Format(
-                CultureInfo.InvariantCulture,
-                "'{0}'",
-                providerId
-                    .Replace("\\", "\\\\", StringComparison.Ordinal)
-                    .Replace("\r", "\\r", StringComparison.Ordinal)
-                    .Replace("\n", "\\n", StringComparison.Ordinal)
-                    .Replace("\t", "\\t", StringComparison.Ordinal)
-                    .Replace(" ", "\\u0020", StringComparison.Ordinal));
         }
 
         private async Task<MetadataResult<Series>> GetMetadataByTmdb(string? tmdbId, ItemLookupInfo info, CancellationToken cancellationToken)

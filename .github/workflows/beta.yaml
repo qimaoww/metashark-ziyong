@@ -15,13 +15,13 @@ jobs:
     name: Build & Release
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Get tags (For CHANGELOG)
         run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup dotnet
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v5
         id: dotnet
         with:
           dotnet-version: ${{ env.dotnet-version }}

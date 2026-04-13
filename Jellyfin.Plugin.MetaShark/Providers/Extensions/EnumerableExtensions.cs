@@ -80,6 +80,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1308:Normalize strings to uppercase", Justification = "Generic language fallback intentionally normalizes the primary language subtag to lowercase for language tag matching.")]
         private static string GetGenericLanguage(string language)
         {
             if (string.IsNullOrEmpty(language))

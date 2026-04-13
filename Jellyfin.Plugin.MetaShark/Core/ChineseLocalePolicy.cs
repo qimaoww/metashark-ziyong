@@ -148,6 +148,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
             }
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1308:Normalize strings to uppercase", Justification = "Language tag canonicalization intentionally lowercases language and variant subtags while preserving region/script casing semantics.")]
         public static string? CanonicalizeLanguage(string? language)
         {
             if (string.IsNullOrWhiteSpace(language))
