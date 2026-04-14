@@ -1,4 +1,5 @@
 using Jellyfin.Plugin.MetaShark.Providers;
+using System.Reflection;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -80,6 +81,65 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = EpisodeProvider.IsDefaultJellyfinEpisodeTitle(title);
 
             Assert.AreEqual(expected, result);
+        }
+
+        [TestMethod]
+        public void ShouldQueueSearchMissingMetadataTitleBackfill_WhenFeatureEnabledAndResolvedTitleDiffers()
+        {
+            var result = InvokeShouldQueueSearchMissingMetadataTitleBackfill(true, Guid.NewGuid(), "第 1 集", "  皇后回宫  ");
+
+            Assert.IsTrue(result);
+        }
+
+        [TestMethod]
+        public void ShouldNotQueueSearchMissingMetadataTitleBackfill_WhenFeatureDisabled()
+        {
+            var result = InvokeShouldQueueSearchMissingMetadataTitleBackfill(false, Guid.NewGuid(), "第 1 集", "皇后回宫");
+
+            Assert.IsFalse(result);
+        }
+
+        [TestMethod]
+        public void ShouldNotQueueSearchMissingMetadataTitleBackfill_WhenItemIdIsEmpty()
+        {
+            var result = InvokeShouldQueueSearchMissingMetadataTitleBackfill(true, Guid.Empty, "第 1 集", "皇后回宫");
+
+            Assert.IsFalse(result);
+        }
+
+        [TestMethod]
+        public void ShouldNotQueueSearchMissingMetadataTitleBackfill_WhenOriginalTitleIsNotDefaultJellyfinTitle()
+        {
+            var result = InvokeShouldQueueSearchMissingMetadataTitleBackfill(true, Guid.NewGuid(), "重逢", "皇后回宫");
+
+            Assert.IsFalse(result);
+        }
+
+        [TestMethod]
+        public void ShouldNotQueueSearchMissingMetadataTitleBackfill_WhenResolvedTitleIsWhitespace()
+        {
+            var result = InvokeShouldQueueSearchMissingMetadataTitleBackfill(true, Guid.NewGuid(), "第 1 集", "   ");
+
+            Assert.IsFalse(result);
+        }
+
+        [TestMethod]
+        public void ShouldNotQueueSearchMissingMetadataTitleBackfill_WhenResolvedTitleMatchesOriginalAfterTrim()
+        {
+            var result = InvokeShouldQueueSearchMissingMetadataTitleBackfill(true, Guid.NewGuid(), "第 1 集", "  第 1 集  ");
+
+            Assert.IsFalse(result);
+        }
+
+        private static bool InvokeShouldQueueSearchMissingMetadataTitleBackfill(bool featureEnabled, Guid itemId, string? originalMetadataTitle, string? resolvedTitle)
+        {
+            var method = typeof(EpisodeProvider).GetMethod(
+                "ShouldQueueSearchMissingMetadataTitleBackfill",
+                BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+
+            Assert.IsNotNull(method, "EpisodeProvider.ShouldQueueSearchMissingMetadataTitleBackfill 未定义");
+
+            return (bool)method!.Invoke(null, new object?[] { featureEnabled, itemId, originalMetadataTitle, resolvedTitle })!;
         }
     }
 }

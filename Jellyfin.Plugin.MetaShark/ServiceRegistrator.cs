@@ -24,6 +24,7 @@ namespace Jellyfin.Plugin.MetaShark
 
             serviceCollection.AddHostedService<BoxSetManager>();
             serviceCollection.AddHostedService<TvMissingImageRefillItemUpdatedWorker>();
+            serviceCollection.AddHostedService<EpisodeTitleBackfillItemUpdatedWorker>();
             serviceCollection.AddSingleton<ITvImageRefillStateStore>((ctx) =>
             {
                 var dataFolderPath = MetaSharkPlugin.Instance?.DataFolderPath;
@@ -38,6 +39,9 @@ namespace Jellyfin.Plugin.MetaShark
             });
             serviceCollection.AddSingleton<ITvImageRefillOutcomeReporter, TvImageRefillOutcomeReporter>();
             serviceCollection.AddSingleton<ITvMissingImageRefillService, TvMissingImageRefillService>();
+            serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore, InMemoryEpisodeTitleBackfillCandidateStore>();
+            serviceCollection.AddSingleton<IEpisodeTitleBackfillPersistence, JellyfinEpisodeTitleBackfillPersistence>();
+            serviceCollection.AddSingleton<IEpisodeTitleBackfillPostProcessService, EpisodeTitleBackfillPostProcessService>();
             serviceCollection.AddSingleton((ctx) =>
             {
                 return new DoubanApi(ctx.GetRequiredService<ILoggerFactory>());

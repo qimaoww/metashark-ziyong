@@ -107,6 +107,11 @@ public class PluginConfiguration : BasePluginConfiguration
     public string TmdbEpisodeGroupMap { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets a value indicating whether to backfill default episode titles after search missing metadata.
+    /// </summary>
+    public bool EnableSearchMissingMetadataEpisodeTitleBackfill { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether to use TVDB for specials placement.
     /// </summary>
     public bool EnableTvdbSpecialsWithinSeasons { get; set; } = true;

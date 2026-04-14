@@ -14,6 +14,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
+    using Jellyfin.Plugin.MetaShark.Model;
+    using Jellyfin.Plugin.MetaShark.Workers;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
@@ -46,13 +48,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private static readonly Action<ILogger, string, Exception?> LogTvdbIdResolved =
             LoggerMessage.Define<string>(LogLevel.Debug, new EventId(8, nameof(LogTvdbIdResolved)), "TVDB id resolved: {TvdbId}");
 
+        private static readonly Action<ILogger, Guid, string, string, string, string, Exception?> LogQueuedSearchMissingMetadataTitleBackfill =
+            LoggerMessage.Define<Guid, string, string, string, string>(
+                LogLevel.Debug,
+                new EventId(9, nameof(LogQueuedSearchMissingMetadataTitleBackfill)),
+                "Queued episode title backfill candidate for {ItemId}. originalTitle={OriginalTitle} candidateTitle={CandidateTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.");
+
         private readonly MemoryCache memoryCache;
+        private readonly IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore;
         private readonly TvdbApi tvdbApi;
 
-        public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi)
+        public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi, IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<EpisodeProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
+            this.episodeTitleBackfillCandidateStore = episodeTitleBackfillCandidateStore;
             this.tvdbApi = tvdbApi;
         }
 
@@ -198,6 +208,33 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             item.ProductionYear = episodeResult.AirDate?.Year;
             item.Name = ResolveEpisodeTitlePersistence(info.MetadataLanguage, originalMetadataTitle, episodeResult.Name);
             item.CommunityRating = (float)System.Math.Round(episodeResult.VoteAverage, 1);
+
+            var metadataRefreshMode = this.HttpContextAccessor.HttpContext?.Request.Query["metadataRefreshMode"].ToString();
+            var replaceAllMetadata = this.HttpContextAccessor.HttpContext?.Request.Query["replaceAllMetadata"].ToString();
+            if (this.episodeTitleBackfillCandidateStore != null
+                && IsSearchMissingMetadataRefresh(metadataRefreshMode, replaceAllMetadata)
+                && ShouldQueueSearchMissingMetadataTitleBackfill(Config.EnableSearchMissingMetadataEpisodeTitleBackfill, episodeItem?.Id ?? Guid.Empty, originalMetadataTitle, item.Name))
+            {
+                var nowUtc = DateTimeOffset.UtcNow;
+                var originalTitleSnapshot = (originalMetadataTitle ?? string.Empty).Trim();
+                var candidateTitle = (item.Name ?? string.Empty).Trim();
+                this.episodeTitleBackfillCandidateStore.Save(new EpisodeTitleBackfillCandidate
+                {
+                    ItemId = episodeItem!.Id,
+                    OriginalTitleSnapshot = originalTitleSnapshot,
+                    CandidateTitle = candidateTitle,
+                    CreatedAtUtc = nowUtc,
+                    ExpiresAtUtc = nowUtc.AddMinutes(10),
+                });
+                LogQueuedSearchMissingMetadataTitleBackfill(
+                    this.Logger,
+                    episodeItem.Id,
+                    originalTitleSnapshot,
+                    candidateTitle,
+                    metadataRefreshMode ?? string.Empty,
+                    replaceAllMetadata ?? string.Empty,
+                    null);
+            }
 
             result.Item = item;
 
@@ -370,6 +407,34 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return true;
+        }
+
+        internal static bool IsSearchMissingMetadataRefresh(string? metadataRefreshMode, string? replaceAllMetadata)
+        {
+            return string.Equals(metadataRefreshMode?.Trim(), "FullRefresh", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(replaceAllMetadata?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool ShouldQueueSearchMissingMetadataTitleBackfill(bool featureEnabled, Guid itemId, string? originalMetadataTitle, string? resolvedTitle)
+        {
+            if (!featureEnabled || itemId == Guid.Empty)
+            {
+                return false;
+            }
+
+            var trimmedOriginalTitle = originalMetadataTitle?.Trim();
+            if (!IsDefaultJellyfinEpisodeTitle(trimmedOriginalTitle))
+            {
+                return false;
+            }
+
+            var trimmedResolvedTitle = resolvedTitle?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedResolvedTitle))
+            {
+                return false;
+            }
+
+            return !string.Equals(trimmedOriginalTitle, trimmedResolvedTitle, StringComparison.Ordinal);
         }
 
         internal static (string? Overview, string? ResultLanguage) ResolveEpisodeOverviewPersistence(string? metadataLanguage, string? overview, string? seriesOverview, string? seasonOverview)

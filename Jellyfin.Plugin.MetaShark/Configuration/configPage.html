@@ -221,14 +221,22 @@
                                 <legend>
                                     <h3>高级设置</h3>
                                 </legend>
-                            <div class="inputContainer">
-                                <label class="inputLabel inputLabelUnfocused" for="TmdbEpisodeGroupMap">TMDb剧集组映射</label>
-                                <textarea rows="6" is="emby-input" type="text" id="TmdbEpisodeGroupMap"
-                                    name="TmdbEpisodeGroupMap" class="emby-input" placeholder="1399=5f2e...
+                             <div class="inputContainer">
+                                 <label class="inputLabel inputLabelUnfocused" for="TmdbEpisodeGroupMap">TMDb剧集组映射</label>
+                                 <textarea rows="6" is="emby-input" type="text" id="TmdbEpisodeGroupMap"
+                                     name="TmdbEpisodeGroupMap" class="emby-input" placeholder="1399=5f2e...
 1402=5f3a..."></textarea>
-                                <div class="fieldDescription">每行一条：tmdbId=episodeGroupId</div>
-                            </div>
-                            </fieldset>
+                                 <div class="fieldDescription">每行一条：tmdbId=episodeGroupId</div>
+                             </div>
+                             <div class="checkboxContainer checkboxContainer-withDescription">
+                                 <label class="emby-checkbox-label" for="EnableSearchMissingMetadataEpisodeTitleBackfill">
+                                     <input id="EnableSearchMissingMetadataEpisodeTitleBackfill" name="EnableSearchMissingMetadataEpisodeTitleBackfill" type="checkbox"
+                                         is="emby-checkbox" />
+                                     <span>搜索缺失元数据时回填默认剧集标题</span>
+                                 </label>
+                                 <div class="fieldDescription">仅在 Jellyfin“搜索缺失元数据”完成后，对仍为默认“第 N 集”的剧集尝试回填有效的 TMDB 简体中文标题。默认关闭。</div>
+                             </div>
+                             </fieldset>
                              <fieldset class="verticalSection verticalSection-extrabottompadding">
                                  <legend>
                                      <h3>TVDB</h3>
@@ -295,11 +303,12 @@
                         document.querySelector('#EnableTmdbAdult').checked = config.EnableTmdbAdult;
                         document.querySelector('#EnableTmdbCollection').checked = config.EnableTmdbCollection;
                         document.querySelector('#EnableTmdbOfficialRating').checked = config.EnableTmdbOfficialRating;
-                        document.querySelector('#EnableTmdbTags').checked = config.EnableTmdbTags;
-                        document.querySelector('#TmdbApiKey').value = config.TmdbApiKey;
-                        lastEpisodeGroupMap = config.TmdbEpisodeGroupMap || '';
-                        document.querySelector('#TmdbEpisodeGroupMap').value = lastEpisodeGroupMap;
-                        document.querySelector('#TmdbHost').value = config.TmdbHost;
+                         document.querySelector('#EnableTmdbTags').checked = config.EnableTmdbTags;
+                         document.querySelector('#TmdbApiKey').value = config.TmdbApiKey;
+                         lastEpisodeGroupMap = config.TmdbEpisodeGroupMap || '';
+                         document.querySelector('#TmdbEpisodeGroupMap').value = lastEpisodeGroupMap;
+                         document.querySelector('#EnableSearchMissingMetadataEpisodeTitleBackfill').checked = config.EnableSearchMissingMetadataEpisodeTitleBackfill;
+                         document.querySelector('#TmdbHost').value = config.TmdbHost;
 
                         document.querySelector('#TmdbProxyType').value = config.TmdbProxyType;
                         document.querySelector('#TmdbProxyHost').value = config.TmdbProxyHost;
@@ -341,10 +350,11 @@
                         config.EnableTmdbAdult = document.querySelector('#EnableTmdbAdult').checked;
                         config.EnableTmdbCollection = document.querySelector('#EnableTmdbCollection').checked;
                         config.EnableTmdbOfficialRating = document.querySelector('#EnableTmdbOfficialRating').checked;
-                        config.EnableTmdbTags = document.querySelector('#EnableTmdbTags').checked;
-                        config.TmdbApiKey = document.querySelector('#TmdbApiKey').value;
-                        config.TmdbEpisodeGroupMap = document.querySelector('#TmdbEpisodeGroupMap').value;
-                        config.TmdbHost = document.querySelector('#TmdbHost').value;
+                         config.EnableTmdbTags = document.querySelector('#EnableTmdbTags').checked;
+                         config.TmdbApiKey = document.querySelector('#TmdbApiKey').value;
+                         config.TmdbEpisodeGroupMap = document.querySelector('#TmdbEpisodeGroupMap').value;
+                         config.EnableSearchMissingMetadataEpisodeTitleBackfill = document.querySelector('#EnableSearchMissingMetadataEpisodeTitleBackfill').checked;
+                         config.TmdbHost = document.querySelector('#TmdbHost').value;
                         config.TmdbProxyType = document.querySelector('#TmdbProxyType').value;
                         config.TmdbProxyHost = document.querySelector('#TmdbProxyHost').value;
                         config.TmdbProxyPort = document.querySelector('#TmdbProxyPort').value;
