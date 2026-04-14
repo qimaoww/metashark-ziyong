@@ -93,6 +93,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return specialResult;
             }
 
+            var originalMetadataTitle = info.Name;
+
             // 使用AnitomySharp进行重新解析，解决anime识别错误
             info = this.FixParseInfo(info);
 
@@ -105,7 +107,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             {
                 ParentIndexNumber = seasonNumber,
                 IndexNumber = episodeNumber,
-                Name = info.Name,
+                Name = originalMetadataTitle,
             };
 
             if (episodeNumber is null or 0 || seasonNumber is null || string.IsNullOrEmpty(seriesTmdbId))
@@ -194,7 +196,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             item.PremiereDate = episodeResult.AirDate;
             item.ProductionYear = episodeResult.AirDate?.Year;
-            item.Name = episodeResult.Name;
+            item.Name = ResolveEpisodeTitlePersistence(info.MetadataLanguage, originalMetadataTitle, episodeResult.Name);
             item.CommunityRating = (float)System.Math.Round(episodeResult.VoteAverage, 1);
 
             result.Item = item;
@@ -312,6 +314,62 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             this.Dispose(true);
             GC.SuppressFinalize(this);
+        }
+
+        internal static string? ResolveEpisodeTitlePersistence(string? metadataLanguage, string? originalMetadataTitle, string? providerTitle)
+        {
+            if (!IsDefaultJellyfinEpisodeTitle(originalMetadataTitle))
+            {
+                return providerTitle;
+            }
+
+            var normalizedMetadataLanguage = string.IsNullOrWhiteSpace(metadataLanguage) ? null : ChineseLocalePolicy.CanonicalizeLanguage(metadataLanguage);
+            if (!ChineseLocalePolicy.IsAllowedForStrictZhCn(normalizedMetadataLanguage))
+            {
+                return originalMetadataTitle;
+            }
+
+            var trimmedProviderTitle = providerTitle?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedProviderTitle))
+            {
+                return originalMetadataTitle;
+            }
+
+            if (IsDefaultJellyfinEpisodeTitle(trimmedProviderTitle))
+            {
+                return originalMetadataTitle;
+            }
+
+            if (!ChineseLocalePolicy.IsTextAllowedForStrictZhCn(trimmedProviderTitle))
+            {
+                return originalMetadataTitle;
+            }
+
+            return trimmedProviderTitle;
+        }
+
+        internal static bool IsDefaultJellyfinEpisodeTitle(string? title)
+        {
+            if (string.IsNullOrEmpty(title) || !title.StartsWith("第 ", StringComparison.Ordinal) || !title.EndsWith(" 集", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var numericPart = title.Substring(2, title.Length - 4);
+            if (numericPart.Length == 0 || numericPart[0] == '0')
+            {
+                return false;
+            }
+
+            foreach (var character in numericPart)
+            {
+                if (!char.IsDigit(character))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         internal static (string? Overview, string? ResultLanguage) ResolveEpisodeOverviewPersistence(string? metadataLanguage, string? overview, string? seriesOverview, string? seasonOverview)
