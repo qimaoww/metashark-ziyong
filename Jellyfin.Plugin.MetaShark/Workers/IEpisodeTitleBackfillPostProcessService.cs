@@ -10,6 +10,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
     public interface IEpisodeTitleBackfillPostProcessService
     {
-        Task ProcessUpdatedItemAsync(ItemChangeEventArgs e, CancellationToken cancellationToken);
+        public const string ItemUpdatedTrigger = "ItemUpdated";
+
+        public const string DeferredRetryTrigger = "DeferredRetry";
+
+        Task TryApplyAsync(ItemChangeEventArgs e, string triggerName, CancellationToken cancellationToken);
     }
 }

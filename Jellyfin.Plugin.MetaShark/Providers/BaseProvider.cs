@@ -434,6 +434,37 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         protected async Task<TvEpisode?> GetEpisodeAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? language, string? imageLanguages, CancellationToken cancellationToken)
         {
+            var resolvedEpisodeRequest = await this.ResolveEpisodeRequestAsync(seriesTmdbId, seasonNumber, episodeNumber, displayOrder, language, imageLanguages, cancellationToken)
+                .ConfigureAwait(false);
+            if (resolvedEpisodeRequest == null)
+            {
+                return null;
+            }
+
+            var normalizedLanguage = language ?? string.Empty;
+            var normalizedImageLanguages = imageLanguages ?? string.Empty;
+
+            return await this.TmdbApi
+                .GetEpisodeAsync(seriesTmdbId, resolvedEpisodeRequest.Value.SeasonNumber, resolvedEpisodeRequest.Value.EpisodeNumber, normalizedLanguage, normalizedImageLanguages, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        protected async Task<string?> GetEpisodeTranslationTitleAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? language, string? imageLanguages, CancellationToken cancellationToken)
+        {
+            var resolvedEpisodeRequest = await this.ResolveEpisodeRequestAsync(seriesTmdbId, seasonNumber, episodeNumber, displayOrder, language, imageLanguages, cancellationToken)
+                .ConfigureAwait(false);
+            if (resolvedEpisodeRequest == null)
+            {
+                return null;
+            }
+
+            return await this.TmdbApi
+                .GetEpisodeTranslationTitleAsync(seriesTmdbId, resolvedEpisodeRequest.Value.SeasonNumber, resolvedEpisodeRequest.Value.EpisodeNumber, language, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        protected async Task<(int SeasonNumber, int EpisodeNumber)?> ResolveEpisodeRequestAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? language, string? imageLanguages, CancellationToken cancellationToken)
+        {
             if (!seasonNumber.HasValue || !episodeNumber.HasValue)
             {
                 return null;
@@ -488,9 +519,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
             }
 
-            return await this.TmdbApi
-                .GetEpisodeAsync(seriesTmdbId, resolvedSeasonNumber, resolvedEpisodeNumber, normalizedLanguage, normalizedImageLanguages, cancellationToken)
-                .ConfigureAwait(false);
+            return (resolvedSeasonNumber, resolvedEpisodeNumber);
         }
 
         protected async Task<string?> GuessByDoubanAsync(ItemLookupInfo info, CancellationToken cancellationToken)

@@ -8,6 +8,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
+    using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
@@ -16,51 +17,58 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
     public sealed class EpisodeTitleBackfillPostProcessService : IEpisodeTitleBackfillPostProcessService
     {
-        private static readonly Action<ILogger, Guid, Exception?> LogProcessUpdatedItem =
-            LoggerMessage.Define<Guid>(LogLevel.Debug, new EventId(1, nameof(ProcessUpdatedItemAsync)), "Received episode title backfill post-process event for {ItemId}.");
-
-        private static readonly Action<ILogger, Guid, string, string, ItemUpdateType, Exception?> LogSkipFeatureDisabled =
-            LoggerMessage.Define<Guid, string, string, ItemUpdateType>(LogLevel.Debug, new EventId(2, nameof(LogSkipFeatureDisabled)), "Skipping episode title backfill for {ItemId} because feature is disabled. currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.");
-
-        private static readonly Action<ILogger, Guid, ItemUpdateType, string, string, Exception?> LogSkipUpdateReason =
-            LoggerMessage.Define<Guid, ItemUpdateType, string, string>(LogLevel.Debug, new EventId(3, nameof(LogSkipUpdateReason)), "Skipping episode title backfill for {ItemId} because update reason is {UpdateReason}. currentTitle={CurrentTitle} candidateTitle={CandidateTitle}.");
-
-        private static readonly Action<ILogger, Guid, string, string, ItemUpdateType, Exception?> LogSkipNoCandidate =
-            LoggerMessage.Define<Guid, string, string, ItemUpdateType>(LogLevel.Debug, new EventId(4, nameof(LogSkipNoCandidate)), "No candidate available for episode title backfill item {ItemId}. currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.");
-
-        private static readonly Action<ILogger, Guid, string, string, ItemUpdateType, Exception?> LogSkipLocked =
-            LoggerMessage.Define<Guid, string, string, ItemUpdateType>(LogLevel.Debug, new EventId(5, nameof(LogSkipLocked)), "Skipping episode title backfill for {ItemId} because episode is locked. currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.");
-
-        private static readonly Action<ILogger, Guid, string, string, string, ItemUpdateType, Exception?> LogSkipTitleSnapshotMismatch =
-            LoggerMessage.Define<Guid, string, string, string, ItemUpdateType>(LogLevel.Debug, new EventId(6, nameof(LogSkipTitleSnapshotMismatch)), "Skipping episode title backfill for {ItemId} because current title {CurrentTitle} does not match original snapshot {OriginalTitleSnapshot}. candidateTitle={CandidateTitle} updateReason={UpdateReason}.");
-
-        private static readonly Action<ILogger, Guid, string, string, ItemUpdateType, Exception?> LogSkipCurrentTitleNotDefault =
-            LoggerMessage.Define<Guid, string, string, ItemUpdateType>(LogLevel.Debug, new EventId(7, nameof(LogSkipCurrentTitleNotDefault)), "Skipping episode title backfill for {ItemId} because current title {CurrentTitle} is not the default Jellyfin episode title. candidateTitle={CandidateTitle} updateReason={UpdateReason}.");
-
-        private static readonly Action<ILogger, Guid, string, string, ItemUpdateType, Exception?> LogSkipCurrentEqualsCandidate =
-            LoggerMessage.Define<Guid, string, string, ItemUpdateType>(LogLevel.Debug, new EventId(8, nameof(LogSkipCurrentEqualsCandidate)), "Skipping episode title backfill for {ItemId} because current title {CurrentTitle} already matches candidate title {CandidateTitle}. updateReason={UpdateReason}.");
-
-        private static readonly Action<ILogger, Guid, string, string, ItemUpdateType, Exception?> LogApplySuccess =
-            LoggerMessage.Define<Guid, string, string, ItemUpdateType>(LogLevel.Information, new EventId(9, nameof(LogApplySuccess)), "Applied episode title backfill for {ItemId}. currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.");
-
-        private readonly IEpisodeTitleBackfillCandidateStore candidateStore;
+        private readonly IEpisodeTitleBackfillPendingResolver pendingResolver;
         private readonly IEpisodeTitleBackfillPersistence persistence;
         private readonly ILogger<EpisodeTitleBackfillPostProcessService> logger;
 
+        private static bool IsAcceptedUpdateReason(ItemUpdateType updateReason)
+        {
+            return updateReason.HasFlag(ItemUpdateType.MetadataImport)
+                || updateReason.HasFlag(ItemUpdateType.MetadataDownload);
+        }
+
+        private static bool PathMatches(string left, string right)
+        {
+            return string.Equals(
+                left ?? string.Empty,
+                right ?? string.Empty,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+
+#pragma warning disable SA1201
         public EpisodeTitleBackfillPostProcessService(
             IEpisodeTitleBackfillCandidateStore candidateStore,
             IEpisodeTitleBackfillPersistence persistence,
             ILogger<EpisodeTitleBackfillPostProcessService> logger)
+            : this(candidateStore, new EpisodeTitleBackfillPendingResolver(candidateStore), persistence, logger)
         {
-            this.candidateStore = candidateStore;
+        }
+
+        public EpisodeTitleBackfillPostProcessService(
+            IEpisodeTitleBackfillCandidateStore candidateStore,
+            IEpisodeTitleBackfillPendingResolver pendingResolver,
+            IEpisodeTitleBackfillPersistence persistence,
+            ILogger<EpisodeTitleBackfillPostProcessService> logger)
+        {
+            ArgumentNullException.ThrowIfNull(candidateStore);
+            ArgumentNullException.ThrowIfNull(pendingResolver);
+            ArgumentNullException.ThrowIfNull(persistence);
+            ArgumentNullException.ThrowIfNull(logger);
+
+            this.pendingResolver = pendingResolver;
             this.persistence = persistence;
             this.logger = logger;
         }
+#pragma warning restore SA1201
 
-        public async Task ProcessUpdatedItemAsync(ItemChangeEventArgs e, CancellationToken cancellationToken)
+#pragma warning disable CA1848
+        public async Task TryApplyAsync(ItemChangeEventArgs e, string triggerName, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(e);
+            ArgumentException.ThrowIfNullOrWhiteSpace(triggerName);
             cancellationToken.ThrowIfCancellationRequested();
+
+            ValidateTriggerName(triggerName);
 
             if (e.Item is not Episode episode)
             {
@@ -72,59 +80,138 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            LogProcessUpdatedItem(this.logger, episode.Id, null);
+            this.logger.LogDebug(
+                "Received episode title backfill post-process event trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                triggerName,
+                episode.Id,
+                episode.Path ?? string.Empty,
+                e.UpdateReason);
+            var claimToken = Guid.NewGuid().ToString("N");
             var currentTitle = (episode.Name ?? string.Empty).Trim();
 
             if (!(MetaSharkPlugin.Instance?.Configuration.EnableSearchMissingMetadataEpisodeTitleBackfill ?? false))
             {
-                this.candidateStore.Remove(episode.Id);
-                LogSkipFeatureDisabled(this.logger, episode.Id, currentTitle, string.Empty, e.UpdateReason, null);
+                this.LogSkip("FeatureDisabled", triggerName, episode, currentTitle, string.Empty, e.UpdateReason, null);
                 return;
             }
 
-            if (!e.UpdateReason.HasFlag(ItemUpdateType.MetadataImport))
+            if (!IsAcceptedUpdateReason(e.UpdateReason))
             {
-                LogSkipUpdateReason(this.logger, episode.Id, e.UpdateReason, currentTitle, string.Empty, null);
+                this.LogSkip("UpdateReasonRejected", triggerName, episode, currentTitle, string.Empty, e.UpdateReason, null);
                 return;
             }
 
-            var candidate = this.candidateStore.Consume(episode.Id, DateTimeOffset.UtcNow);
+            var candidate = this.pendingResolver.TryClaimForUpdatedEpisode(episode, claimToken);
             if (candidate == null)
             {
-                LogSkipNoCandidate(this.logger, episode.Id, currentTitle, string.Empty, e.UpdateReason, null);
+                this.LogSkip("NoCandidate", triggerName, episode, currentTitle, string.Empty, e.UpdateReason, null);
                 return;
             }
 
             var originalTitleSnapshot = (candidate.OriginalTitleSnapshot ?? string.Empty).Trim();
             var candidateTitle = (candidate.CandidateTitle ?? string.Empty).Trim();
+            var itemPath = string.IsNullOrWhiteSpace(candidate.ItemPath) ? episode.Path ?? string.Empty : candidate.ItemPath;
 
-            if (episode.IsLocked || episode.LockedFields.Contains(MetadataField.Name))
+            if (episode.IsLocked || episode.LockedFields?.Contains(MetadataField.Name) == true)
             {
-                LogSkipLocked(this.logger, episode.Id, currentTitle, candidateTitle, e.UpdateReason, null);
+                this.pendingResolver.Complete(candidate);
+                this.LogSkip("Locked", triggerName, episode, currentTitle, candidateTitle, e.UpdateReason, null);
                 return;
             }
 
             if (!string.Equals(currentTitle, originalTitleSnapshot, StringComparison.Ordinal))
             {
-                LogSkipTitleSnapshotMismatch(this.logger, episode.Id, currentTitle, originalTitleSnapshot, candidateTitle, e.UpdateReason, null);
+                this.pendingResolver.Complete(candidate);
+                this.LogSkip("TitleSnapshotMismatch", triggerName, episode, currentTitle, candidateTitle, e.UpdateReason, originalTitleSnapshot);
                 return;
             }
 
             if (!EpisodeProvider.IsDefaultJellyfinEpisodeTitle(currentTitle))
             {
-                LogSkipCurrentTitleNotDefault(this.logger, episode.Id, currentTitle, candidateTitle, e.UpdateReason, null);
+                this.pendingResolver.Complete(candidate);
+                this.LogSkip("CurrentTitleNotDefault", triggerName, episode, currentTitle, candidateTitle, e.UpdateReason, null);
                 return;
             }
 
             if (string.Equals(currentTitle, candidateTitle, StringComparison.Ordinal))
             {
-                LogSkipCurrentEqualsCandidate(this.logger, episode.Id, currentTitle, candidateTitle, e.UpdateReason, null);
+                this.pendingResolver.Complete(candidate);
+                this.LogSkip("CurrentEqualsCandidate", triggerName, episode, currentTitle, candidateTitle, e.UpdateReason, null);
                 return;
             }
 
+            var originalEpisodeName = episode.Name;
             episode.Name = candidate.CandidateTitle;
-            await this.persistence.SaveAsync(episode, cancellationToken).ConfigureAwait(false);
-            LogApplySuccess(this.logger, episode.Id, currentTitle, candidateTitle, e.UpdateReason, null);
+            try
+            {
+                await this.persistence.SaveAsync(episode, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                episode.Name = originalEpisodeName;
+                this.pendingResolver.ReleaseClaim(candidate, claimToken);
+                this.logger.LogError(
+                    ex,
+                    "Failed to persist episode title backfill for {ItemId}. trigger={Trigger} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                    episode.Id,
+                    triggerName,
+                    itemPath,
+                    currentTitle,
+                    candidateTitle,
+                    e.UpdateReason);
+                throw;
+            }
+
+            this.pendingResolver.Complete(candidate);
+            this.logger.LogInformation(
+                "Applied episode title backfill for {ItemId}. trigger={Trigger} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                episode.Id,
+                triggerName,
+                itemPath,
+                currentTitle,
+                candidateTitle,
+                e.UpdateReason);
         }
+
+        private static void ValidateTriggerName(string triggerName)
+        {
+            if (string.Equals(triggerName, IEpisodeTitleBackfillPostProcessService.ItemUpdatedTrigger, StringComparison.Ordinal)
+                || string.Equals(triggerName, IEpisodeTitleBackfillPostProcessService.DeferredRetryTrigger, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new ArgumentOutOfRangeException(nameof(triggerName), triggerName, "Only ItemUpdated and DeferredRetry triggers are supported.");
+        }
+
+        private void LogSkip(string reason, string triggerName, Episode episode, string currentTitle, string candidateTitle, ItemUpdateType updateReason, string? detail)
+        {
+            if (string.IsNullOrWhiteSpace(detail))
+            {
+                this.logger.LogInformation(
+                    "EpisodeTitleBackfillSkip reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                    reason,
+                    triggerName,
+                    episode.Id,
+                    episode.Path ?? string.Empty,
+                    currentTitle,
+                    candidateTitle,
+                    updateReason);
+
+                return;
+            }
+
+            this.logger.LogInformation(
+                "EpisodeTitleBackfillSkip reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason} detail={Detail}.",
+                reason,
+                triggerName,
+                episode.Id,
+                episode.Path ?? string.Empty,
+                currentTitle,
+                candidateTitle,
+                updateReason,
+                detail);
+        }
+#pragma warning restore CA1848
     }
 }

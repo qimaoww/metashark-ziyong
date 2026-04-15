@@ -5,14 +5,25 @@
 namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
+    using System.Collections.Generic;
     using Jellyfin.Plugin.MetaShark.Model;
 
     public interface IEpisodeTitleBackfillCandidateStore
     {
         void Save(EpisodeTitleBackfillCandidate candidate);
 
-        EpisodeTitleBackfillCandidate? Consume(Guid itemId, DateTimeOffset nowUtc);
+        EpisodeTitleBackfillCandidate? Peek(Guid itemId);
 
-        void Remove(Guid itemId);
+        EpisodeTitleBackfillCandidate? PeekByPath(string itemPath);
+
+        EpisodeTitleBackfillCandidate? TryClaim(Guid itemId, string itemPath, Guid currentItemId, string currentItemPath, string claimToken);
+
+        IReadOnlyList<EpisodeTitleBackfillCandidate> GetDueDeferredRetries(DateTimeOffset nowUtc, int maxCount);
+
+        void UpdateDeferredRetry(EpisodeTitleBackfillCandidate candidate);
+
+        void ReleaseClaim(Guid itemId, string itemPath, string claimToken);
+
+        void Remove(Guid itemId, string itemPath);
     }
 }

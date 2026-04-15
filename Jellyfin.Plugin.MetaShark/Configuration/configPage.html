@@ -319,11 +319,11 @@
                         document.querySelector('#TvdbHost').value = config.TvdbHost;
 
                         changeProxyDisplay();
-                        ensureTvdbSpecialsWithinSeasonsCheckbox();
+                        normalizeConfigPageCheckboxes();
                         if (window.requestAnimationFrame) {
-                            window.requestAnimationFrame(ensureTvdbSpecialsWithinSeasonsCheckbox);
+                            window.requestAnimationFrame(normalizeConfigPageCheckboxes);
                         } else {
-                            setTimeout(ensureTvdbSpecialsWithinSeasonsCheckbox, 0);
+                            setTimeout(normalizeConfigPageCheckboxes, 0);
                         }
                         checkDoubanLogin();
 
@@ -390,41 +390,51 @@
                 }
             }
 
-            function ensureTvdbSpecialsWithinSeasonsCheckbox() {
-                var checkbox = document.querySelector('#EnableTvdbSpecialsWithinSeasons');
-                var label = document.querySelector('label[for="EnableTvdbSpecialsWithinSeasons"]');
+            function normalizeConfigPageCheckboxes() {
+                var checkboxes = document.querySelectorAll('#TemplateConfigPage .checkboxContainer input[type="checkbox"][is="emby-checkbox"]');
 
-                if (!checkbox || !label) {
-                    return;
-                }
+                for (var i = 0; i < checkboxes.length; i++) {
+                    var checkbox = checkboxes[i];
+                    var label = checkbox.closest('label');
 
-                if (checkbox.getAttribute('data-embycheckbox') === 'true'
-                    && checkbox.classList.contains('emby-checkbox')
-                    && label.querySelector('.checkboxLabel')
-                    && label.querySelector('.checkboxOutline')) {
-                    return;
-                }
-
-                checkbox.setAttribute('data-embycheckbox', 'true');
-                checkbox.classList.add('emby-checkbox');
-
-                var spans = label.querySelectorAll('span');
-                for (var i = 0; i < spans.length; i++) {
-                    if (!spans[i].classList.contains('checkboxOutline')) {
-                        spans[i].classList.add('checkboxLabel');
-                        break;
+                    if (!label) {
+                        continue;
                     }
-                }
 
-                if (label.querySelector('.checkboxOutline')) {
-                    return;
-                }
+                    if (checkbox.getAttribute('data-embycheckbox') === 'true'
+                        && checkbox.matches('.emby-checkbox')
+                        && label.querySelector('.checkboxLabel')
+                        && label.querySelector('.checkboxOutline')) {
+                        continue;
+                    }
 
-                var outlineSource = document.querySelector('label[for="EnableTmdbMatch"] .checkboxOutline')
-                    || document.querySelector('label.emby-checkbox-label:not([for="EnableTvdbSpecialsWithinSeasons"]) .checkboxOutline');
+                    if (label.querySelector('.checkboxOutline')) {
+                        continue;
+                    }
 
-                if (outlineSource) {
+                    var textSpans = label.querySelectorAll('span');
+                    var labelText = null;
+
+                    for (var j = 0; j < textSpans.length; j++) {
+                        if (!textSpans[j].classList.contains('checkboxOutline')) {
+                            labelText = textSpans[j];
+                            break;
+                        }
+                    }
+
+                    if (!labelText) {
+                        continue;
+                    }
+
+                    var outlineSource = document.querySelector('#TemplateConfigPage .checkboxContainer .checkboxOutline');
+                    if (!outlineSource) {
+                        continue;
+                    }
+
+                    labelText.classList.add('checkboxLabel');
                     label.appendChild(outlineSource.cloneNode(true));
+                    checkbox.setAttribute('data-embycheckbox', 'true');
+                    checkbox.classList.add('emby-checkbox');
                 }
             }
 

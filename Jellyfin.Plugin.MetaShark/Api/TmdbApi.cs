@@ -550,6 +550,60 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
         }
 
+        public async Task<string?> GetEpisodeTranslationTitleAsync(int tvShowId, int seasonNumber, int episodeNumber, string? language, CancellationToken cancellationToken)
+        {
+            if (!IsEnable())
+            {
+                return null;
+            }
+
+            var canonicalLanguage = ChineseLocalePolicy.CanonicalizeLanguage(language);
+            if (!ChineseLocalePolicy.IsAllowedForStrictZhCn(canonicalLanguage))
+            {
+                return null;
+            }
+
+            var key = $"episode-translation-title-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{canonicalLanguage}";
+            if (this.memoryCache.TryGetValue(key, out string? translationTitle))
+            {
+                return translationTitle;
+            }
+
+            try
+            {
+                await this.EnsureClientConfigAsync().ConfigureAwait(false);
+
+                var translations = await this.tmDbClient.GetTvEpisodeTranslationsAsync(
+                    tvShowId,
+                    seasonNumber,
+                    episodeNumber,
+                    cancellationToken).ConfigureAwait(false);
+
+                translationTitle = translations?.Translations?
+                    .FirstOrDefault(IsStrictZhCnEpisodeTranslation)?
+                    .Data?
+                    .Name?
+                    .Trim();
+
+                this.memoryCache.Set(key, translationTitle, TimeSpan.FromHours(CacheDurationInHours));
+                return translationTitle;
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetEpisodeTranslationTitleAsync), ex);
+                return null;
+            }
+            catch (HttpRequestException ex)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetEpisodeTranslationTitleAsync), ex);
+                return null;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+
         /// <summary>
         /// Gets TMDb episode placement metadata for specials.
         /// </summary>
@@ -1076,6 +1130,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
 
             return ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
+        }
+
+        private static bool IsStrictZhCnEpisodeTranslation(Translation translation)
+        {
+            return string.Equals(translation.Iso_639_1, "zh", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(translation.Iso_3166_1, "CN", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string? GetImageLanguagesParam(string preferredLanguage)

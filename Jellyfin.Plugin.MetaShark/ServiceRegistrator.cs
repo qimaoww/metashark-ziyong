@@ -25,6 +25,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddHostedService<BoxSetManager>();
             serviceCollection.AddHostedService<TvMissingImageRefillItemUpdatedWorker>();
             serviceCollection.AddHostedService<EpisodeTitleBackfillItemUpdatedWorker>();
+            serviceCollection.AddHostedService<EpisodeTitleBackfillDeferredRetryWorker>();
             serviceCollection.AddSingleton<ITvImageRefillStateStore>((ctx) =>
             {
                 var dataFolderPath = MetaSharkPlugin.Instance?.DataFolderPath;
@@ -40,6 +41,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<ITvImageRefillOutcomeReporter, TvImageRefillOutcomeReporter>();
             serviceCollection.AddSingleton<ITvMissingImageRefillService, TvMissingImageRefillService>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore, InMemoryEpisodeTitleBackfillCandidateStore>();
+            serviceCollection.AddSingleton<IEpisodeTitleBackfillPendingResolver, EpisodeTitleBackfillPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPersistence, JellyfinEpisodeTitleBackfillPersistence>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPostProcessService, EpisodeTitleBackfillPostProcessService>();
             serviceCollection.AddSingleton((ctx) =>

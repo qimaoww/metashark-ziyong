@@ -48,12 +48,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private static readonly Action<ILogger, string, Exception?> LogTvdbIdResolved =
             LoggerMessage.Define<string>(LogLevel.Debug, new EventId(8, nameof(LogTvdbIdResolved)), "TVDB id resolved: {TvdbId}");
 
-        private static readonly Action<ILogger, Guid, string, string, string, string, Exception?> LogQueuedSearchMissingMetadataTitleBackfill =
-            LoggerMessage.Define<Guid, string, string, string, string>(
-                LogLevel.Debug,
-                new EventId(9, nameof(LogQueuedSearchMissingMetadataTitleBackfill)),
-                "Queued episode title backfill candidate for {ItemId}. originalTitle={OriginalTitle} candidateTitle={CandidateTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.");
-
         private readonly MemoryCache memoryCache;
         private readonly IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore;
         private readonly TvdbApi tvdbApi;
@@ -64,6 +58,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
             this.episodeTitleBackfillCandidateStore = episodeTitleBackfillCandidateStore;
             this.tvdbApi = tvdbApi;
+        }
+
+        internal enum SearchMissingMetadataTitleBackfillReason
+        {
+            FeatureDisabled = 0,
+            RequestNotSearchMissingMetadata = 1,
+            EpisodeIdMissing = 2,
+            OriginalTitleNotDefault = 3,
+            ResolvedTitleEmpty = 4,
+            ResolvedTitleSameAsOriginal = 5,
+            StrictZhCnRejected = 6,
+            CandidateQueued = 7,
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -126,13 +132,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return result;
             }
 
+            var episodeItem = this.LibraryManager.FindByPath(info.Path, false) as Episode;
+            var titleMetadataLanguage = info.MetadataLanguage ?? episodeItem?.GetPreferredMetadataLanguage();
+
             var episodeResult = await this.GetEpisodeAsync(
                     seriesTmdbId.ToInt(),
                     seasonNumber,
                     episodeNumber,
                     info.SeriesDisplayOrder,
-                    info.MetadataLanguage,
-                    info.MetadataLanguage,
+                    titleMetadataLanguage,
+                    titleMetadataLanguage,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (episodeResult == null)
@@ -144,11 +153,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             result.HasMetadata = true;
             result.QueriedById = true;
 
-            var episodeItem = this.LibraryManager.FindByPath(info.Path, false) as Episode;
             var seriesOverview = episodeItem?.Series?.Overview;
             var seasonPath = this.GetOriginalSeasonPath(info);
             var seasonItem = !string.IsNullOrWhiteSpace(seasonPath) ? this.LibraryManager.FindByPath(seasonPath, true) as Season : null;
             var seasonOverview = seasonItem?.Overview;
+            var titleResolution = await this.ResolveEffectiveEpisodeProviderTitleAsync(
+                    seriesTmdbId.ToInt(),
+                    seasonNumber,
+                    episodeNumber,
+                    info.SeriesDisplayOrder,
+                    titleMetadataLanguage,
+                    info.MetadataLanguage,
+                    episodeResult.Name,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var effectiveProviderTitle = titleResolution.EffectiveProviderTitle;
             var overviewDecision = ResolveEpisodeOverviewPersistence(info.MetadataLanguage, episodeResult.Overview, seriesOverview, seasonOverview);
 
             var item = new Episode
@@ -206,34 +225,84 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             item.PremiereDate = episodeResult.AirDate;
             item.ProductionYear = episodeResult.AirDate?.Year;
-            item.Name = ResolveEpisodeTitlePersistence(info.MetadataLanguage, originalMetadataTitle, episodeResult.Name);
+            item.Name = ResolveEpisodeTitlePersistence(titleMetadataLanguage, originalMetadataTitle, effectiveProviderTitle);
             item.CommunityRating = (float)System.Math.Round(episodeResult.VoteAverage, 1);
 
-            var metadataRefreshMode = this.HttpContextAccessor.HttpContext?.Request.Query["metadataRefreshMode"].ToString();
-            var replaceAllMetadata = this.HttpContextAccessor.HttpContext?.Request.Query["replaceAllMetadata"].ToString();
-            if (this.episodeTitleBackfillCandidateStore != null
-                && IsSearchMissingMetadataRefresh(metadataRefreshMode, replaceAllMetadata)
-                && ShouldQueueSearchMissingMetadataTitleBackfill(Config.EnableSearchMissingMetadataEpisodeTitleBackfill, episodeItem?.Id ?? Guid.Empty, originalMetadataTitle, item.Name))
+            var httpContext = this.HttpContextAccessor.HttpContext;
+            var metadataRefreshMode = httpContext?.Request.Query["metadataRefreshMode"].ToString();
+            var replaceAllMetadata = httpContext?.Request.Query["replaceAllMetadata"].ToString();
+            var hasExplicitSearchMissingMetadataQuery = HasSearchMissingMetadataRefreshQuery(httpContext);
+            var isImplicitSearchMissingMetadataFallback = !hasExplicitSearchMissingMetadataQuery
+                && ShouldFallbackSearchMissingMetadataRefresh(originalMetadataTitle, episodeItem?.Name);
+            var isSearchMissingMetadataRequest = hasExplicitSearchMissingMetadataQuery
+                ? IsSearchMissingMetadataRefresh(metadataRefreshMode, replaceAllMetadata)
+                : isImplicitSearchMissingMetadataFallback;
+            var loggedMetadataRefreshMode = isImplicitSearchMissingMetadataFallback ? "ImplicitFallback" : metadataRefreshMode;
+            var loggedReplaceAllMetadata = isImplicitSearchMissingMetadataFallback ? string.Empty : replaceAllMetadata;
+            var originalTitleSnapshot = (originalMetadataTitle ?? string.Empty).Trim();
+            var candidateTitle = (item.Name ?? string.Empty).Trim();
+            if (this.episodeTitleBackfillCandidateStore != null)
             {
-                var nowUtc = DateTimeOffset.UtcNow;
-                var originalTitleSnapshot = (originalMetadataTitle ?? string.Empty).Trim();
-                var candidateTitle = (item.Name ?? string.Empty).Trim();
-                this.episodeTitleBackfillCandidateStore.Save(new EpisodeTitleBackfillCandidate
+                var episodeId = episodeItem?.Id ?? Guid.Empty;
+                var itemPath = episodeItem?.Path ?? info.Path ?? string.Empty;
+                var backfillReason = ResolveSearchMissingMetadataTitleBackfillReason(
+                    Config.EnableSearchMissingMetadataEpisodeTitleBackfill,
+                    isSearchMissingMetadataRequest,
+                    episodeId,
+                    titleMetadataLanguage,
+                    originalMetadataTitle,
+                    effectiveProviderTitle,
+                    item.Name);
+
+                if (isSearchMissingMetadataRequest)
                 {
-                    ItemId = episodeItem!.Id,
-                    OriginalTitleSnapshot = originalTitleSnapshot,
-                    CandidateTitle = candidateTitle,
-                    CreatedAtUtc = nowUtc,
-                    ExpiresAtUtc = nowUtc.AddMinutes(10),
-                });
-                LogQueuedSearchMissingMetadataTitleBackfill(
-                    this.Logger,
-                    episodeItem.Id,
+                    this.LogSearchMissingMetadataTitleBackfillInputs(
+                        episodeId,
+                        itemPath,
+                        info.MetadataLanguage,
+                        titleMetadataLanguage,
+                        episodeItem?.PreferredMetadataLanguage,
+                        episodeItem?.Series?.PreferredMetadataLanguage,
+                        seasonItem?.PreferredMetadataLanguage,
+                        titleResolution.DetailsTitle,
+                        titleResolution.TranslationTitle,
+                        effectiveProviderTitle,
+                        isSearchMissingMetadataRequest);
+                }
+
+                if (backfillReason == SearchMissingMetadataTitleBackfillReason.CandidateQueued)
+                {
+                    var nowUtc = DateTimeOffset.UtcNow;
+                    this.episodeTitleBackfillCandidateStore.Save(new EpisodeTitleBackfillCandidate
+                    {
+                        ItemId = episodeItem!.Id,
+                        ItemPath = itemPath,
+                        OriginalTitleSnapshot = originalTitleSnapshot,
+                        CandidateTitle = candidateTitle,
+                        QueuedAtUtc = nowUtc,
+                        NextAttemptAtUtc = nowUtc.AddSeconds(10),
+                        AttemptCount = 0,
+                        ExpiresAtUtc = nowUtc.AddMinutes(2),
+                    });
+                    this.LogSearchMissingMetadataTitleBackfillQueued(
+                        episodeItem.Id,
+                        itemPath,
+                        originalTitleSnapshot,
+                        candidateTitle,
+                        loggedMetadataRefreshMode,
+                        loggedReplaceAllMetadata,
+                        isSearchMissingMetadataRequest);
+                }
+
+                this.LogSearchMissingMetadataTitleBackfillDecision(
+                    backfillReason.ToString(),
+                    episodeId,
+                    itemPath,
                     originalTitleSnapshot,
                     candidateTitle,
-                    metadataRefreshMode ?? string.Empty,
-                    replaceAllMetadata ?? string.Empty,
-                    null);
+                    loggedMetadataRefreshMode,
+                    loggedReplaceAllMetadata,
+                    isSearchMissingMetadataRequest);
             }
 
             result.Item = item;
@@ -361,7 +430,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var normalizedMetadataLanguage = string.IsNullOrWhiteSpace(metadataLanguage) ? null : ChineseLocalePolicy.CanonicalizeLanguage(metadataLanguage);
-            if (!ChineseLocalePolicy.IsAllowedForStrictZhCn(normalizedMetadataLanguage))
+            if (!ChineseLocalePolicy.IsAllowedForStrictZhCn(normalizedMetadataLanguage)
+                && !string.Equals(normalizedMetadataLanguage, "zh", StringComparison.OrdinalIgnoreCase))
             {
                 return originalMetadataTitle;
             }
@@ -383,6 +453,28 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return trimmedProviderTitle;
+        }
+
+        internal static bool IsGenericTmdbEpisodeTitle(string? title)
+        {
+            var trimmedTitle = title?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedTitle))
+            {
+                return false;
+            }
+
+            if (IsDefaultJellyfinEpisodeTitle(trimmedTitle))
+            {
+                return true;
+            }
+
+            if (!trimmedTitle.StartsWith("Episode ", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var numericPart = trimmedTitle.Substring("Episode ".Length).Trim();
+            return numericPart.Length > 0 && numericPart.All(char.IsDigit);
         }
 
         internal static bool IsDefaultJellyfinEpisodeTitle(string? title)
@@ -415,26 +507,83 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 && string.Equals(replaceAllMetadata?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
         }
 
-        internal static bool ShouldQueueSearchMissingMetadataTitleBackfill(bool featureEnabled, Guid itemId, string? originalMetadataTitle, string? resolvedTitle)
+        internal static bool HasSearchMissingMetadataRefreshQuery(HttpContext? httpContext)
         {
-            if (!featureEnabled || itemId == Guid.Empty)
+            var query = httpContext?.Request.Query;
+            return query?.ContainsKey("metadataRefreshMode") == true
+                || query?.ContainsKey("replaceAllMetadata") == true;
+        }
+
+        internal static bool ShouldFallbackSearchMissingMetadataRefresh(string? originalMetadataTitle, string? currentItemTitle)
+        {
+            var trimmedOriginalTitle = originalMetadataTitle?.Trim();
+            var trimmedCurrentItemTitle = currentItemTitle?.Trim();
+            return IsDefaultJellyfinEpisodeTitle(trimmedOriginalTitle)
+                && string.Equals(trimmedOriginalTitle, trimmedCurrentItemTitle, StringComparison.Ordinal);
+        }
+
+        internal static SearchMissingMetadataTitleBackfillReason ResolveSearchMissingMetadataTitleBackfillReason(
+            bool featureEnabled,
+            bool isSearchMissingMetadataRequest,
+            Guid itemId,
+            string? metadataLanguage,
+            string? originalMetadataTitle,
+            string? providerTitle,
+            string? resolvedTitle)
+        {
+            if (!featureEnabled)
             {
-                return false;
+                return SearchMissingMetadataTitleBackfillReason.FeatureDisabled;
+            }
+
+            if (!isSearchMissingMetadataRequest)
+            {
+                return SearchMissingMetadataTitleBackfillReason.RequestNotSearchMissingMetadata;
+            }
+
+            if (itemId == Guid.Empty)
+            {
+                return SearchMissingMetadataTitleBackfillReason.EpisodeIdMissing;
             }
 
             var trimmedOriginalTitle = originalMetadataTitle?.Trim();
             if (!IsDefaultJellyfinEpisodeTitle(trimmedOriginalTitle))
             {
-                return false;
+                return SearchMissingMetadataTitleBackfillReason.OriginalTitleNotDefault;
+            }
+
+            var trimmedProviderTitle = providerTitle?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedProviderTitle))
+            {
+                return SearchMissingMetadataTitleBackfillReason.ResolvedTitleEmpty;
             }
 
             var trimmedResolvedTitle = resolvedTitle?.Trim();
             if (string.IsNullOrWhiteSpace(trimmedResolvedTitle))
             {
-                return false;
+                return SearchMissingMetadataTitleBackfillReason.ResolvedTitleEmpty;
             }
 
-            return !string.Equals(trimmedOriginalTitle, trimmedResolvedTitle, StringComparison.Ordinal);
+            if (string.Equals(trimmedOriginalTitle, trimmedResolvedTitle, StringComparison.Ordinal))
+            {
+                return IsStrictZhCnRejectedSearchMissingMetadataTitleBackfill(metadataLanguage, trimmedOriginalTitle, providerTitle)
+                    ? SearchMissingMetadataTitleBackfillReason.StrictZhCnRejected
+                    : SearchMissingMetadataTitleBackfillReason.ResolvedTitleSameAsOriginal;
+            }
+
+            return SearchMissingMetadataTitleBackfillReason.CandidateQueued;
+        }
+
+        internal static bool ShouldQueueSearchMissingMetadataTitleBackfill(bool featureEnabled, Guid itemId, string? originalMetadataTitle, string? resolvedTitle)
+        {
+            return ResolveSearchMissingMetadataTitleBackfillReason(
+                featureEnabled,
+                true,
+                itemId,
+                null,
+                originalMetadataTitle,
+                resolvedTitle,
+                resolvedTitle) == SearchMissingMetadataTitleBackfillReason.CandidateQueued;
         }
 
         internal static (string? Overview, string? ResultLanguage) ResolveEpisodeOverviewPersistence(string? metadataLanguage, string? overview, string? seriesOverview, string? seasonOverview)
@@ -511,6 +660,84 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return videoFilesCount;
         }
 
+        private async Task<(string? DetailsTitle, string? TranslationTitle, string? EffectiveProviderTitle)> ResolveEffectiveEpisodeProviderTitleAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? titleMetadataLanguage, string? imageLanguages, string? providerTitle, CancellationToken cancellationToken)
+        {
+            var detailsTitle = providerTitle;
+            var trimmedProviderTitle = providerTitle?.Trim();
+            var normalizedTitleMetadataLanguage = string.IsNullOrWhiteSpace(titleMetadataLanguage) ? null : ChineseLocalePolicy.CanonicalizeLanguage(titleMetadataLanguage);
+            if (!ChineseLocalePolicy.IsAllowedForStrictZhCn(normalizedTitleMetadataLanguage)
+                || !IsGenericTmdbEpisodeTitle(trimmedProviderTitle))
+            {
+                return (detailsTitle, string.Empty, trimmedProviderTitle);
+            }
+
+            var translationTitle = await this.GetEpisodeTranslationTitleAsync(
+                    seriesTmdbId,
+                    seasonNumber,
+                    episodeNumber,
+                    displayOrder,
+                    normalizedTitleMetadataLanguage,
+                    imageLanguages,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var trimmedTranslationTitle = translationTitle?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedTranslationTitle)
+                || IsGenericTmdbEpisodeTitle(trimmedTranslationTitle)
+                || !ChineseLocalePolicy.IsTextAllowedForStrictZhCn(trimmedTranslationTitle))
+            {
+                return (detailsTitle, translationTitle ?? string.Empty, trimmedProviderTitle);
+            }
+
+            return (detailsTitle, translationTitle ?? string.Empty, trimmedTranslationTitle);
+        }
+
+#pragma warning disable CA1848
+        private void LogSearchMissingMetadataTitleBackfillInputs(Guid itemId, string itemPath, string? lookupLanguage, string? titleMetadataLanguage, string? episodePreferredLanguage, string? seriesPreferredLanguage, string? seasonPreferredLanguage, string? detailsTitle, string? translationTitle, string? effectiveProviderTitle, bool isSearchMissingMetadataRequest)
+        {
+            this.Logger.LogInformation(
+                "EpisodeTitleBackfillInputs itemId={ItemId} itemPath={ItemPath} lookupLanguage={LookupLanguage} titleMetadataLanguage={TitleMetadataLanguage} episodePreferredLanguage={EpisodePreferredLanguage} seriesPreferredLanguage={SeriesPreferredLanguage} seasonPreferredLanguage={SeasonPreferredLanguage} detailsTitle={DetailsTitle} translationTitle={TranslationTitle} effectiveProviderTitle={EffectiveProviderTitle} isSearchMissingMetadataRequest={IsSearchMissingMetadataRequest}.",
+                itemId,
+                itemPath,
+                lookupLanguage ?? string.Empty,
+                titleMetadataLanguage ?? string.Empty,
+                episodePreferredLanguage ?? string.Empty,
+                seriesPreferredLanguage ?? string.Empty,
+                seasonPreferredLanguage ?? string.Empty,
+                detailsTitle ?? string.Empty,
+                translationTitle ?? string.Empty,
+                effectiveProviderTitle ?? string.Empty,
+                isSearchMissingMetadataRequest);
+        }
+
+        private void LogSearchMissingMetadataTitleBackfillQueued(Guid itemId, string itemPath, string originalTitle, string candidateTitle, string? metadataRefreshMode, string? replaceAllMetadata, bool liveVisible)
+        {
+            this.Logger.Log(
+                liveVisible ? LogLevel.Information : LogLevel.Debug,
+                "EpisodeTitleBackfillQueued itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} candidateTitle={CandidateTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                itemId,
+                itemPath,
+                originalTitle,
+                candidateTitle,
+                metadataRefreshMode ?? string.Empty,
+                replaceAllMetadata ?? string.Empty);
+        }
+
+        private void LogSearchMissingMetadataTitleBackfillDecision(string reason, Guid itemId, string itemPath, string originalTitle, string resolvedTitle, string? metadataRefreshMode, string? replaceAllMetadata, bool liveVisible)
+        {
+            this.Logger.Log(
+                liveVisible ? LogLevel.Information : LogLevel.Debug,
+                "EpisodeTitleBackfillDecision reason={Reason} itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} resolvedTitle={ResolvedTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                reason,
+                itemId,
+                itemPath,
+                originalTitle,
+                resolvedTitle,
+                metadataRefreshMode ?? string.Empty,
+                replaceAllMetadata ?? string.Empty);
+        }
+#pragma warning restore CA1848
+
+#pragma warning disable SA1204
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1308:Normalize strings to uppercase", Justification = "Overview comparison contract requires lowercase normalization.")]
         private static string? NormalizeOverviewForComparison(string? value)
         {
@@ -560,6 +787,26 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             return normalizedOverview.Distance(normalizedParentOverview) >= 0.95;
         }
+
+        private static bool IsStrictZhCnRejectedSearchMissingMetadataTitleBackfill(string? metadataLanguage, string? trimmedOriginalTitle, string? providerTitle)
+        {
+            var normalizedMetadataLanguage = string.IsNullOrWhiteSpace(metadataLanguage) ? null : ChineseLocalePolicy.CanonicalizeLanguage(metadataLanguage);
+            if (!ChineseLocalePolicy.IsAllowedForStrictZhCn(normalizedMetadataLanguage))
+            {
+                return false;
+            }
+
+            var trimmedProviderTitle = providerTitle?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedProviderTitle)
+                || IsDefaultJellyfinEpisodeTitle(trimmedProviderTitle)
+                || string.Equals(trimmedOriginalTitle, trimmedProviderTitle, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return !ChineseLocalePolicy.IsTextAllowedForStrictZhCn(trimmedProviderTitle);
+        }
+#pragma warning restore SA1204
 
         private async Task<TvdbSpecialPlacement?> TryBuildTvdbSpecialPlacementAsync(
             string seriesTvdbId,
