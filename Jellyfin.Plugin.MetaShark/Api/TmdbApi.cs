@@ -550,7 +550,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
         }
 
-        public async Task<string?> GetEpisodeTranslationTitleAsync(int tvShowId, int seasonNumber, int episodeNumber, string? language, CancellationToken cancellationToken)
+        public async Task<EpisodeLocalizedValue?> GetEpisodeTranslationTitleAsync(int tvShowId, int seasonNumber, int episodeNumber, string? language, CancellationToken cancellationToken)
         {
             if (!IsEnable())
             {
@@ -564,7 +564,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
 
             var key = $"episode-translation-title-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{canonicalLanguage}";
-            if (this.memoryCache.TryGetValue(key, out string? translationTitle))
+            if (this.memoryCache.TryGetValue(key, out EpisodeLocalizedValue? translationTitle))
             {
                 return translationTitle;
             }
@@ -579,11 +579,16 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     episodeNumber,
                     cancellationToken).ConfigureAwait(false);
 
-                translationTitle = translations?.Translations?
-                    .FirstOrDefault(IsStrictZhCnEpisodeTranslation)?
-                    .Data?
-                    .Name?
-                    .Trim();
+                var translation = translations?.Translations?
+                    .FirstOrDefault(IsStrictZhCnEpisodeTranslation);
+
+                translationTitle = translation == null
+                    ? null
+                    : new EpisodeLocalizedValue
+                    {
+                        Value = translation.Data?.Name?.Trim(),
+                        SourceLanguage = "zh-CN",
+                    };
 
                 this.memoryCache.Set(key, translationTitle, TimeSpan.FromHours(CacheDurationInHours));
                 return translationTitle;
@@ -596,6 +601,65 @@ namespace Jellyfin.Plugin.MetaShark.Api
             catch (HttpRequestException ex)
             {
                 this.logTmdbError(this.logger, nameof(this.GetEpisodeTranslationTitleAsync), ex);
+                return null;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+
+        public async Task<EpisodeLocalizedValue?> GetEpisodeTranslationOverviewAsync(int tvShowId, int seasonNumber, int episodeNumber, string? language, CancellationToken cancellationToken)
+        {
+            if (!IsEnable())
+            {
+                return null;
+            }
+
+            var canonicalLanguage = ChineseLocalePolicy.CanonicalizeLanguage(language);
+            if (!ChineseLocalePolicy.IsAllowedForStrictZhCn(canonicalLanguage))
+            {
+                return null;
+            }
+
+            var key = $"episode-translation-overview-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{canonicalLanguage}";
+            if (this.memoryCache.TryGetValue(key, out EpisodeLocalizedValue? translationOverview))
+            {
+                return translationOverview;
+            }
+
+            try
+            {
+                await this.EnsureClientConfigAsync().ConfigureAwait(false);
+
+                var translations = await this.tmDbClient.GetTvEpisodeTranslationsAsync(
+                    tvShowId,
+                    seasonNumber,
+                    episodeNumber,
+                    cancellationToken).ConfigureAwait(false);
+
+                var translation = translations?.Translations?
+                    .FirstOrDefault(IsStrictZhCnEpisodeTranslation);
+
+                translationOverview = translation == null
+                    ? null
+                    : new EpisodeLocalizedValue
+                    {
+                        Value = translation.Data?.Overview?.Trim(),
+                        SourceLanguage = "zh-CN",
+                    };
+
+                this.memoryCache.Set(key, translationOverview, TimeSpan.FromHours(CacheDurationInHours));
+                return translationOverview;
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetEpisodeTranslationOverviewAsync), ex);
+                return null;
+            }
+            catch (HttpRequestException ex)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetEpisodeTranslationOverviewAsync), ex);
                 return null;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

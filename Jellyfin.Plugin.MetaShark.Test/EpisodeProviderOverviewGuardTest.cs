@@ -1,96 +1,155 @@
+using Jellyfin.Plugin.MetaShark.Api;
+using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
+using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Providers;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
+using Moq;
+using System.Reflection;
+using TMDbLib.Objects.TvShows;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
     [TestClass]
     public class EpisodeProviderOverviewGuardTest
     {
-        [TestMethod]
-        public void ShouldRejectOverview_WhenRequestedLanguageIsZhAndOverviewHasNoChinese()
-        {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh-CN", "A reunion episode.", null, null);
-
-            Assert.AreEqual(null, result.Overview);
-            Assert.AreEqual(null, result.ResultLanguage);
-        }
+        private readonly ILoggerFactory loggerFactory = LoggerFactory.Create(builder => { });
 
         [TestMethod]
-        public void ShouldKeepOverview_WhenRequestedLanguageIsZhAndOverviewContainsChinese()
+        public async Task GetMetadata_ShouldPersistOverview_WhenDetailsOverviewWasFetchedWithExplicitZhCn()
         {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh-CN", "这一集讲述两个年轻人为了一辆车展开较量。", null, null);
+            var info = CreateEpisodeInfo(metadataLanguage: "zh-CN");
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "Episode 1",
+                Overview = "A reunion episode.",
+            });
 
-            Assert.AreEqual("这一集讲述两个年轻人为了一辆车展开较量。", result.Overview);
+            using var provider = CreateProvider(libraryManagerStub.Object, new HttpContextAccessor(), tmdbApi);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("A reunion episode.", result.Item!.Overview, "details overview 以显式 zh-CN 请求获取时，应被包装成可信来源并允许写回。");
             Assert.AreEqual("zh-CN", result.ResultLanguage);
         }
 
         [TestMethod]
-        public void ShouldRejectOverview_WhenStrictZhCnOverviewUsesTraditionalChinese()
+        public async Task GetMetadata_ShouldPersistOverview_WhenTranslationOverviewHasExplicitZhCnSource()
+        {
+            var info = CreateEpisodeInfo(metadataLanguage: "zh-CN");
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "Episode 1",
+                Overview = "A reunion episode.",
+            });
+            SeedEpisodeTranslationOverview(tmdbApi, 123, 1, 1, "zh-CN", "這一集講述兩個年輕人為了一輛車展開較量。");
+
+            using var provider = CreateProvider(libraryManagerStub.Object, new HttpContextAccessor(), tmdbApi);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("這一集講述兩個年輕人為了一輛車展開較量。", result.Item!.Overview);
+            Assert.AreEqual("zh-CN", result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldPersistOverview_WhenLookupLanguageIsBareZhButTargetSourceIsPromotedToZhCn()
+        {
+            var info = CreateEpisodeInfo(metadataLanguage: "zh");
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "Episode 1",
+                Overview = "A reunion episode.",
+            });
+            SeedEpisodeTranslationOverview(tmdbApi, 123, 1, 1, "zh-CN", "這一集講述兩個年輕人為了一輛車展開較量。");
+
+            using var provider = CreateProvider(libraryManagerStub.Object, new HttpContextAccessor(), tmdbApi);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("這一集講述兩個年輕人為了一輛車展開較量。", result.Item!.Overview, "bare zh 请求应先提升到 zh-CN 目标来源，再命中可信的 Episode overview。 ");
+            Assert.AreEqual("zh-CN", result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldKeepOverview_WhenCanonicalizedSourceLanguageBecomesStrictZhCn()
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("ZH-cn", "A reunion episode.", null, null);
+
+            Assert.AreEqual("A reunion episode.", result.Overview);
+            Assert.AreEqual("zh-CN", result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldRejectOverview_WhenOnlyBareZhSourceLanguageExistsWithoutExplicitOverviewSourceLanguage()
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh", "这一集讲述两个年轻人为了一辆车展开较量。", null, null);
+
+            Assert.AreEqual(null, result.Overview);
+            Assert.AreEqual(null, result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldRejectOverview_WhenOverviewSourceLanguageIsMissing()
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(null, "这一集讲述两个年轻人为了一辆车展开较量。", null, null);
+
+            Assert.AreEqual(null, result.Overview);
+            Assert.AreEqual(null, result.ResultLanguage);
+        }
+
+        [DataTestMethod]
+        [DataRow("zh-TW")]
+        [DataRow("zh-Hans")]
+        [DataRow("zh_cn")]
+        [DataRow("en")]
+        public void ShouldRejectOverview_WhenOverviewSourceLanguageIsNotStrictZhCn(string language)
+        {
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(language, "A reunion episode.", null, null);
+
+            Assert.AreEqual(null, result.Overview);
+            Assert.AreEqual(null, result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldKeepOverview_WhenSourceLanguageIsZhCnAndOverviewUsesTraditionalCharacters()
         {
             var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh-CN", "這一集講述兩個年輕人為了一輛車展開較量。", null, null);
 
-            Assert.AreEqual(null, result.Overview);
-            Assert.AreEqual(null, result.ResultLanguage);
+            Assert.AreEqual("這一集講述兩個年輕人為了一輛車展開較量。", result.Overview);
+            Assert.AreEqual("zh-CN", result.ResultLanguage);
         }
 
         [TestMethod]
-        public void ShouldRejectOverview_WhenTraditionalChineseOverviewMatchesParentOverviewUnderStrictZhCn()
+        public void ShouldKeepOverview_WhenSourceLanguageIsZhCnAndOverviewUsesSharedGlyphs()
         {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
-                "zh-CN",
-                "這一集講述兩個年輕人為了一輛車展開較量。",
-                "這一集講述兩個年輕人為了一輛車展開較量。",
-                null);
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh-CN", "千里之外", null, null);
 
-            Assert.AreEqual(null, result.Overview);
-            Assert.AreEqual(null, result.ResultLanguage);
+            Assert.AreEqual("千里之外", result.Overview);
+            Assert.AreEqual("zh-CN", result.ResultLanguage);
         }
 
         [TestMethod]
-        public void ShouldRejectOverview_WhenTraditionalChineseMissesLegacyBlacklistUnderStrictZhCn()
+        public void ShouldKeepOverview_WhenTrustedZhCnSourceUsesMixedText()
         {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
-                "zh-CN",
-                "这个角色很厲害，也令人驚訝。",
-                null,
-                null);
+            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh-CN", "第1集 Reunion", null, null);
 
-            Assert.AreEqual(null, result.Overview);
-            Assert.AreEqual(null, result.ResultLanguage);
-        }
-
-        [TestMethod]
-        public void ShouldRejectOverview_WhenTraditionalChinesePreviouslyReliedOnAmbiguousHansEvidence()
-        {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
-                "zh-CN",
-                "皇后回宮",
-                null,
-                null);
-
-            Assert.AreEqual(null, result.Overview);
-            Assert.AreEqual(null, result.ResultLanguage);
-        }
-
-        [TestMethod]
-        public void ShouldRejectOverview_WhenChineseTextHasNoDistinctHansEvidenceUnderStrictZhCn()
-        {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
-                "zh-CN",
-                "千里之外",
-                null,
-                null);
-
-            Assert.AreEqual(null, result.Overview);
-            Assert.AreEqual(null, result.ResultLanguage);
-        }
-
-        [TestMethod]
-        public void ShouldKeepOverview_WhenRequestedLanguageIsNonZh()
-        {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("en", "A reunion episode.", null, null);
-
-            Assert.AreEqual("A reunion episode.", result.Overview);
-            Assert.AreEqual("en", result.ResultLanguage);
+            Assert.AreEqual("第1集 Reunion", result.Overview);
+            Assert.AreEqual("zh-CN", result.ResultLanguage);
         }
 
         [TestMethod]
@@ -106,16 +165,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ShouldKeepMixedOverview_WhenRequestedLanguageIsZhAndOverviewContainsAnyChinese()
-        {
-            var result = EpisodeProvider.ResolveEpisodeOverviewPersistence("zh", "第1集 Reunion", null, null);
-
-            Assert.AreEqual("第1集 Reunion", result.Overview);
-            Assert.AreEqual("zh", result.ResultLanguage);
-        }
-
-        [TestMethod]
-        public void ShouldRejectOverview_WhenEpisodeOverviewEqualsSeriesOverview()
+        public void ShouldRejectOverview_WhenEpisodeOverviewEqualsSeriesOverviewAfterSourceAcceptance()
         {
             var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
                 "zh-CN",
@@ -128,7 +178,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ShouldRejectOverview_WhenEpisodeOverviewEqualsSeasonOverview()
+        public void ShouldRejectOverview_WhenEpisodeOverviewEqualsSeasonOverviewAfterSourceAcceptance()
         {
             var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
                 "zh-CN",
@@ -154,7 +204,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ShouldRejectOverview_WhenEpisodeOverviewIsHighlySimilarToSeriesOverview()
+        public void ShouldRejectOverview_WhenEpisodeOverviewIsHighlySimilarToSeriesOverviewAfterSourceAcceptance()
         {
             var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
                 "zh-CN",
@@ -167,7 +217,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ShouldKeepOverview_WhenEpisodeOverviewDiffersFromParentOverviews()
+        public void ShouldKeepOverview_WhenEpisodeOverviewDiffersFromParentOverviewsAfterSourceAcceptance()
         {
             var result = EpisodeProvider.ResolveEpisodeOverviewPersistence(
                 "zh-CN",
@@ -177,6 +227,70 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual("雫第一次参加神之水滴选拔挑战。", result.Overview);
             Assert.AreEqual("zh-CN", result.ResultLanguage);
+        }
+
+        private static EpisodeProvider CreateProvider(ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, TmdbApi tmdbApi, ILoggerFactory? loggerFactory = null)
+        {
+            loggerFactory ??= LoggerFactory.Create(builder => { });
+            return new EpisodeProvider(
+                new DefaultHttpClientFactory(),
+                loggerFactory,
+                libraryManager,
+                httpContextAccessor,
+                new DoubanApi(loggerFactory),
+                tmdbApi,
+                new OmdbApi(loggerFactory),
+                new ImdbApi(loggerFactory),
+                new TvdbApi(loggerFactory));
+        }
+
+        private static EpisodeInfo CreateEpisodeInfo(string? metadataLanguage = "zh-CN")
+        {
+            return new EpisodeInfo
+            {
+                Name = "第 1 集",
+                Path = "/library/tv/series-a/Season 01/episode-01.mkv",
+                MetadataLanguage = metadataLanguage,
+                ParentIndexNumber = 1,
+                IndexNumber = 1,
+                SeriesDisplayOrder = string.Empty,
+                SeriesProviderIds = new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tmdb.ToString()] = "123",
+                },
+            };
+        }
+
+        private static void SeedEpisode(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, int episodeNumber, string language, string imageLanguages, TvEpisode episode)
+        {
+            var cacheField = typeof(TmdbApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(cacheField, "TmdbApi.memoryCache 未找到");
+
+            var cache = cacheField!.GetValue(tmdbApi) as MemoryCache;
+            Assert.IsNotNull(cache, "TmdbApi.memoryCache 不是有效的 MemoryCache");
+
+            var key = $"episode-{seriesTmdbId}-s{seasonNumber}e{episodeNumber}-{language}-{imageLanguages}";
+            cache!.Set(key, episode);
+        }
+
+        private static void SeedEpisodeTranslationOverview(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, int episodeNumber, string language, string? overview)
+        {
+            var cacheField = typeof(TmdbApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(cacheField, "TmdbApi.memoryCache 未找到");
+
+            var cache = cacheField!.GetValue(tmdbApi) as MemoryCache;
+            Assert.IsNotNull(cache, "TmdbApi.memoryCache 不是有效的 MemoryCache");
+
+            var key = $"episode-translation-overview-{seriesTmdbId}-s{seasonNumber}e{episodeNumber}-{language}";
+            cache!.Set(
+                key,
+                overview == null
+                    ? null
+                    : new EpisodeLocalizedValue
+                    {
+                        Value = overview,
+                        SourceLanguage = language,
+                    });
         }
     }
 }

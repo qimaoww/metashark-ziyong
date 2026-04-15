@@ -123,7 +123,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("皇后回宫", result.Item!.Name);
             Assert.IsNotNull(queuedCandidate, "当 lookup language 缺失但当前 Episode 偏好 zh-CN 时，provider 仍应入队 candidate。");
             Assert.AreEqual(1, harness.Persistence.SaveCallCount, "MetadataDownload 事件仍应驱动持久化。");
-            Assert.AreEqual("皇后回宫", harness.Episode.Name, "当前 Episode 偏好 zh-CN 时，strict zh-CN 回填链路仍应成功应用标题。");
+            Assert.AreEqual("皇后回宫", harness.Episode.Name, "当前 Episode 偏好 zh-CN 时，来源语言合同仍应成功应用标题回填。");
         }
 
         [TestMethod]
@@ -154,7 +154,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task SearchMissingMetadataFlow_BareZhLookupLanguage_PersistsAndBackfillsEpisodeTitle()
+        public async Task SearchMissingMetadataFlow_BareZhLookupLanguage_PromotesToZhCnAndBackfillsEpisodeTitle()
         {
             using var harness = CreateHarness(
                 featureEnabled: true,
@@ -162,8 +162,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 replaceAllMetadata: "false",
                 metadataLanguage: "zh",
                 episodePreferredMetadataLanguage: null,
-                tmdbLanguage: "zh",
-                tmdbImageLanguages: "zh",
+                tmdbLanguage: "zh-CN",
+                tmdbImageLanguages: "zh-CN",
                 tmdbEpisodeName: "皇后回宫");
 
             var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
@@ -173,9 +173,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("皇后回宫", result.Item!.Name);
-            Assert.IsNotNull(queuedCandidate, "当 lookup language 为 bare zh 且标题文本已满足现有 strict zh-CN 文本门禁时，provider 仍应入队 candidate。");
-            Assert.AreEqual(1, harness.Persistence.SaveCallCount, "bare zh 的极窄 title-path 放行后，MetadataDownload 事件仍应驱动持久化。");
-            Assert.AreEqual("皇后回宫", harness.Episode.Name, "bare zh 在 title-path 放行后，宿主 Episode 标题应被回填为人类标题。");
+            Assert.IsNotNull(queuedCandidate, "当 lookup language 为 bare zh 时，应先提升到 zh-CN 目标来源，再进入当前 MetadataDownload 回填链路。");
+            Assert.AreEqual(1, harness.Persistence.SaveCallCount, "bare zh 提升为 zh-CN 后，MetadataDownload 事件仍应驱动持久化。");
+            Assert.AreEqual("皇后回宫", harness.Episode.Name, "bare zh 提升为 zh-CN 后，宿主 Episode 标题应被正常回填。");
         }
 
         private FlowHarness CreateHarness(
@@ -277,7 +277,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(cache, "TmdbApi.memoryCache 不是有效的 MemoryCache");
 
             var key = $"episode-translation-title-{seriesTmdbId}-s{seasonNumber}e{episodeNumber}-{language}";
-            cache!.Set(key, title);
+            cache!.Set(
+                key,
+                title == null
+                    ? null
+                    : new EpisodeLocalizedValue
+                    {
+                        Value = title,
+                        SourceLanguage = language,
+                    });
         }
 
         private static void EnsurePluginInstance()

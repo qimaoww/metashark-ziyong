@@ -218,8 +218,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     && message.Message.Contains("seriesPreferredLanguage=", StringComparison.Ordinal)
                     && message.Message.Contains("seasonPreferredLanguage=ja-JP", StringComparison.Ordinal)
                     && message.Message.Contains("detailsTitle=皇后回宫", StringComparison.Ordinal)
+                    && message.Message.Contains("detailsTitleSourceLanguage=zh-CN", StringComparison.Ordinal)
                     && message.Message.Contains("translationTitle=", StringComparison.Ordinal)
+                    && message.Message.Contains("translationTitleSourceLanguage=", StringComparison.Ordinal)
                     && message.Message.Contains("effectiveProviderTitle=皇后回宫", StringComparison.Ordinal)
+                    && message.Message.Contains("effectiveProviderTitleSourceLanguage=zh-CN", StringComparison.Ordinal)
                     && message.Message.Contains("isSearchMissingMetadataRequest=True", StringComparison.Ordinal)),
                 "目标 backfill 链路必须输出一条 EpisodeTitleBackfillInputs Information 日志，并带上 title decision 关键输入。");
         }
@@ -323,7 +326,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("皇后回宫", result.Item!.Name);
-            Assert.IsNotNull(savedCandidate, "当 lookup language 缺失但当前 Episode 偏好 zh-CN 时，strict zh-CN 标题逻辑仍应允许入队 candidate。");
+            Assert.IsNotNull(savedCandidate, "当 lookup language 缺失但当前 Episode 偏好 zh-CN 时，来源语言合同仍应允许入队 candidate。");
             Assert.AreEqual("皇后回宫", savedCandidate!.CandidateTitle);
             AssertLoggedMessage(loggerProvider, "EpisodeProvider", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
         }
@@ -413,11 +416,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("第 1 集", result.Item!.Name, "显式 lookup language 存在时，provider 不应退回当前 Episode 的 zh-CN 偏好语言。");
             storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "ResolvedTitleSameAsOriginal", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "StrictZhCnRejected", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
         }
 
         [TestMethod]
-        public async Task GetMetadata_WhenLookupLanguageIsBareZhAndProviderTitleIsHumanZhCn_QueuesCandidate()
+        public async Task GetMetadata_WhenLookupLanguageIsBareZh_PromotesToZhCnForEpisodeDetailsLookupAndQueuesCandidate()
         {
             EnsurePluginInstance();
             MetaSharkPlugin.Instance!.Configuration.EnableSearchMissingMetadataEpisodeTitleBackfill = true;
@@ -448,7 +451,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
 
             var tmdbApi = new TmdbApi(loggerFactory);
-            SeedEpisode(tmdbApi, 123, 1, 1, "zh", "zh", new TvEpisode { Name = "皇后回宫" });
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh", "zh", new TvEpisode { Name = "第 1 集" });
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode { Name = "皇后回宫" });
 
             using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
 
@@ -456,8 +460,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("皇后回宫", result.Item!.Name);
-            Assert.IsNotNull(savedCandidate, "当 lookup language 为 bare zh 且标题文本已满足现有 strict zh-CN 文本门禁时，provider 应继续入队 candidate。");
+            Assert.IsNotNull(savedCandidate, "当 lookup language 为 bare zh 时，应先提升到显式 zh-CN 目标来源，再继续当前 title backfill 链路。");
             Assert.AreEqual("皇后回宫", savedCandidate!.CandidateTitle);
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "EpisodeTitleBackfillInputs", "lookupLanguage=zh", "titleMetadataLanguage=zh-CN", "detailsTitle=皇后回宫", "detailsTitleSourceLanguage=zh-CN", "effectiveProviderTitleSourceLanguage=zh-CN");
         }
 
         [TestMethod]
@@ -519,7 +525,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             using var loggerProvider = new TestLoggerProvider();
             using var loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Debug).AddProvider(loggerProvider));
             var storeStub = new Mock<IEpisodeTitleBackfillCandidateStore>();
-            var info = CreateEpisodeInfo();
+            var info = CreateEpisodeInfo(metadataLanguage: "zh");
             var episodeItem = new Episode
             {
                 Id = Guid.NewGuid(),
@@ -702,46 +708,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldNotSaveCandidate_WhenStrictZhCnRejected()
-        {
-            EnsurePluginInstance();
-            MetaSharkPlugin.Instance!.Configuration.EnableSearchMissingMetadataEpisodeTitleBackfill = true;
-
-            using var loggerProvider = new TestLoggerProvider();
-            using var loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Debug).AddProvider(loggerProvider));
-            var storeStub = new Mock<IEpisodeTitleBackfillCandidateStore>();
-            var info = CreateEpisodeInfo();
-            var episodeItem = new Episode
-            {
-                Id = Guid.NewGuid(),
-                Path = info.Path,
-            };
-
-            var libraryManagerStub = new Mock<ILibraryManager>();
-            libraryManagerStub
-                .Setup(x => x.FindByPath(info.Path, false))
-                .Returns(episodeItem);
-
-            var httpContextAccessor = new HttpContextAccessor
-            {
-                HttpContext = CreateHttpContext("FullRefresh", "false"),
-            };
-
-            var tmdbApi = new TmdbApi(loggerFactory);
-            SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode { Name = "皇后回宮" });
-
-            using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
-
-            var result = await provider.GetMetadata(info, CancellationToken.None);
-
-            Assert.IsNotNull(result.Item);
-            Assert.AreEqual("第 1 集", result.Item!.Name);
-            storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "StrictZhCnRejected", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
-        }
-
-        [TestMethod]
-        public async Task GetMetadata_WhenLookupLanguageIsBareZhButProviderTitleIsDisallowed_KeepsDefaultTitle()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenOnlyBareZhEpisodeDetailsExistButPromotedZhCnTargetDoesNot()
         {
             EnsurePluginInstance();
             MetaSharkPlugin.Instance!.Configuration.EnableSearchMissingMetadataEpisodeTitleBackfill = true;
@@ -767,15 +734,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
 
             var tmdbApi = new TmdbApi(loggerFactory);
-            SeedEpisode(tmdbApi, 123, 1, 1, "zh", "zh", new TvEpisode { Name = "皇后回宮" });
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh", "zh", new TvEpisode { Name = "皇后回宫" });
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode { Name = "第 1 集" });
 
             using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
 
-            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+            var result = await provider.GetMetadata(info, CancellationToken.None);
 
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("第 1 集", result.Item!.Name);
             storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "ResolvedTitleSameAsOriginal", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "EpisodeTitleBackfillInputs", "lookupLanguage=zh", "titleMetadataLanguage=zh-CN", "detailsTitle=第 1 集", "detailsTitleSourceLanguage=zh-CN");
         }
 
         [TestMethod]
@@ -919,7 +889,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(cache, "TmdbApi.memoryCache 不是有效的 MemoryCache");
 
             var key = $"episode-translation-title-{seriesTmdbId}-s{seasonNumber}e{episodeNumber}-{language}";
-            cache!.Set(key, title);
+            cache!.Set(
+                key,
+                title == null
+                    ? null
+                    : new EpisodeLocalizedValue
+                    {
+                        Value = title,
+                        SourceLanguage = language,
+                    });
         }
 
         private static void EnsurePluginInstance()
