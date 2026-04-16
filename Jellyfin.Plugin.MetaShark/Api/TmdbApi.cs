@@ -7,6 +7,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
     using System;
     using System.Collections.Generic;
     using System.Globalization;
+    using System.IO;
     using System.Linq;
     using System.Net;
     using System.Net.Http;
@@ -511,7 +512,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
             var key = $"episode-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out TvEpisode? episode))
             {
-                return episode;
+                return await this.EnsureEpisodeStillImagesAsync(episode, tvShowId, seasonNumber, episodeNumber, language, imageLanguages, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             try
@@ -527,6 +529,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     extraMethods: TvEpisodeMethods.Credits | TvEpisodeMethods.Images | TvEpisodeMethods.ExternalIds | TvEpisodeMethods.Videos,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
+                episode = await this.EnsureEpisodeStillImagesAsync(episode, tvShowId, seasonNumber, episodeNumber, language, imageLanguages, cancellationToken)
+                    .ConfigureAwait(false);
                 if (episode != null)
                 {
                     this.memoryCache.Set(key, episode, TimeSpan.FromHours(CacheDurationInHours));
@@ -542,6 +546,110 @@ namespace Jellyfin.Plugin.MetaShark.Api
             catch (HttpRequestException ex)
             {
                 this.logTmdbError(this.logger, nameof(this.GetEpisodeAsync), ex);
+                return null;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+
+        public async Task<StillImages?> GetEpisodeImagesAsync(int tvShowId, int seasonNumber, int episodeNumber, string language, string imageLanguages, CancellationToken cancellationToken)
+        {
+            if (!IsEnable())
+            {
+                return null;
+            }
+
+            var key = $"episode-images-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            if (this.memoryCache.TryGetValue(key, out StillImages? images))
+            {
+                return images;
+            }
+
+            try
+            {
+                var normalizedLanguage = NormalizeLanguage(language);
+                var normalizedImageLanguages = GetEpisodeFallbackImageLanguagesParam(language, imageLanguages);
+                var canUseNativeClient = string.IsNullOrWhiteSpace(normalizedImageLanguages)
+                    || string.Equals(normalizedImageLanguages, normalizedLanguage, StringComparison.OrdinalIgnoreCase);
+
+                if (canUseNativeClient)
+                {
+                    images = await this.tmDbClient.GetTvEpisodeImagesAsync(
+                        tvShowId,
+                        seasonNumber,
+                        episodeNumber,
+                        normalizedLanguage,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    var baseHost = this.apiHost.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                        ? this.apiHost.TrimEnd('/')
+                        : $"https://{this.apiHost.TrimEnd('/')}";
+                    var url = new StringBuilder()
+                        .Append(baseHost)
+                        .Append("/3/tv/")
+                        .Append(tvShowId.ToString(CultureInfo.InvariantCulture))
+                        .Append("/season/")
+                        .Append(seasonNumber.ToString(CultureInfo.InvariantCulture))
+                        .Append("/episode/")
+                        .Append(episodeNumber.ToString(CultureInfo.InvariantCulture))
+                        .Append("/images?api_key=")
+                        .Append(Uri.EscapeDataString(this.apiKey));
+
+                    if (!string.IsNullOrWhiteSpace(normalizedLanguage))
+                    {
+                        url.Append("&language=").Append(Uri.EscapeDataString(normalizedLanguage));
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(normalizedImageLanguages))
+                    {
+                        url.Append("&include_image_language=").Append(Uri.EscapeDataString(normalizedImageLanguages));
+                    }
+
+                    using var handler = new HttpClientHandler();
+                    handler.CheckCertificateRevocationList = true;
+                    var proxy = MetaSharkPlugin.Instance?.Configuration?.GetTmdbWebProxy();
+                    if (proxy != null)
+                    {
+                        handler.Proxy = proxy;
+                        handler.UseProxy = true;
+                    }
+
+                    using var httpClient = new HttpClient(handler, false)
+                    {
+                        Timeout = TimeSpan.FromSeconds(10),
+                    };
+
+                    var requestUri = new Uri(url.ToString(), UriKind.Absolute);
+                    using var response = await httpClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        return null;
+                    }
+
+                    var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                    using var stream = responseStream;
+                    images = await DeserializeEpisodeImagesAsync(stream, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (images != null)
+                {
+                    this.memoryCache.Set(key, images, TimeSpan.FromHours(CacheDurationInHours));
+                }
+
+                return images;
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetEpisodeImagesAsync), ex);
+                return null;
+            }
+            catch (HttpRequestException ex)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetEpisodeImagesAsync), ex);
                 return null;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1241,6 +1349,38 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return string.Join(',', languages);
         }
 
+        private static string? GetEpisodeFallbackImageLanguagesParam(string language, string preferredImageLanguage)
+        {
+            var imageLanguages = GetImageLanguagesParam(preferredImageLanguage);
+            var normalizedLanguage = NormalizeLanguage(language);
+            if (!string.Equals(normalizedLanguage, "zh", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(imageLanguages))
+            {
+                return imageLanguages;
+            }
+
+            var languages = imageLanguages
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            if (languages.Contains("zh-CN", StringComparer.OrdinalIgnoreCase))
+            {
+                return imageLanguages;
+            }
+
+            var zhIndex = languages.FindIndex(languageItem => string.Equals(languageItem, "zh", StringComparison.OrdinalIgnoreCase));
+            if (zhIndex >= 0)
+            {
+                languages.Insert(zhIndex + 1, "zh-CN");
+            }
+            else
+            {
+                languages.Insert(0, "zh-CN");
+            }
+
+            return string.Join(',', languages);
+        }
+
         private static void AddLanguageIfMissing(List<string> languages, string language)
         {
             if (!languages.Contains(language, StringComparer.OrdinalIgnoreCase))
@@ -1254,9 +1394,89 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return MetaSharkPlugin.Instance?.Configuration.EnableTmdb ?? true;
         }
 
+        private static async Task<StillImages?> DeserializeEpisodeImagesAsync(Stream stream, CancellationToken cancellationToken)
+        {
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var root = document.RootElement;
+
+            var stillImages = new StillImages
+            {
+                Id = GetInt32(root, "id"),
+                Stills = new List<ImageData>(),
+            };
+
+            if (!root.TryGetProperty("stills", out var stillsElement) || stillsElement.ValueKind != JsonValueKind.Array)
+            {
+                return stillImages;
+            }
+
+            foreach (var stillElement in stillsElement.EnumerateArray())
+            {
+                stillImages.Stills.Add(new ImageData
+                {
+                    AspectRatio = GetDouble(stillElement, "aspect_ratio"),
+                    FilePath = GetString(stillElement, "file_path"),
+                    Height = GetInt32(stillElement, "height"),
+                    Iso_639_1 = GetString(stillElement, "iso_639_1"),
+                    VoteAverage = GetDouble(stillElement, "vote_average"),
+                    VoteCount = GetInt32(stillElement, "vote_count"),
+                    Width = GetInt32(stillElement, "width"),
+                });
+            }
+
+            return stillImages;
+
+            static string? GetString(JsonElement element, string propertyName)
+            {
+                return element.TryGetProperty(propertyName, out var propertyValue) && propertyValue.ValueKind != JsonValueKind.Null
+                    ? propertyValue.GetString()
+                    : null;
+            }
+
+            static int GetInt32(JsonElement element, string propertyName)
+            {
+                return element.TryGetProperty(propertyName, out var propertyValue) && propertyValue.TryGetInt32(out var value)
+                    ? value
+                    : 0;
+            }
+
+            static double GetDouble(JsonElement element, string propertyName)
+            {
+                return element.TryGetProperty(propertyName, out var propertyValue) && propertyValue.TryGetDouble(out var value)
+                    ? value
+                    : 0d;
+            }
+        }
+
         private Task EnsureClientConfigAsync()
         {
             return !this.tmDbClient.HasConfig ? this.tmDbClient.GetConfigAsync() : Task.CompletedTask;
+        }
+
+        private async Task<TvEpisode?> EnsureEpisodeStillImagesAsync(TvEpisode? episode, int tvShowId, int seasonNumber, int episodeNumber, string language, string imageLanguages, CancellationToken cancellationToken)
+        {
+            if (episode == null)
+            {
+                return null;
+            }
+
+            var hasDetailStillPath = !string.IsNullOrEmpty(episode.StillPath);
+            var hasDetailStillImages = episode.Images?.Stills?.Any(still => !string.IsNullOrEmpty(still.FilePath)) ?? false;
+
+            if (hasDetailStillPath || hasDetailStillImages)
+            {
+                return episode;
+            }
+
+            var episodeImages = await this.GetEpisodeImagesAsync(tvShowId, seasonNumber, episodeNumber, language, imageLanguages, cancellationToken)
+                .ConfigureAwait(false);
+            var hasDedicatedStillImages = episodeImages?.Stills?.Any(still => !string.IsNullOrEmpty(still.FilePath)) ?? false;
+            if (hasDedicatedStillImages)
+            {
+                episode.Images = episodeImages;
+            }
+
+            return episode;
         }
     }
 }

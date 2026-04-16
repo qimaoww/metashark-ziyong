@@ -98,12 +98,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return Enumerable.Empty<RemoteImageInfo>();
             }
 
+            var stillPath = episodeResult.StillPath;
+            if (string.IsNullOrEmpty(stillPath))
+            {
+                stillPath = episodeResult.Images?.Stills?
+                    .FirstOrDefault(still => !string.IsNullOrEmpty(still.FilePath))?
+                    .FilePath;
+            }
+
             var result = new List<RemoteImageInfo>();
-            if (!string.IsNullOrEmpty(episodeResult.StillPath))
+            if (!string.IsNullOrEmpty(stillPath))
             {
                 result.Add(new RemoteImageInfo
                 {
-                    Url = this.TmdbApi.GetStillUrl(episodeResult.StillPath)?.ToString(),
+                    Url = this.TmdbApi.GetStillUrl(stillPath)?.ToString(),
                     CommunityRating = episodeResult.VoteAverage,
                     VoteCount = episodeResult.VoteCount,
                     ProviderName = this.Name,
