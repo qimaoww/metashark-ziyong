@@ -9,9 +9,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System.IO;
     using System.Linq;
     using System.Net.Http;
+    using System.Security.Cryptography;
     using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
+    using System.Xml;
+    using System.Xml.Linq;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
@@ -48,15 +51,25 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private static readonly Action<ILogger, string, Exception?> LogTvdbIdResolved =
             LoggerMessage.Define<string>(LogLevel.Debug, new EventId(8, nameof(LogTvdbIdResolved)), "TVDB id resolved: {TvdbId}");
 
+        private static readonly HashSet<char> SimplifiedOverviewScriptDistinctiveCharacters = new HashSet<char>("个么乐习书亲众优伤儿这来为们让带开车辆两厉讲较听说点体与无龙猫坏关级评论丰围绕争夺复选战遗嘱发间医会现导经过国际组织怀惊计划实验档录历样欢觉观记议语误读轻还迟释难顺须顾顿预领题额颜风飞宫归马讶");
+        private static readonly HashSet<char> TraditionalOverviewScriptDistinctiveCharacters = new HashSet<char>("個麼樂習書親眾優傷兒這來為們讓帶開車輛兩厲講較聽說點體與無龍貓壞關級評論豐圍繞爭奪複選戰遺囑發間醫會現導經過國際組織懷驚計畫實驗檔錄歷樣歡覺觀記議語誤讀輕還遲釋難順須顧頓預領題額顏風飛宮歸馬訝");
+
         private readonly MemoryCache memoryCache;
         private readonly IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore;
+        private readonly IEpisodeOverviewCleanupCandidateStore? episodeOverviewCleanupCandidateStore;
         private readonly TvdbApi tvdbApi;
 
         public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi, IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore = null)
+            : this(httpClientFactory, loggerFactory, libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi, tvdbApi, episodeTitleBackfillCandidateStore, null)
+        {
+        }
+
+        public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi, IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore, IEpisodeOverviewCleanupCandidateStore? episodeOverviewCleanupCandidateStore)
             : base(httpClientFactory, loggerFactory.CreateLogger<EpisodeProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
             this.episodeTitleBackfillCandidateStore = episodeTitleBackfillCandidateStore;
+            this.episodeOverviewCleanupCandidateStore = episodeOverviewCleanupCandidateStore;
             this.tvdbApi = tvdbApi;
         }
 
@@ -70,6 +83,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ResolvedTitleSameAsOriginal = 5,
             StrictZhCnRejected = 6,
             CandidateQueued = 7,
+        }
+
+        internal enum SearchMissingMetadataOverviewCleanupReason
+        {
+            RequestNotSearchMissingMetadata = 0,
+            EpisodeIdMissing = 1,
+            TrustedOverviewPresent = 2,
+            OriginalOverviewSnapshotPresent = 3,
+            CandidateQueued = 4,
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -154,7 +176,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             result.HasMetadata = true;
             result.QueriedById = true;
 
-            var seriesOverview = episodeItem?.Series?.Overview;
+            var seriesItem = episodeItem?.Series;
+            var seriesPath = this.GetOriginalSeriesPath(info);
+            if (seriesItem == null && !string.IsNullOrWhiteSpace(seriesPath))
+            {
+                seriesItem = this.LibraryManager.FindByPath(seriesPath, true) as Series;
+            }
+
+            var seriesOverview = seriesItem?.Overview;
             var seasonPath = this.GetOriginalSeasonPath(info);
             var seasonItem = !string.IsNullOrWhiteSpace(seasonPath) ? this.LibraryManager.FindByPath(seasonPath, true) as Season : null;
             var seasonOverview = seasonItem?.Overview;
@@ -257,11 +286,49 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var loggedMetadataRefreshMode = isImplicitSearchMissingMetadataFallback ? "ImplicitFallback" : metadataRefreshMode;
             var loggedReplaceAllMetadata = isImplicitSearchMissingMetadataFallback ? string.Empty : replaceAllMetadata;
             var originalTitleSnapshot = (originalMetadataTitle ?? string.Empty).Trim();
+            var itemPath = episodeItem?.Path ?? info.Path ?? string.Empty;
+            var originalOverviewSnapshot = ResolveSearchMissingMetadataOverviewCleanupOriginalSnapshot(episodeItem?.Overview, itemPath);
             var candidateTitle = (item.Name ?? string.Empty).Trim();
+            var episodeId = episodeItem?.Id ?? Guid.Empty;
+
+            if (isSearchMissingMetadataRequest)
+            {
+                var translationOverviewDiagnostic = EvaluateEpisodeOverviewPersistenceForDiagnostics(
+                    translationOverview?.SourceLanguage,
+                    translationOverview?.Value,
+                    seriesOverview,
+                    seasonOverview);
+                var detailsOverviewDiagnostic = EvaluateEpisodeOverviewPersistenceForDiagnostics(
+                    detailsOverview?.SourceLanguage,
+                    detailsOverview?.Value,
+                    seriesOverview,
+                    seasonOverview);
+                var selectedOverviewSource = translationOverviewDiagnostic.Overview != null
+                    ? "translation"
+                    : detailsOverviewDiagnostic.Overview != null ? "details" : "none";
+                this.LogEpisodeOverviewInputs(
+                    episodeId,
+                    itemPath,
+                    detailsOverview,
+                    translationOverview,
+                    seriesOverview,
+                    seasonOverview,
+                    loggedMetadataRefreshMode,
+                    loggedReplaceAllMetadata);
+                this.LogEpisodeOverviewDecision(
+                    episodeId,
+                    itemPath,
+                    CreateEpisodeLocalizedValue(overviewDecision.Overview, overviewDecision.ResultLanguage),
+                    selectedOverviewSource,
+                    selectedOverviewSource == "none" ? detailsOverviewDiagnostic.RejectReason : "accepted",
+                    translationOverviewDiagnostic.RejectReason,
+                    detailsOverviewDiagnostic.RejectReason,
+                    loggedMetadataRefreshMode,
+                    loggedReplaceAllMetadata);
+            }
+
             if (this.episodeTitleBackfillCandidateStore != null)
             {
-                var episodeId = episodeItem?.Id ?? Guid.Empty;
-                var itemPath = episodeItem?.Path ?? info.Path ?? string.Empty;
                 var backfillReason = ResolveSearchMissingMetadataTitleBackfillReason(
                     Config.EnableSearchMissingMetadataEpisodeTitleBackfill,
                     isSearchMissingMetadataRequest,
@@ -319,6 +386,31 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     loggedMetadataRefreshMode,
                     loggedReplaceAllMetadata,
                     isSearchMissingMetadataRequest);
+            }
+
+            if (this.episodeOverviewCleanupCandidateStore != null)
+            {
+                var shouldEvaluateOverviewCleanup = isSearchMissingMetadataRequest
+                    || (!hasExplicitSearchMissingMetadataQuery && string.IsNullOrWhiteSpace(originalOverviewSnapshot));
+                var overviewCleanupReason = ResolveSearchMissingMetadataOverviewCleanupReason(
+                    shouldEvaluateOverviewCleanup,
+                    episodeId,
+                    originalOverviewSnapshot,
+                    item.Overview);
+                if (overviewCleanupReason == SearchMissingMetadataOverviewCleanupReason.CandidateQueued)
+                {
+                    var nowUtc = DateTimeOffset.UtcNow;
+                    this.episodeOverviewCleanupCandidateStore.Save(new EpisodeOverviewCleanupCandidate
+                    {
+                        ItemId = episodeItem!.Id,
+                        ItemPath = itemPath,
+                        OriginalOverviewSnapshot = originalOverviewSnapshot,
+                        QueuedAtUtc = nowUtc,
+                        NextAttemptAtUtc = nowUtc.AddSeconds(10),
+                        AttemptCount = 0,
+                        ExpiresAtUtc = nowUtc.AddMinutes(2),
+                    });
+                }
             }
 
             result.Item = item;
@@ -593,6 +685,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 resolvedTitle) == SearchMissingMetadataTitleBackfillReason.CandidateQueued;
         }
 
+        internal static bool ShouldQueueSearchMissingMetadataOverviewCleanup(Guid itemId, string? originalOverview, string? resolvedOverview)
+        {
+            return ResolveSearchMissingMetadataOverviewCleanupReason(
+                true,
+                itemId,
+                originalOverview,
+                resolvedOverview) == SearchMissingMetadataOverviewCleanupReason.CandidateQueued;
+        }
+
         internal static (string? Overview, string? ResultLanguage) ResolveEpisodeOverviewPersistence(string? overviewSourceLanguage, string? overview, string? seriesOverview, string? seasonOverview)
         {
             if (string.IsNullOrWhiteSpace(overview))
@@ -618,6 +719,48 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return (trimmedOriginalOverview, normalizedOverviewSourceLanguage);
+        }
+
+        internal static SearchMissingMetadataOverviewCleanupReason ResolveSearchMissingMetadataOverviewCleanupReason(bool isSearchMissingMetadataRequest, Guid itemId, string? originalOverview, string? resolvedOverview)
+        {
+            if (!isSearchMissingMetadataRequest)
+            {
+                return SearchMissingMetadataOverviewCleanupReason.RequestNotSearchMissingMetadata;
+            }
+
+            if (itemId == Guid.Empty)
+            {
+                return SearchMissingMetadataOverviewCleanupReason.EpisodeIdMissing;
+            }
+
+            if (!string.IsNullOrWhiteSpace(resolvedOverview))
+            {
+                return SearchMissingMetadataOverviewCleanupReason.TrustedOverviewPresent;
+            }
+
+            if (!string.IsNullOrWhiteSpace(originalOverview))
+            {
+                return SearchMissingMetadataOverviewCleanupReason.OriginalOverviewSnapshotPresent;
+            }
+
+            return SearchMissingMetadataOverviewCleanupReason.CandidateQueued;
+        }
+
+        internal static string ResolveSearchMissingMetadataOverviewCleanupOriginalSnapshot(string? originalOverview, string? itemPath)
+        {
+            var trimmedOriginalOverview = (originalOverview ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(trimmedOriginalOverview))
+            {
+                return string.Empty;
+            }
+
+            var persistedNfoPlot = TryReadEpisodeNfoPlot(itemPath);
+            if (persistedNfoPlot != null && string.IsNullOrWhiteSpace(persistedNfoPlot))
+            {
+                return string.Empty;
+            }
+
+            return trimmedOriginalOverview;
         }
 
         protected virtual void Dispose(bool disposing)
@@ -657,6 +800,38 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var expiredOption = new MemoryCacheEntryOptions() { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) };
             this.memoryCache.Set<int>(cacheKey, videoFilesCount, expiredOption);
             return videoFilesCount;
+        }
+
+        private static string? TryReadEpisodeNfoPlot(string? itemPath)
+        {
+            if (string.IsNullOrWhiteSpace(itemPath))
+            {
+                return null;
+            }
+
+            var nfoPath = Path.ChangeExtension(itemPath, ".nfo");
+            if (!File.Exists(nfoPath))
+            {
+                return null;
+            }
+
+            try
+            {
+                var document = XDocument.Load(nfoPath);
+                return (document.Root?.Element("plot")?.Value ?? string.Empty).Trim();
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+            catch (XmlException)
+            {
+                return null;
+            }
         }
 
         private static bool HasStrictZhCnTitleSource(EpisodeLocalizedValue? providerTitle)
@@ -715,6 +890,90 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return CreateEpisodeLocalizedValue(value.Value?.Trim(), value.SourceLanguage);
+        }
+
+        private static (string State, int Length, string Hash, string SourceLanguage, string ScriptKind) DescribeOverviewText(string? value, string? sourceLanguage)
+        {
+            var trimmedValue = value?.Trim();
+            var normalizedSourceLanguage = string.IsNullOrWhiteSpace(sourceLanguage)
+                ? string.Empty
+                : ChineseLocalePolicy.CanonicalizeLanguage(sourceLanguage) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(trimmedValue))
+            {
+                return ("empty", 0, string.Empty, normalizedSourceLanguage, "unknown");
+            }
+
+            return ("non-empty", trimmedValue.Length, ComputeOverviewHash(trimmedValue), normalizedSourceLanguage, ResolveOverviewScriptKind(trimmedValue));
+        }
+
+        private static string ComputeOverviewHash(string value)
+        {
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+        }
+
+        private static (string? Overview, string? ResultLanguage, string RejectReason) EvaluateEpisodeOverviewPersistenceForDiagnostics(string? overviewSourceLanguage, string? overview, string? seriesOverview, string? seasonOverview)
+        {
+            if (string.IsNullOrWhiteSpace(overview))
+            {
+                return (null, null, "empty");
+            }
+
+            var trimmedOriginalOverview = overview.Trim();
+            var normalizedOverviewSourceLanguage = ResolveEpisodeOverviewSourceLanguage(overviewSourceLanguage);
+            if (normalizedOverviewSourceLanguage == null)
+            {
+                return (null, null, "source-not-zh-cn");
+            }
+
+            var normalizedOverview = NormalizeOverviewForComparison(trimmedOriginalOverview);
+            var normalizedSeriesOverview = NormalizeOverviewForComparison(seriesOverview);
+            if (normalizedOverview != null && IsOverviewTooSimilarToParent(normalizedOverview, normalizedSeriesOverview))
+            {
+                return (null, null, "duplicate-series");
+            }
+
+            var normalizedSeasonOverview = NormalizeOverviewForComparison(seasonOverview);
+            if (normalizedOverview != null && IsOverviewTooSimilarToParent(normalizedOverview, normalizedSeasonOverview))
+            {
+                return (null, null, "duplicate-season");
+            }
+
+            return (trimmedOriginalOverview, normalizedOverviewSourceLanguage, "accepted");
+        }
+
+        private static string ResolveOverviewScriptKind(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || !value.HasChinese())
+            {
+                return "unknown";
+            }
+
+            var hasSimplified = false;
+            var hasTraditional = false;
+            foreach (var character in value)
+            {
+                if (SimplifiedOverviewScriptDistinctiveCharacters.Contains(character))
+                {
+                    hasSimplified = true;
+                }
+
+                if (TraditionalOverviewScriptDistinctiveCharacters.Contains(character))
+                {
+                    hasTraditional = true;
+                }
+
+                if (hasSimplified && hasTraditional)
+                {
+                    return "mixed";
+                }
+            }
+
+            if (hasSimplified)
+            {
+                return "simplified";
+            }
+
+            return hasTraditional ? "traditional" : "unknown";
         }
 
         private async Task<(EpisodeLocalizedValue? DetailsTitle, EpisodeLocalizedValue? TranslationTitle, EpisodeLocalizedValue? EffectiveProviderTitle)> ResolveEffectiveEpisodeProviderTitleAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? titleMetadataLanguage, string? imageLanguages, string? providerTitle, CancellationToken cancellationToken)
@@ -779,6 +1038,62 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 itemPath,
                 originalTitle,
                 candidateTitle,
+                metadataRefreshMode ?? string.Empty,
+                replaceAllMetadata ?? string.Empty);
+        }
+
+        private void LogEpisodeOverviewInputs(Guid itemId, string itemPath, EpisodeLocalizedValue? detailsOverview, EpisodeLocalizedValue? translationOverview, string? seriesOverview, string? seasonOverview, string? metadataRefreshMode, string? replaceAllMetadata)
+        {
+            var details = DescribeOverviewText(detailsOverview?.Value, detailsOverview?.SourceLanguage);
+            var translation = DescribeOverviewText(translationOverview?.Value, translationOverview?.SourceLanguage);
+            var series = DescribeOverviewText(seriesOverview, null);
+            var season = DescribeOverviewText(seasonOverview, null);
+
+            this.Logger.LogDebug(
+                "EpisodeOverviewInputs itemId={ItemId} itemPath={ItemPath} detailsOverviewState={DetailsOverviewState} detailsOverviewLength={DetailsOverviewLength} detailsOverviewHash={DetailsOverviewHash} detailsOverviewSourceLanguage={DetailsOverviewSourceLanguage} detailsOverviewScriptKind={DetailsOverviewScriptKind} translationOverviewState={TranslationOverviewState} translationOverviewLength={TranslationOverviewLength} translationOverviewHash={TranslationOverviewHash} translationOverviewSourceLanguage={TranslationOverviewSourceLanguage} translationOverviewScriptKind={TranslationOverviewScriptKind} seriesOverviewState={SeriesOverviewState} seriesOverviewLength={SeriesOverviewLength} seriesOverviewHash={SeriesOverviewHash} seriesOverviewSourceLanguage={SeriesOverviewSourceLanguage} seriesOverviewScriptKind={SeriesOverviewScriptKind} seasonOverviewState={SeasonOverviewState} seasonOverviewLength={SeasonOverviewLength} seasonOverviewHash={SeasonOverviewHash} seasonOverviewSourceLanguage={SeasonOverviewSourceLanguage} seasonOverviewScriptKind={SeasonOverviewScriptKind} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                itemId,
+                itemPath,
+                details.State,
+                details.Length,
+                details.Hash,
+                details.SourceLanguage,
+                details.ScriptKind,
+                translation.State,
+                translation.Length,
+                translation.Hash,
+                translation.SourceLanguage,
+                translation.ScriptKind,
+                series.State,
+                series.Length,
+                series.Hash,
+                series.SourceLanguage,
+                series.ScriptKind,
+                season.State,
+                season.Length,
+                season.Hash,
+                season.SourceLanguage,
+                season.ScriptKind,
+                metadataRefreshMode ?? string.Empty,
+                replaceAllMetadata ?? string.Empty);
+        }
+
+        private void LogEpisodeOverviewDecision(Guid itemId, string itemPath, EpisodeLocalizedValue? selectedOverview, string selectedOverviewSource, string rejectReason, string translationRejectReason, string detailsRejectReason, string? metadataRefreshMode, string? replaceAllMetadata)
+        {
+            var selected = DescribeOverviewText(selectedOverview?.Value, selectedOverview?.SourceLanguage);
+
+            this.Logger.LogDebug(
+                "EpisodeOverviewDecision itemId={ItemId} itemPath={ItemPath} selectedOverviewState={SelectedOverviewState} selectedOverviewLength={SelectedOverviewLength} selectedOverviewHash={SelectedOverviewHash} selectedOverviewSourceLanguage={SelectedOverviewSourceLanguage} selectedOverviewScriptKind={SelectedOverviewScriptKind} selectedOverviewSource={SelectedOverviewSource} rejectReason={RejectReason} translationRejectReason={TranslationRejectReason} detailsRejectReason={DetailsRejectReason} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                itemId,
+                itemPath,
+                selected.State,
+                selected.Length,
+                selected.Hash,
+                selected.SourceLanguage,
+                selected.ScriptKind,
+                selectedOverviewSource,
+                rejectReason,
+                translationRejectReason,
+                detailsRejectReason,
                 metadataRefreshMode ?? string.Empty,
                 replaceAllMetadata ?? string.Empty);
         }
@@ -862,6 +1177,36 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return !HasStrictZhCnTitleSource(providerTitle);
         }
 #pragma warning restore SA1204
+
+        private string? GetOriginalSeriesPath(EpisodeInfo info)
+        {
+            ArgumentNullException.ThrowIfNull(info);
+            if (info.Path == null)
+            {
+                return null;
+            }
+
+            var seasonPath = Path.GetDirectoryName(info.Path);
+            if (string.IsNullOrEmpty(seasonPath))
+            {
+                return null;
+            }
+
+            var item = this.LibraryManager.FindByPath(seasonPath, true);
+
+            if (item is Series)
+            {
+                return seasonPath;
+            }
+
+            var seriesPath = Path.GetDirectoryName(seasonPath);
+            if (string.IsNullOrEmpty(seriesPath))
+            {
+                return null;
+            }
+
+            return this.LibraryManager.FindByPath(seriesPath, true) is Series ? seriesPath : null;
+        }
 
         private async Task<TvdbSpecialPlacement?> TryBuildTvdbSpecialPlacementAsync(
             string seriesTvdbId,

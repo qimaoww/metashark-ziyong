@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using Jellyfin.Plugin.MetaShark.Api;
+using Jellyfin.Plugin.MetaShark.Model;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.MetaShark.Test;
@@ -19,6 +21,37 @@ internal static class DoubanApiTestHelper
         originalClient.Dispose();
 
         return api;
+    }
+
+    public static void SeedSearchResult(DoubanApi api, string keyword, params DoubanSubject[] subjects)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyword);
+
+        var memoryCacheField = typeof(DoubanApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.IsNotNull(memoryCacheField, "DoubanApi.memoryCache 未定义");
+
+        var memoryCache = memoryCacheField!.GetValue(api) as IMemoryCache;
+        Assert.IsNotNull(memoryCache, "DoubanApi.memoryCache 不是有效的 IMemoryCache");
+
+        memoryCache!.Set($"search_{keyword}", subjects.ToList(), TimeSpan.FromMinutes(5));
+    }
+
+    public static void SeedTvSearchResult(DoubanApi api, string keyword, string sid, string name, int year)
+    {
+        SeedSearchResult(
+            api,
+            keyword,
+            new DoubanSubject
+            {
+                Sid = sid,
+                Name = name,
+                OriginalName = name,
+                Category = "电视剧",
+                Genre = "电视剧",
+                Year = year,
+                Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
+            });
     }
 
     private sealed class StaticResponseHandler : HttpMessageHandler

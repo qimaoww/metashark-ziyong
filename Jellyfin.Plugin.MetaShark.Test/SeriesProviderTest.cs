@@ -329,7 +329,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
-                var doubanApi = new DoubanApi(loggerFactory);
+                var doubanApi = DoubanApiTestHelper.CreateBlockedDoubanApi(loggerFactory);
                 var tmdbApi = new TmdbApi(loggerFactory);
                 ConfigureTmdbPosterConfig(tmdbApi);
                 var omdbApi = new OmdbApi(loggerFactory);
@@ -409,7 +409,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
-                var doubanApi = new DoubanApi(loggerFactory);
+                var doubanApi = DoubanApiTestHelper.CreateBlockedDoubanApi(loggerFactory);
+                DoubanApiTestHelper.SeedTvSearchResult(doubanApi, info.Name!, "1291841", "老友记", 1994);
                 var tmdbApi = new TmdbApi(loggerFactory);
                 ConfigureTmdbPosterConfig(tmdbApi);
                 var omdbApi = new OmdbApi(loggerFactory);
@@ -428,6 +429,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         Assert.IsTrue(
                             resultList.Any(r => r.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId)),
                             "Expected invalid TMDb provider id to fall back to the existing Douban title-search path when TMDb title search is disabled.");
+                        Assert.IsTrue(
+                            resultList.Any(r => r.ProviderIds.TryGetValue(BaseProvider.DoubanProviderId, out var id) && id == "1291841"),
+                            "Expected the fallback result to come from the seeded Douban title-search cache entry rather than live network behavior.");
                         Assert.IsFalse(
                             resultList.Any(r => r.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var id) && id == "invalid-id"),
                             "Invalid explicit TMDb provider id should not be emitted as a search result.");

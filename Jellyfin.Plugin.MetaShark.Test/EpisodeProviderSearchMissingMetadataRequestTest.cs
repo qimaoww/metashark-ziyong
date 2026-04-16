@@ -228,6 +228,98 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_WhenSearchMissingMetadataOverviewDiagnosticsRun_DoesNotLogOverviewDiagnosticsAtInformation()
+        {
+            EnsurePluginInstance();
+
+            using var loggerProvider = new TestLoggerProvider();
+            using var loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Information).AddProvider(loggerProvider));
+            var storeStub = new Mock<IEpisodeTitleBackfillCandidateStore>();
+            var info = CreateEpisodeInfo();
+            var episodeItem = new Episode
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, false))
+                .Returns(episodeItem);
+
+            var httpContextAccessor = new HttpContextAccessor
+            {
+                HttpContext = CreateHttpContext("FullRefresh", "false"),
+            };
+
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "皇后回宫",
+                Overview = "草木萌发的春天，牡丹与舍友们一同前往秩父的芝樱祭。",
+            });
+
+            using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
+
+            _ = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(
+                loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Information
+                    && message.Category.Contains(nameof(EpisodeProvider), StringComparison.Ordinal)
+                    && (message.Message.Contains("EpisodeOverviewInputs", StringComparison.Ordinal)
+                        || message.Message.Contains("EpisodeOverviewDecision", StringComparison.Ordinal))),
+                "overview 诊断日志只应用于临时排障；Task 7 收尾后不应继续在 Information 留下 EpisodeOverviewInputs/Decision 噪音。");
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenSearchMissingMetadataOverviewDiagnosticsRun_StillLogsOverviewDiagnosticsAtDebug()
+        {
+            EnsurePluginInstance();
+
+            using var loggerProvider = new TestLoggerProvider();
+            using var loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Debug).AddProvider(loggerProvider));
+            var storeStub = new Mock<IEpisodeTitleBackfillCandidateStore>();
+            var info = CreateEpisodeInfo();
+            var episodeItem = new Episode
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, false))
+                .Returns(episodeItem);
+
+            var httpContextAccessor = new HttpContextAccessor
+            {
+                HttpContext = CreateHttpContext("FullRefresh", "false"),
+            };
+
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "皇后回宫",
+                Overview = "草木萌发的春天，牡丹与舍友们一同前往秩父的芝樱祭。",
+            });
+
+            using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
+
+            _ = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(
+                loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Debug
+                    && message.Category.Contains(nameof(EpisodeProvider), StringComparison.Ordinal)
+                    && message.Message.Contains("EpisodeOverviewInputs", StringComparison.Ordinal)),
+                "overview 输入诊断在收尾后仍应保留 Debug 可见性，便于必要时复盘 search-missing overview 链路。");
+            Assert.IsTrue(
+                loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Debug
+                    && message.Category.Contains(nameof(EpisodeProvider), StringComparison.Ordinal)
+                    && message.Message.Contains("EpisodeOverviewDecision", StringComparison.Ordinal)),
+                "overview 决策诊断在收尾后仍应保留 Debug 可见性，避免完全失去 provider 排障证据。");
+        }
+
+        [TestMethod]
         public async Task GetMetadata_WhenHttpContextMissingButCurrentEpisodeHasDefaultTitle_QueuesCandidateWithFallback()
         {
             EnsurePluginInstance();
