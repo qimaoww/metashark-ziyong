@@ -1,7 +1,7 @@
 # jellyfin-plugin-metashark
 
 ## 项目简介
-本仓库基于上游 `cxfksword/jellyfin-plugin-metashark`，维护一个偏自用的 MetaShark 分支。README 仅补充当前仓库已有能力和基本使用信息，不做额外包装。
+本仓库基于上游 `cxfksword/jellyfin-plugin-metashark`，自用的 MetaShark 分支。
 
 ## AI 改动说明
 这是一个 AI 修改过的自用 fork。本文档仅说明当前仓库已经落地的状态，不代表上游官方说明，也不替代上游文档。
