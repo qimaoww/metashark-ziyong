@@ -51,8 +51,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var sid = item.GetProviderId(DoubanProviderId);
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
+            var doubanAllowed = IsDoubanAllowed(this.ResolveImageSemantic());
             this.Log($"GetImages for item: {item.Name} lang: {item.GetPreferredMetadataLanguage()} [metaSource]: {metaSource}");
-            if (metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
+            if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
             {
                 var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (primary == null || string.IsNullOrEmpty(primary.Img))
@@ -77,7 +78,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         },
                     };
 
-                    var backdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
+                    var backdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, doubanAllowed, cancellationToken).ConfigureAwait(false);
                     var logoImgs = await this.GetLogos(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
                     res.AddRange(backdropImgs);
                     res.AddRange(logoImgs);
@@ -85,7 +86,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
             }
 
-            if (metaSource == MetaSource.Tmdb && !string.IsNullOrEmpty(tmdbId))
+            if (!string.IsNullOrEmpty(tmdbId) && (metaSource == MetaSource.Tmdb || !doubanAllowed))
             {
                 var language = item.GetPreferredMetadataLanguage();
 
@@ -156,14 +157,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         /// Query for a background photo.
         /// </summary>
         /// <param name="cancellationToken">Instance of the <see cref="CancellationToken"/> interface.</param>
-        private async Task<IEnumerable<RemoteImageInfo>> GetBackdrop(BaseItem item, string alternativeImageLanguage, CancellationToken cancellationToken)
+        private async Task<IEnumerable<RemoteImageInfo>> GetBackdrop(BaseItem item, string alternativeImageLanguage, bool doubanAllowed, CancellationToken cancellationToken)
         {
             var sid = item.GetProviderId(DoubanProviderId);
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var list = new List<RemoteImageInfo>();
 
             // 从豆瓣获取背景图
-            if (!string.IsNullOrEmpty(sid))
+            if (doubanAllowed && !string.IsNullOrEmpty(sid))
             {
                 var photo = await this.DoubanApi.GetWallpaperBySidAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (photo != null && photo.Count > 0)

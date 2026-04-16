@@ -6,13 +6,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Net.Http;
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Core;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
+    using MediaBrowser.Model.Dto;
     using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.Providers;
     using Microsoft.AspNetCore.Http;
@@ -43,13 +46,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(item);
             var list = new List<RemoteImageInfo>();
             var cid = item.GetProviderId(DoubanProviderId);
+            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
+            var language = item.GetPreferredMetadataLanguage();
+            var doubanAllowed = IsDoubanAllowed(this.ResolveImageSemantic());
+            var usedDouban = false;
             this.Log($"GetImages for item: {item.Name} [metaSource]: {metaSource}");
-            if (!string.IsNullOrEmpty(cid))
+            if (doubanAllowed && !string.IsNullOrEmpty(cid))
             {
                 var celebrity = await this.DoubanApi.GetCelebrityAsync(cid, cancellationToken).ConfigureAwait(false);
                 if (celebrity != null)
                 {
+                    usedDouban = true;
                     list.Add(new RemoteImageInfo
                     {
                         ProviderName = this.Name,
@@ -58,7 +66,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         Language = "zh",
                     });
                 }
+            }
 
+            if (usedDouban && !string.IsNullOrEmpty(cid))
+            {
                 var photos = await this.DoubanApi.GetCelebrityPhotosAsync(cid, cancellationToken).ConfigureAwait(false);
                 photos.ForEach(x =>
                 {
@@ -80,12 +91,33 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 });
             }
 
+            if (list.Count == 0 && !string.IsNullOrEmpty(tmdbId))
+            {
+                var person = await this.TmdbApi.GetPersonAsync(tmdbId.ToInt(), cancellationToken).ConfigureAwait(false);
+                var profiles = person?.Images?.Profiles;
+                if (profiles != null)
+                {
+                    list.AddRange(profiles.Select(x => new RemoteImageInfo
+                    {
+                        ProviderName = this.Name,
+                        Url = this.TmdbApi.GetProfileUrl(x.FilePath)?.ToString(),
+                        Width = x.Width,
+                        Height = x.Height,
+                        Type = ImageType.Primary,
+                        Language = AdjustImageLanguage(x.Iso_639_1, language),
+                        CommunityRating = x.VoteAverage,
+                        VoteCount = x.VoteCount,
+                        RatingType = RatingType.Score,
+                    }).Where(x => !string.IsNullOrEmpty(x.Url)));
+                }
+            }
+
             if (list.Count == 0)
             {
                 this.Log($"Got images failed because the images of \"{item.Name}\" is empty!");
             }
 
-            return list;
+            return list.OrderByLanguageDescending(language);
         }
     }
 }

@@ -124,6 +124,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var fileName = GetOriginalFileName(info);
             var result = new MetadataResult<Series>();
+            var semantic = this.ResolveMetadataSemantic(info);
+            var doubanAllowed = IsDoubanAllowed(semantic);
 
             var sid = info.GetProviderId(DoubanProviderId);
             var tmdbId = info.GetProviderId(MetadataProvider.Tmdb);
@@ -131,20 +133,27 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
             var hasTmdbMeta = metaSource == MetaSource.Tmdb && !string.IsNullOrEmpty(tmdbId);
-            var hasDoubanMeta = metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid);
+            var hasDoubanMeta = doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid);
             this.Log($"GetSeriesMetadata of [name]: {info.Name} [fileName]: {fileName} metaSource: {metaSource} EnableTmdb: {Config.EnableTmdb}");
             if (!hasDoubanMeta && !hasTmdbMeta)
             {
                 // 自动扫描搜索匹配元数据
-                sid = await this.GuessByDoubanAsync(info, cancellationToken).ConfigureAwait(false);
+                if (doubanAllowed)
+                {
+                    sid = await this.GuessByDoubanAsync(info, cancellationToken).ConfigureAwait(false);
+                }
+
                 if (string.IsNullOrEmpty(sid) && Config.EnableTmdbMatch)
                 {
                     tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
-                    metaSource = MetaSource.Tmdb;
+                    if (!string.IsNullOrEmpty(tmdbId))
+                    {
+                        metaSource = MetaSource.Tmdb;
+                    }
                 }
             }
 
-            if (metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
+            if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
             {
                 this.Log($"GetSeriesMetadata of douban [sid]: {sid}");
                 var subject = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
@@ -225,7 +234,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return result;
             }
 
-            if (metaSource == MetaSource.Tmdb && !string.IsNullOrEmpty(tmdbId))
+            if (!string.IsNullOrEmpty(tmdbId) && (metaSource == MetaSource.Tmdb || !doubanAllowed))
             {
                 return await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
             }

@@ -48,29 +48,28 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             this.Log($"GetSeasonImages for item: {item.Name} number: {item.IndexNumber}");
             var season = (Season)item;
             var series = season.Series;
-            var metaSource = series.GetMetaSource(MetaSharkPlugin.ProviderId);
+            var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;
+            var doubanAllowed = IsDoubanAllowed(this.ResolveImageSemantic());
 
             // get image from douban
             var sid = item.GetProviderId(DoubanProviderId);
-            if (metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
+            if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
             {
                 var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
-                if (primary == null)
+                if (primary != null && !string.IsNullOrEmpty(primary.Img))
                 {
-                    return Enumerable.Empty<RemoteImageInfo>();
-                }
-
-                var res = new List<RemoteImageInfo>
-                {
-                    new RemoteImageInfo
+                    var res = new List<RemoteImageInfo>
                     {
-                        ProviderName = primary.Name,
-                        Url = this.GetDoubanPoster(primary),
-                        Type = ImageType.Primary,
-                        Language = "zh",
-                    },
-                };
-                return res;
+                        new RemoteImageInfo
+                        {
+                            ProviderName = primary.Name,
+                            Url = this.GetDoubanPoster(primary),
+                            Type = ImageType.Primary,
+                            Language = "zh",
+                        },
+                    };
+                    return res;
+                }
             }
 
             // get image form TMDB

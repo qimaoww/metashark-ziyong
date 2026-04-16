@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Core;
+using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
@@ -28,6 +29,7 @@ using TMDbLib.Objects.TvShows;
 namespace Jellyfin.Plugin.MetaShark.Test
 {
     [TestClass]
+    [DoNotParallelize]
     public class SeriesProviderTest
     {
         private static readonly string PluginTestRootPath = Path.Combine(Path.GetTempPath(), "metashark-series-provider-tests");
@@ -42,6 +44,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     options.SingleLine = true;
                     options.TimestampFormat = "hh:mm:ss ";
                 }));
+
+        [TestInitialize]
+        public void ResetConfigurationBeforeTest()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(new PluginConfiguration());
+        }
+
+        [TestCleanup]
+        public void ResetConfigurationAfterTest()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(new PluginConfiguration());
+        }
 
 
         private static void ConfigureTmdbPosterConfig(TmdbApi tmdbApi)
@@ -67,6 +83,93 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     },
                 },
             });
+        }
+
+        private static IMemoryCache GetTmdbMemoryCache(TmdbApi tmdbApi)
+        {
+            var memoryCacheField = typeof(TmdbApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(memoryCacheField, "TmdbApi.memoryCache 未定义");
+
+            var memoryCache = memoryCacheField!.GetValue(tmdbApi) as IMemoryCache;
+            Assert.IsNotNull(memoryCache, "TmdbApi.memoryCache 不是有效的 IMemoryCache");
+            return memoryCache!;
+        }
+
+        private static IMemoryCache GetDoubanMemoryCache(DoubanApi doubanApi)
+        {
+            var memoryCacheField = typeof(DoubanApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(memoryCacheField, "DoubanApi.memoryCache 未定义");
+
+            var memoryCache = memoryCacheField!.GetValue(doubanApi) as IMemoryCache;
+            Assert.IsNotNull(memoryCache, "DoubanApi.memoryCache 不是有效的 IMemoryCache");
+            return memoryCache!;
+        }
+
+        private static void SeedTmdbSeries(TmdbApi tmdbApi, int tmdbId, string language, string name)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"series-{tmdbId}-{language}-{language}",
+                new TvShow
+                {
+                    Id = tmdbId,
+                    Name = name,
+                    OriginalName = name,
+                    Overview = "TMDb seeded series overview",
+                    FirstAirDate = new DateTime(2011, 10, 4),
+                    VoteAverage = 8.8,
+                    EpisodeRunTime = new List<int>(),
+                    ContentRatings = new ResultContainer<ContentRating>
+                    {
+                        Results = new List<ContentRating>(),
+                    },
+                },
+                TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedDoubanSubject(DoubanApi doubanApi, DoubanSubject subject)
+        {
+            var cache = GetDoubanMemoryCache(doubanApi);
+            cache.Set($"movie_{subject.Sid}", subject, TimeSpan.FromMinutes(5));
+            cache.Set($"celebrities_{subject.Sid}", new List<DoubanCelebrity>(), TimeSpan.FromMinutes(5));
+        }
+
+        private static IHttpContextAccessor CreateManualMatchContextAccessor(string itemId = "1")
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/RemoteSearch/Apply/{itemId}";
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
+            };
+        }
+
+        private static DoubanApi CreateThrowingDoubanApi(ILoggerFactory loggerFactory, string message)
+        {
+            var api = new DoubanApi(loggerFactory);
+            var httpClientField = typeof(DoubanApi).GetField("httpClient", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(httpClientField, "DoubanApi.httpClient 未定义");
+
+            var originalClient = (HttpClient)httpClientField!.GetValue(api)!;
+            httpClientField.SetValue(api, new HttpClient(new ThrowingHttpMessageHandler(message), disposeHandler: true));
+            originalClient.Dispose();
+
+            return api;
+        }
+
+        private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
+        {
+            private readonly string message;
+
+            public ThrowingHttpMessageHandler(string message)
+            {
+                this.message = message;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                throw new InvalidOperationException(this.message + " Request: " + request.RequestUri);
+            }
         }
 
         private static void EnsurePluginInstance()
@@ -127,6 +230,38 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
 
             Assert.Fail("Could not initialize MetaSharkPlugin configuration for tests.");
+        }
+
+        private static void ReplacePluginConfiguration(PluginConfiguration configuration)
+        {
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+
+            var currentType = plugin!.GetType();
+            while (currentType != null)
+            {
+                var configurationProperty = currentType.GetProperty("Configuration", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (configurationProperty != null
+                    && configurationProperty.PropertyType.IsAssignableFrom(typeof(PluginConfiguration))
+                    && configurationProperty.SetMethod != null)
+                {
+                    configurationProperty.SetValue(plugin, configuration);
+                    return;
+                }
+
+                var configurationField = currentType
+                    .GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+                    .FirstOrDefault(field => field.FieldType.IsAssignableFrom(typeof(PluginConfiguration)));
+                if (configurationField != null)
+                {
+                    configurationField.SetValue(plugin, configuration);
+                    return;
+                }
+
+                currentType = currentType.BaseType;
+            }
+
+            Assert.Fail("Could not replace MetaSharkPlugin configuration for tests.");
         }
 
 
@@ -670,6 +805,247 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     MetaSharkPlugin.Instance.Configuration.EnableTmdbSearch = originalEnableTmdbSearch.Value;
                 }
+            }
+        }
+
+        [TestMethod]
+        public void LegacyDoubanIdDoesNotOverrideTmdbOnly()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+            var originalEnableTmdbMatch = plugin.Configuration.EnableTmdbMatch;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+                plugin.Configuration.EnableTmdbMatch = true;
+                Assert.AreEqual(PluginConfiguration.DefaultScraperModeTmdbOnly, plugin.Configuration.DefaultScraperMode);
+                Assert.IsFalse(Jellyfin.Plugin.MetaShark.Providers.DefaultScraperPolicy.IsDoubanAllowed(plugin.Configuration, DefaultScraperSemantic.AutomaticRefresh));
+
+                var info = new SeriesInfo()
+                {
+                    Name = "花牌情缘",
+                    MetadataLanguage = "zh",
+                    IsAutomated = true,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "6439459" },
+                        { MetadataProvider.Tmdb.ToString(), "45247" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = new HttpContextAccessor
+                {
+                    HttpContext = null,
+                };
+                var doubanApi = CreateThrowingDoubanApi(loggerFactory, "tmdb-only 自动剧集元数据链路不应再访问 Douban。");
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbSeries(tmdbApi, 45247, "zh", "花牌情缘");
+                var omdbApi = new OmdbApi(loggerFactory);
+                var imdbApi = new ImdbApi(loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var result = await provider.GetMetadata(info, CancellationToken.None);
+
+                    Assert.IsNotNull(result.Item, "tmdb-only 自动剧集链路在存在有效 TMDb 路由时应改道到 TMDb。");
+                    Assert.IsTrue(result.HasMetadata);
+                    Assert.AreEqual("45247", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.AreEqual("花牌情缘", result.Item.Name);
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+                plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public void FilenameDoubanHintDoesNotOverrideTmdbOnly()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+            var originalEnableTmdbMatch = plugin.Configuration.EnableTmdbMatch;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+                plugin.Configuration.EnableTmdbMatch = false;
+
+                var info = new SeriesInfo()
+                {
+                    Name = "花牌情缘",
+                    Path = "/test/[douban-6439459] 花牌情缘 S01E01.mkv",
+                    MetadataLanguage = "zh",
+                    IsAutomated = true,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), "45247" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = new HttpContextAccessor
+                {
+                    HttpContext = null,
+                };
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动剧集元数据链路不应因文件名里的 douban hint 回落到 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                SeedTmdbSeries(tmdbApi, 45247, "zh", "花牌情缘");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var result = await provider.GetMetadata(info, CancellationToken.None);
+
+                    Assert.IsNotNull(result.Item, "tmdb-only 自动剧集链路在存在有效 TMDb 路由时应继续改道到 TMDb。 ");
+                    Assert.IsTrue(result.HasMetadata);
+                    Assert.AreEqual("45247", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "文件名中的 Douban hint 不应被视为 tmdb-only 自动链路的豁免条件。");
+                    Assert.AreEqual("花牌情缘", result.Item.Name);
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+                plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public void ManualIdentifyAllowsDoubanUnderTmdbOnly()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdbSearch = plugin.Configuration.EnableTmdbSearch;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdbSearch = false;
+
+                var info = new SeriesInfo()
+                {
+                    Name = "老友记",
+                    MetadataLanguage = "zh",
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = new HttpContextAccessor
+                {
+                    HttpContext = null,
+                };
+                var doubanApi = new DoubanApi(loggerFactory);
+                DoubanApiTestHelper.SeedTvSearchResult(doubanApi, info.Name!, "1291841", "老友记", 1994);
+                var tmdbApi = new TmdbApi(loggerFactory);
+                var omdbApi = new OmdbApi(loggerFactory);
+                var imdbApi = new ImdbApi(loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var results = (await provider.GetSearchResults(info, CancellationToken.None)).ToList();
+
+                    Assert.IsTrue(results.Any(r => r.ProviderIds.TryGetValue(BaseProvider.DoubanProviderId, out var sid) && sid == "1291841"), "tmdb-only 不应误伤手动 Identify 的 Douban 搜索结果。");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdbSearch = originalEnableTmdbSearch;
+            }
+        }
+
+        [TestMethod]
+        public void ManualMatchAllowsDoubanUnderTmdbOnly()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+            var originalEnableTmdbMatch = plugin.Configuration.EnableTmdbMatch;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = false;
+                plugin.Configuration.EnableTmdbMatch = false;
+
+                var info = new SeriesInfo
+                {
+                    Name = "老友记",
+                    MetadataLanguage = "zh",
+                    IsAutomated = true,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "1291841" },
+                        { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_1291841" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = CreateManualMatchContextAccessor();
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedDoubanSubject(
+                    doubanApi,
+                    new DoubanSubject
+                    {
+                        Sid = "1291841",
+                        Name = "老友记",
+                        OriginalName = "Friends",
+                        Year = 1994,
+                        Category = "电视剧",
+                        Genre = "喜剧 / 爱情",
+                        Intro = "豆瓣手动匹配详情",
+                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
+                        Screen = "1994-09-22",
+                    });
+                var tmdbApi = new TmdbApi(loggerFactory);
+                var omdbApi = new OmdbApi(loggerFactory);
+                var imdbApi = new ImdbApi(loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var result = await provider.GetMetadata(info, CancellationToken.None);
+
+                    Assert.IsNotNull(result.Item, "显式手动匹配语义下仍应允许使用 Douban 剧集详情。");
+                    Assert.IsTrue(result.HasMetadata);
+                    Assert.AreEqual("1291841", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+                    Assert.AreEqual("老友记", result.Item.Name);
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+                plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
             }
         }
 

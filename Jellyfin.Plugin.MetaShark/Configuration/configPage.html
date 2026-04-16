@@ -110,19 +110,19 @@
                                 <legend>
                                     <h3>TheMovieDb</h3>
                                 </legend>
-                        <div class="checkboxContainer checkboxContainer-withDescription">
-                            <label class="emby-checkbox-label" for="EnableTmdbMatch">
-                                <input id="EnableTmdbMatch" name="EnableTmdbMatch" type="checkbox"
-                                    is="emby-checkbox" />
-                                <span>启用TheMovieDb自动匹配</span>
-                            </label>
-                            <div class="fieldDescription">勾选后，当从豆瓣匹配不到元数据时，会尝试从TheMovieDb获取元数据</div>
-                        </div>
-                        <div class="checkboxContainer checkboxContainer-withDescription">
-                            <label class="emby-checkbox-label" for="EnableTmdb">
-                                <input id="EnableTmdb" name="EnableTmdb" type="checkbox" is="emby-checkbox" />
-                                <span>启用从TheMovieDb获取剧集元数据</span>
-                            </label>
+                         <div class="checkboxContainer checkboxContainer-withDescription">
+                             <label class="emby-checkbox-label" for="EnableTmdbMatch">
+                                 <input id="EnableTmdbMatch" name="EnableTmdbMatch" type="checkbox"
+                                     is="emby-checkbox" />
+                                 <span>启用TheMovieDb自动匹配</span>
+                             </label>
+                             <div class="fieldDescription">勾选后，当从豆瓣匹配不到元数据时，会尝试从TheMovieDb获取元数据</div>
+                         </div>
+                         <div class="checkboxContainer checkboxContainer-withDescription">
+                             <label class="emby-checkbox-label" for="EnableTmdb">
+                                 <input id="EnableTmdb" name="EnableTmdb" type="checkbox" is="emby-checkbox" />
+                                 <span>启用从TheMovieDb获取剧集元数据</span>
+                             </label>
                             <div class="fieldDescription">勾选后，会尝试从TheMovieDb获取剧集元数据</div>
                         </div>
                         <div class="checkboxContainer checkboxContainer-withDescription">
@@ -228,15 +228,24 @@
 1402=5f3a..."></textarea>
                                  <div class="fieldDescription">每行一条：tmdbId=episodeGroupId</div>
                              </div>
-                             <div class="checkboxContainer checkboxContainer-withDescription">
-                                 <label class="emby-checkbox-label" for="EnableSearchMissingMetadataEpisodeTitleBackfill">
-                                     <input id="EnableSearchMissingMetadataEpisodeTitleBackfill" name="EnableSearchMissingMetadataEpisodeTitleBackfill" type="checkbox"
-                                         is="emby-checkbox" />
-                                     <span>搜索缺失元数据时回填默认剧集标题</span>
-                                 </label>
-                                 <div class="fieldDescription">仅在 Jellyfin“搜索缺失元数据”完成后，对仍为默认“第 N 集”的剧集尝试回填有效的 TMDB 简体中文标题。默认关闭。</div>
-                             </div>
-                             </fieldset>
+                              <div class="checkboxContainer checkboxContainer-withDescription">
+                                  <label class="emby-checkbox-label" for="EnableSearchMissingMetadataEpisodeTitleBackfill">
+                                      <input id="EnableSearchMissingMetadataEpisodeTitleBackfill" name="EnableSearchMissingMetadataEpisodeTitleBackfill" type="checkbox"
+                                          is="emby-checkbox" />
+                                      <span>搜索缺失元数据时回填默认剧集标题</span>
+                                  </label>
+                                  <div class="fieldDescription">仅在 Jellyfin“搜索缺失元数据”完成后，对仍为默认“第 N 集”的剧集尝试回填有效的 TMDB 简体中文标题。默认关闭。</div>
+                              </div>
+                              <div class="selectContainer">
+                                  <label class="selectLabel" for="DefaultScraperMode">默认刮削器：</label>
+                               <select is="emby-select" id="DefaultScraperMode" name="DefaultScraperMode"
+                                   class="DefaultScraperMode emby-select-withcolor emby-select">
+                                   <option value="default">默认</option>
+                                   <option value="tmdb-only">仅 TMDB</option>
+                               </select>
+                               <div class="fieldDescription">默认：优先使用豆瓣刮削，缺失内容再由 TMDB 补充；仅 TMDB：只使用 TMDB 刮削，忽略豆瓣。</div>
+                           </div>
+                           </fieldset>
                              <fieldset class="verticalSection verticalSection-extrabottompadding">
                                  <legend>
                                      <h3>TVDB</h3>
@@ -296,11 +305,12 @@
                         document.querySelector('#EnableDoubanBackdropRaw').checked = config.EnableDoubanBackdropRaw;
 
                         document.querySelector('#EnableTmdb').checked = config.EnableTmdb;
-                        document.querySelector('#EnableTmdbSearch').checked = config.EnableTmdbSearch;
-                        document.querySelector('#EnableTmdbMatch').checked = config.EnableTmdbMatch;
-                        document.querySelector('#EnableTmdbBackdrop').checked = config.EnableTmdbBackdrop;
-                        document.querySelector('#EnableTmdbLogo').checked = config.EnableTmdbLogo;
-                        document.querySelector('#EnableTmdbAdult').checked = config.EnableTmdbAdult;
+                         document.querySelector('#EnableTmdbSearch').checked = config.EnableTmdbSearch;
+                         document.querySelector('#EnableTmdbMatch').checked = config.EnableTmdbMatch;
+                         document.querySelector('#DefaultScraperMode').value = config.DefaultScraperMode;
+                         document.querySelector('#EnableTmdbBackdrop').checked = config.EnableTmdbBackdrop;
+                         document.querySelector('#EnableTmdbLogo').checked = config.EnableTmdbLogo;
+                         document.querySelector('#EnableTmdbAdult').checked = config.EnableTmdbAdult;
                         document.querySelector('#EnableTmdbCollection').checked = config.EnableTmdbCollection;
                         document.querySelector('#EnableTmdbOfficialRating').checked = config.EnableTmdbOfficialRating;
                          document.querySelector('#EnableTmdbTags').checked = config.EnableTmdbTags;
@@ -343,11 +353,12 @@
                         config.EnableDoubanBackdropRaw = document.querySelector('#EnableDoubanBackdropRaw').checked;
 
                         config.EnableTmdb = document.querySelector('#EnableTmdb').checked;
-                        config.EnableTmdbSearch = document.querySelector('#EnableTmdbSearch').checked;
-                        config.EnableTmdbMatch = document.querySelector('#EnableTmdbMatch').checked;
-                        config.EnableTmdbBackdrop = document.querySelector('#EnableTmdbBackdrop').checked;
-                        config.EnableTmdbLogo = document.querySelector('#EnableTmdbLogo').checked;
-                        config.EnableTmdbAdult = document.querySelector('#EnableTmdbAdult').checked;
+                         config.EnableTmdbSearch = document.querySelector('#EnableTmdbSearch').checked;
+                         config.EnableTmdbMatch = document.querySelector('#EnableTmdbMatch').checked;
+                         config.DefaultScraperMode = document.querySelector('#DefaultScraperMode').value;
+                         config.EnableTmdbBackdrop = document.querySelector('#EnableTmdbBackdrop').checked;
+                         config.EnableTmdbLogo = document.querySelector('#EnableTmdbLogo').checked;
+                         config.EnableTmdbAdult = document.querySelector('#EnableTmdbAdult').checked;
                         config.EnableTmdbCollection = document.querySelector('#EnableTmdbCollection').checked;
                         config.EnableTmdbOfficialRating = document.querySelector('#EnableTmdbOfficialRating').checked;
                          config.EnableTmdbTags = document.querySelector('#EnableTmdbTags').checked;

@@ -330,9 +330,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return new Uri($"{baseUrl}/plugin/metashark/proxy/image/?url={encodedUrl}", UriKind.Absolute);
         }
 
+        protected static bool IsDoubanAllowed(DefaultScraperSemantic semantic)
+        {
+            return DefaultScraperPolicy.IsDoubanAllowed(Config, semantic);
+        }
+
         /// <summary>
-        /// Adjusts the image's language code preferring the 5 letter language code eg. en-US.
-        /// </summary>
+         /// Adjusts the image's language code preferring the 5 letter language code eg. en-US.
+         /// </summary>
         /// <param name="imageLanguage">The image's actual language code.</param>
         /// <param name="requestLanguage">The requested language code.</param>
         /// <returns>The language code.</returns>
@@ -430,6 +435,45 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     // series和season的info.Path是文件夹路径
                     return Path.GetFileName(info.Path) ?? info.Name;
             }
+        }
+
+        protected DefaultScraperSemantic ResolveMetadataSemantic(ItemLookupInfo info)
+        {
+            ArgumentNullException.ThrowIfNull(info);
+
+            if (this.IsManualMatchRequest())
+            {
+                return DefaultScraperSemantic.ManualMatch;
+            }
+
+            return info.IsAutomated ? DefaultScraperSemantic.AutomaticRefresh : DefaultScraperSemantic.UserRefresh;
+        }
+
+        protected DefaultScraperSemantic ResolveImageSemantic()
+        {
+            return this.IsManualImageRequest()
+                ? DefaultScraperSemantic.ManualSearch
+                : DefaultScraperSemantic.AutomaticRefresh;
+        }
+
+        protected bool IsManualMatchRequest()
+        {
+            var request = this.HttpContextAccessor.HttpContext?.Request;
+            var path = request?.Path.Value;
+            return request != null
+                && HttpMethods.IsPost(request.Method)
+                && !string.IsNullOrEmpty(path)
+                && path.StartsWith("/Items/RemoteSearch/Apply", StringComparison.OrdinalIgnoreCase);
+        }
+
+        protected bool IsManualImageRequest()
+        {
+            var request = this.HttpContextAccessor.HttpContext?.Request;
+            var path = request?.Path.Value;
+            return request != null
+                && HttpMethods.IsGet(request.Method)
+                && !string.IsNullOrEmpty(path)
+                && path.Contains("/RemoteImages", StringComparison.OrdinalIgnoreCase);
         }
 
         protected async Task<TvEpisode?> GetEpisodeAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? language, string? imageLanguages, CancellationToken cancellationToken)

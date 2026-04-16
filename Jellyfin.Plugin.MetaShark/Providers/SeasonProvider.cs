@@ -46,6 +46,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(info);
             var result = new MetadataResult<Season>();
+            var semantic = this.ResolveMetadataSemantic(info);
+            var doubanAllowed = IsDoubanAllowed(semantic);
 
             // 使用刷新元数据时，之前识别的 seasonNumber 会保留，不会被覆盖
             info.SeriesProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var seriesTmdbId);
@@ -55,6 +57,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var seasonSid = info.GetProviderId(DoubanProviderId);
             var fileName = Path.GetFileName(info.Path);
             this.Log($"GetSeasonMetaData of [name]: {info.Name} [fileName]: {fileName} number: {info.IndexNumber} seriesTmdbId: {seriesTmdbId} sid: {sid} metaSource: {metaSource} EnableTmdb: {Config.EnableTmdb}");
+            if (!doubanAllowed)
+            {
+                if (!string.IsNullOrWhiteSpace(seriesTmdbId))
+                {
+                    return await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber, cancellationToken).ConfigureAwait(false);
+                }
+
+                return result;
+            }
+
             if (metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
             {
                 // seasonNumber 为 null 有三种情况：

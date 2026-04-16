@@ -17,6 +17,10 @@ public class PluginConfiguration : BasePluginConfiguration
 {
     public const int MAXCASTMEMBERS = 15;
     public const int MAXSEARCHRESULT = 5;
+    public const string DefaultScraperModeDefault = "default";
+    public const string DefaultScraperModeTmdbOnly = "tmdb-only";
+
+    private string? defaultScraperMode = DefaultScraperModeDefault;
 
     /// <summary>
     /// Gets 插件版本.
@@ -60,6 +64,15 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets a value indicating whether 启用tmdb自动匹配.
     /// </summary>
     public bool EnableTmdbMatch { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the default scraper mode.
+    /// </summary>
+    public string DefaultScraperMode
+    {
+        get => NormalizeDefaultScraperMode(this.defaultScraperMode);
+        set => this.defaultScraperMode = NormalizeDefaultScraperMode(value);
+    }
 
     /// <summary>
     /// Gets or sets a value indicating whether 启用tmdb获取背景图.
@@ -154,5 +167,15 @@ public class PluginConfiguration : BasePluginConfiguration
         }
 
         return null;
+    }
+
+    private static string NormalizeDefaultScraperMode(string? value)
+    {
+        return value switch
+        {
+            DefaultScraperModeTmdbOnly => DefaultScraperModeTmdbOnly,
+            DefaultScraperModeDefault => DefaultScraperModeDefault,
+            _ => DefaultScraperModeDefault,
+        };
     }
 }

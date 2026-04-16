@@ -1,12 +1,11 @@
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
-using Jellyfin.Plugin.MetaShark.Core;
-using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Serialization;
 using Microsoft.AspNetCore.Http;
@@ -17,31 +16,30 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TMDbLib.Objects.General;
-using TmdbMovie = TMDbLib.Objects.Movies.Movie;
+using TMDbLib.Objects.TvShows;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
     [TestClass]
     [DoNotParallelize]
-    public class MovieImageProviderTest
+    public class SeasonImageProviderTest
     {
-        private static readonly string PluginTestRootPath = Path.Combine(Path.GetTempPath(), "metashark-movie-image-provider-tests");
+        private static readonly string PluginTestRootPath = Path.Combine(Path.GetTempPath(), "metashark-season-image-provider-tests");
         private static readonly string PluginsPath = Path.Combine(PluginTestRootPath, "plugins");
         private static readonly string PluginConfigurationsPath = Path.Combine(PluginTestRootPath, "configurations");
 
-        ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
-                builder.AddSimpleConsole(options =>
-                {
-                    options.IncludeScopes = true;
-                    options.SingleLine = true;
-                    options.TimestampFormat = "hh:mm:ss ";
-                }));
+        private readonly ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
+            builder.AddSimpleConsole(options =>
+            {
+                options.IncludeScopes = true;
+                options.SingleLine = true;
+                options.TimestampFormat = "hh:mm:ss ";
+            }));
 
         [TestInitialize]
         public void ResetConfigurationBeforeTest()
@@ -57,120 +55,31 @@ namespace Jellyfin.Plugin.MetaShark.Test
             ReplacePluginConfiguration(new PluginConfiguration());
         }
 
-
         [TestMethod]
-        public void TestGetImages()
-        {
-            var info = new MediaBrowser.Controller.Entities.Movies.Movie()
-            {
-                Name = "秒速5厘米",
-                PreferredMetadataLanguage = "zh",
-                ProviderIds = new Dictionary<string, string> { { BaseProvider.DoubanProviderId, "2043546" }, { MetadataProvider.Tmdb.ToString(), "38142" } }
-            };
-            var httpClientFactory = new DefaultHttpClientFactory();
-            var libraryManagerStub = new Mock<ILibraryManager>();
-            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
-            var doubanApi = new DoubanApi(loggerFactory);
-            var tmdbApi = new TmdbApi(loggerFactory);
-            var omdbApi = new OmdbApi(loggerFactory);
-            var imdbApi = new ImdbApi(loggerFactory);
-
-            Task.Run(async () =>
-            {
-                var provider = new MovieImageProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
-                var result = await provider.GetImages(info, CancellationToken.None);
-                Assert.IsNotNull(result);
-
-                var str = result.ToJson();
-                Console.WriteLine(result.ToJson());
-            }).GetAwaiter().GetResult();
-        }
-
-        [TestMethod]
-        public void TestGetImagesFromTMDB()
-        {
-            var info = new MediaBrowser.Controller.Entities.Movies.Movie()
-            {
-                PreferredMetadataLanguage = "zh",
-                ProviderIds = new Dictionary<string, string> { { MetadataProvider.Tmdb.ToString(), "752" }, { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() } }
-            };
-            var httpClientFactory = new DefaultHttpClientFactory();
-            var libraryManagerStub = new Mock<ILibraryManager>();
-            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
-            var doubanApi = new DoubanApi(loggerFactory);
-            var tmdbApi = new TmdbApi(loggerFactory);
-            var omdbApi = new OmdbApi(loggerFactory);
-            var imdbApi = new ImdbApi(loggerFactory);
-
-            Task.Run(async () =>
-            {
-                var provider = new MovieImageProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
-                var result = await provider.GetImages(info, CancellationToken.None);
-                Assert.IsNotNull(result);
-
-                var str = result.ToJson();
-                Console.WriteLine(result.ToJson());
-            }).GetAwaiter().GetResult();
-        }
-
-        [TestMethod]
-        public void TestGetImageResponse()
+        public void GetImagesFallsBackToTmdbWhenDoubanBlocked()
         {
             var httpClientFactory = new DefaultHttpClientFactory();
             var libraryManagerStub = new Mock<ILibraryManager>();
-            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
-            var doubanApi = new DoubanApi(loggerFactory);
-            var tmdbApi = new TmdbApi(loggerFactory);
-            var omdbApi = new OmdbApi(loggerFactory);
-            var imdbApi = new ImdbApi(loggerFactory);
+            var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", "34860");
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+            var doubanApi = DoubanApiTestHelper.CreateBlockedDoubanApi(this.loggerFactory);
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbImageConfig(tmdbApi);
+            SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
 
-            Task.Run(async () =>
+            WithLibraryManager(libraryManagerStub.Object, () =>
             {
-                var provider = new MovieImageProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
-                var result = await provider.GetImageResponse(new Uri("https://img1.doubanio.com/view/photo/m/public/p2893270877.jpg", UriKind.Absolute), CancellationToken.None);
-                Assert.IsNotNull(result);
-
-                var str = result.ToJson();
-                Console.WriteLine(result.ToJson());
-            }).GetAwaiter().GetResult();
-        }
-
-        [TestMethod]
-        public void TestGetImagesFallsBackToTmdbWhenDoubanBlocked()
-        {
-            var info = new MediaBrowser.Controller.Entities.Movies.Movie()
-            {
-                Name = "秒速5厘米",
-                PreferredMetadataLanguage = "zh",
-                ProviderIds = new Dictionary<string, string>
+                Task.Run(async () =>
                 {
-                    { BaseProvider.DoubanProviderId, "2043546" },
-                    { MetadataProvider.Tmdb.ToString(), "38142" },
-                },
-            };
-            var httpClientFactory = new DefaultHttpClientFactory();
-            var libraryManagerStub = new Mock<ILibraryManager>();
-            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
-            var doubanApi = DoubanApiTestHelper.CreateBlockedDoubanApi(loggerFactory);
-            var tmdbApi = new TmdbApi(loggerFactory);
-            var omdbApi = new OmdbApi(loggerFactory);
-            var imdbApi = new ImdbApi(loggerFactory);
-
-            Task.Run(async () =>
-            {
-                try
-                {
-                    var provider = new MovieImageProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
-                    Assert.IsTrue(images.Any(), "Douban blocked 后应继续回退 TMDb 并返回图片。");
-                    Assert.IsTrue(images.Any(image => image.Url?.Contains("tmdb", StringComparison.OrdinalIgnoreCase) == true), "应返回 TMDb 图片 URL。");
-                }
-                catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests
-                    || ex.Message.Contains("429", StringComparison.Ordinal))
-                {
-                    Assert.Inconclusive("TMDb rate limited (429)." + ex.Message);
-                }
-            }).GetAwaiter().GetResult();
+
+                    Assert.IsTrue(images.Any(), "豆瓣季图拿不到时，只要存在 series TMDb id，就应回退到 TMDb 季图。");
+                    Assert.AreEqual(tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString(), images[0].Url);
+                }).GetAwaiter().GetResult();
+            });
         }
 
         [TestMethod]
@@ -189,35 +98,28 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
                 plugin.Configuration.EnableTmdb = true;
 
-                var info = new MediaBrowser.Controller.Entities.Movies.Movie()
-                {
-                    Name = "秒速5厘米",
-                    PreferredMetadataLanguage = "zh",
-                    ProviderIds = new Dictionary<string, string>
-                    {
-                        { BaseProvider.DoubanProviderId, "2043546" },
-                        { MetadataProvider.Tmdb.ToString(), "38142" },
-                    },
-                };
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
+                var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", "34860");
                 var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
-                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动电影图片链路不应再访问 Douban。");
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动季图片链路不应再访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 ConfigureTmdbImageConfig(tmdbApi);
-                SeedTmdbMovieDetails(tmdbApi, 38142, "zh");
+                SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 
-                Task.Run(async () =>
+                WithLibraryManager(libraryManagerStub.Object, () =>
                 {
-                    var provider = new MovieImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
-                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                    Task.Run(async () =>
+                    {
+                        var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                        var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
 
-                    Assert.IsTrue(images.Any(), "tmdb-only 自动图片链路在存在有效 TMDb id 时应改道到 TMDb。");
-                    Assert.IsTrue(images.Any(image => image.Url == tmdbApi.GetPosterUrl("/movie-poster.jpg")?.ToString()), "应返回 TMDb 主海报。");
-                    Assert.IsFalse(images.Any(image => image.Url?.Contains("douban", StringComparison.OrdinalIgnoreCase) == true), "tmdb-only 自动图片链路不应再泄漏 Douban 图片 URL。");
-                }).GetAwaiter().GetResult();
+                        Assert.AreEqual(1, images.Count, "tmdb-only 自动季图片链路在存在 TMDb fallback 时应直接走 TMDb。");
+                        Assert.AreEqual(tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString(), images[0].Url);
+                    }).GetAwaiter().GetResult();
+                });
             }
             finally
             {
@@ -240,35 +142,78 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
 
-                var info = new MediaBrowser.Controller.Entities.Movies.Movie()
-                {
-                    Name = "只有豆瓣海报",
-                    PreferredMetadataLanguage = "zh",
-                    ProviderIds = new Dictionary<string, string>
-                    {
-                        { BaseProvider.DoubanProviderId, "only-douban" },
-                    },
-                };
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
+                var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", null);
                 var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
-                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动电影图片链路在没有 TMDb fallback 时也不应访问 Douban。");
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动季图片链路在没有 TMDb fallback 时也不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 ConfigureTmdbImageConfig(tmdbApi);
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 
-                Task.Run(async () =>
+                WithLibraryManager(libraryManagerStub.Object, () =>
                 {
-                    var provider = new MovieImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
-                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                    Task.Run(async () =>
+                    {
+                        var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                        var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
 
-                    Assert.AreEqual(0, images.Count, "tmdb-only 自动图片链路在没有插件内 TMDb fallback 时应直接返回空集合。");
-                }).GetAwaiter().GetResult();
+                        Assert.AreEqual(0, images.Count, "tmdb-only 自动季图片链路在没有插件内 TMDb fallback 时应直接返回空集合。");
+                    }).GetAwaiter().GetResult();
+                });
             }
             finally
             {
                 plugin.Configuration.DefaultScraperMode = originalMode;
+            }
+        }
+
+        private static Season CreateSeason(Mock<ILibraryManager> libraryManagerStub, string name, int indexNumber, string seasonDoubanId, string seriesDoubanId, string? seriesTmdbId)
+        {
+            var series = new Series
+            {
+                Id = Guid.NewGuid(),
+                Name = "辛普森一家",
+                PreferredMetadataLanguage = "zh",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, seriesDoubanId },
+                },
+            };
+            if (!string.IsNullOrEmpty(seriesTmdbId))
+            {
+                series.SetProviderId(MetadataProvider.Tmdb, seriesTmdbId);
+            }
+
+            libraryManagerStub.Setup(x => x.GetItemById(series.Id)).Returns((BaseItem)series);
+
+            return new Season
+            {
+                Name = name,
+                IndexNumber = indexNumber,
+                PreferredMetadataLanguage = "zh",
+                SeriesId = series.Id,
+                SeriesName = series.Name,
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, seasonDoubanId },
+                },
+            };
+        }
+
+        private static void WithLibraryManager(ILibraryManager libraryManager, Action action)
+        {
+            var originalLibraryManager = BaseItem.LibraryManager;
+            BaseItem.LibraryManager = libraryManager;
+
+            try
+            {
+                action();
+            }
+            finally
+            {
+                BaseItem.LibraryManager = originalLibraryManager;
             }
         }
 
@@ -403,44 +348,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return memoryCache!;
         }
 
-        private static void SeedTmdbMovieDetails(TmdbApi tmdbApi, int tmdbId, string language)
+        private static void SeedTmdbSeasonImages(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, string language, string seasonName)
         {
-            var cache = GetTmdbMemoryCache(tmdbApi);
-            var movie = new TmdbMovie
+            var season = new TvSeason
             {
-                Id = tmdbId,
-                Title = "秒速5厘米",
-                OriginalTitle = "秒速5センチメートル",
-                PosterPath = "/movie-poster.jpg",
-                BackdropPath = "/movie-backdrop.jpg",
+                Name = seasonName,
+                Overview = "TMDb seeded season overview",
+                AirDate = new DateTime(2015, 2, 1),
             };
-            SetTmdbImages(movie, ("Logos", new List<ImageData>
+            SetTmdbImages(season, ("Posters", new List<ImageData>
             {
-                CreateImageData("/movie-logo.png", "zh", 500, 250),
+                CreateImageData("/season-poster.jpg", "zh", 1000, 1500),
             }));
 
-            cache.Set($"movie-{tmdbId}-{language}-{language}", movie, TimeSpan.FromMinutes(5));
-            cache.Set(
-                $"movie-images-{tmdbId}--",
-                new ImagesWithId
-                {
-                    Posters = new List<ImageData> { CreateImageData("/movie-poster.jpg", "zh", 1000, 1500) },
-                    Backdrops = new List<ImageData> { CreateImageData("/movie-backdrop.jpg", "zh", 1920, 1080) },
-                },
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"season-{seriesTmdbId}-s{seasonNumber}-{language}-{language}",
+                season,
                 TimeSpan.FromMinutes(5));
-        }
-
-        private static ImageData CreateImageData(string filePath, string? language, int width, int height)
-        {
-            return new ImageData
-            {
-                FilePath = filePath,
-                Iso_639_1 = language,
-                Width = width,
-                Height = height,
-                VoteAverage = 8.5,
-                VoteCount = 10,
-            };
         }
 
         private static void SetTmdbImages(object target, params (string PropertyName, IList<ImageData> Images)[] imageSets)
@@ -459,6 +383,19 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
 
             imagesProperty.SetValue(target, images);
+        }
+
+        private static ImageData CreateImageData(string filePath, string? language, int width, int height)
+        {
+            return new ImageData
+            {
+                FilePath = filePath,
+                Iso_639_1 = language,
+                Width = width,
+                Height = height,
+                VoteAverage = 8.5,
+                VoteCount = 10,
+            };
         }
 
         private static DoubanApi CreateThrowingDoubanApi(ILoggerFactory loggerFactory, string message)

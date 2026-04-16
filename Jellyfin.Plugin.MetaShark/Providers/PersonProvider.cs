@@ -42,6 +42,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             this.Log($"GetPersonSearchResults of [name]: {searchInfo.Name}");
 
             var result = new List<RemoteSearchResult>();
+            if (!IsDoubanAllowed(DefaultScraperSemantic.ManualSearch))
+            {
+                return result;
+            }
+
             var cid = searchInfo.GetProviderId(DoubanProviderId);
             if (!string.IsNullOrEmpty(cid))
             {
@@ -80,10 +85,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(info);
             var result = new MetadataResult<Person>();
+            var semantic = this.ResolveMetadataSemantic(info);
+            var doubanAllowed = IsDoubanAllowed(semantic);
 
             var cid = info.GetProviderId(DoubanProviderId);
             this.Log($"GetPersonMetadata of [name]: {info.Name} [cid]: {cid}");
-            if (!string.IsNullOrEmpty(cid))
+            if (doubanAllowed && !string.IsNullOrEmpty(cid))
             {
                 var c = await this.DoubanApi.GetCelebrityAsync(cid, cancellationToken).ConfigureAwait(false);
                 if (c != null)
