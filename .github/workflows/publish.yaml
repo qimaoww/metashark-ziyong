@@ -42,9 +42,14 @@ jobs:
           VERSION=$(echo "${GITHUB_REF#refs/*/}" | sed s/^v//)
           VERSION="$VERSION.0"
           CHANGE_LOG=$(git tag -l '--format=%(contents)' ${{ github.ref_name }})
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "CHANGE_LOG=${CHANGE_LOG}" >> $GITHUB_OUTPUT
-          echo "APP_NAME=$(echo '${{ github.repository }}' | awk -F '/' '{print $2}')" >> $GITHUB_OUTPUT
+          CHANGE_LOG_DELIMITER=$(python3 -c 'import uuid; print(uuid.uuid4())')
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          {
+            echo "CHANGE_LOG<<${CHANGE_LOG_DELIMITER}"
+            printf '%s\n' "${CHANGE_LOG}"
+            echo "${CHANGE_LOG_DELIMITER}"
+          } >> "$GITHUB_OUTPUT"
+          echo "APP_NAME=$(echo '${{ github.repository }}' | awk -F '/' '{print $2}')" >> "$GITHUB_OUTPUT"
       - name: Build
         run: |
           dotnet restore ${{ env.project }} --no-cache -p:UseLocalJellyfinReferences=true
