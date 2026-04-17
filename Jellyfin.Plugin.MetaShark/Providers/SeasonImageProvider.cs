@@ -51,13 +51,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;
             var imageSemantic = this.ResolveImageSemantic();
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
-            var allowManualDoubanForSeasonImage = ShouldAllowDoubanForManualSeasonImageRequest(season, imageSemantic);
+            var allowManualDoubanForSeasonImage = this.ShouldAllowDoubanForManualSeasonImageRequest(season, imageSemantic);
 
             // get image from douban
             var sid = item.GetProviderId(DoubanProviderId);
-            if (doubanAllowed && (allowManualDoubanForSeasonImage || metaSource != MetaSource.Tmdb) && !string.IsNullOrEmpty(sid))
+            var shouldUseDoubanImage = !string.IsNullOrEmpty(sid)
+                && (allowManualDoubanForSeasonImage
+                    || (doubanAllowed && metaSource != MetaSource.Tmdb));
+            if (shouldUseDoubanImage)
             {
-                var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
+                var primary = await this.DoubanApi.GetMovieAsync(sid!, cancellationToken).ConfigureAwait(false);
                 if (primary != null && !string.IsNullOrEmpty(primary.Img))
                 {
                     var res = new List<RemoteImageInfo>
@@ -111,11 +114,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return remoteImages.OrderByLanguageDescending(language);
         }
 
-        private static bool ShouldAllowDoubanForManualSeasonImageRequest(Season season, DefaultScraperSemantic imageSemantic)
+        private bool ShouldAllowDoubanForManualSeasonImageRequest(Season season, DefaultScraperSemantic imageSemantic)
         {
             ArgumentNullException.ThrowIfNull(season);
 
-            return imageSemantic == DefaultScraperSemantic.ManualSearch
+            return (imageSemantic == DefaultScraperSemantic.ManualSearch || this.IsManualMatchRequest())
                 && !string.IsNullOrEmpty(season.GetProviderId(DoubanProviderId));
         }
     }

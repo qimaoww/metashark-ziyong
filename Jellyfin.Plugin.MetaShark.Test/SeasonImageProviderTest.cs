@@ -217,6 +217,60 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void ManualIdentifyApplyMetadata_TmdbOnly_RecoversDoubanSeasonImage()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", "34860", MetaSource.Tmdb);
+                var httpContextAccessor = CreateManualMatchContextAccessor();
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanSubject(doubanApi, new DoubanSubject
+                {
+                    Sid = "season-douban",
+                    Name = "辛普森一家 第1季",
+                    Category = "电视剧",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p1234567890.webp",
+                });
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                WithLibraryManager(libraryManagerStub.Object, () =>
+                {
+                    Task.Run(async () =>
+                    {
+                        var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                        var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                        Assert.AreEqual(1, images.Count, "series 手动 Identify/Apply 元数据后的 follow-up season image 路径应返回唯一的季主图。");
+                        Assert.IsFalse(images[0].Url?.Contains("image.tmdb.org", StringComparison.OrdinalIgnoreCase) == true, "tmdb-only 下的手动 metadata apply follow-up season image 不应因为 parent series meta-source=TMDb 而错误回退到 TMDb URL。");
+                        Assert.IsTrue(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "series 手动 Douban Identify/Apply 后，season image 应能继续恢复到 Douban 季图。当前失败说明 metadata apply 到 season image 的手动语义没有被串起来。\n实际 URL: " + images[0].Url);
+                    }).GetAwaiter().GetResult();
+                });
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
         public void ManualRemoteImageSearch_WithoutSeasonDoubanId_UsesTmdbFallbackWithoutException()
         {
             EnsurePluginInstance();
@@ -576,6 +630,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var context = new DefaultHttpContext();
             context.Request.Method = HttpMethods.Get;
             context.Request.Path = $"/Items/{itemId}/RemoteImages";
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
+            };
+        }
+
+        private static IHttpContextAccessor CreateManualMatchContextAccessor(string itemId = "1")
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/RemoteSearch/Apply/{itemId}";
             return new HttpContextAccessor
             {
                 HttpContext = context,
