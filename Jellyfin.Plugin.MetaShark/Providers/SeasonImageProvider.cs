@@ -51,7 +51,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;
             var imageSemantic = this.ResolveImageSemantic();
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
-            var allowManualDoubanForSeasonImage = this.ShouldAllowDoubanForManualSeasonImageRequest(season, imageSemantic);
+            var allowManualDoubanForSeasonImage = this.ShouldAllowDoubanForManualSeasonImageRequest(season, metaSource, imageSemantic);
 
             // get image from douban
             var sid = item.GetProviderId(DoubanProviderId);
@@ -114,12 +114,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return remoteImages.OrderByLanguageDescending(language);
         }
 
-        private bool ShouldAllowDoubanForManualSeasonImageRequest(Season season, DefaultScraperSemantic imageSemantic)
+        private bool ShouldAllowDoubanForManualSeasonImageRequest(Season season, MetaSource metaSource, DefaultScraperSemantic imageSemantic)
         {
             ArgumentNullException.ThrowIfNull(season);
 
-            return (imageSemantic == DefaultScraperSemantic.ManualSearch || this.IsManualMatchRequest())
-                && !string.IsNullOrEmpty(season.GetProviderId(DoubanProviderId));
+            if (string.IsNullOrEmpty(season.GetProviderId(DoubanProviderId)))
+            {
+                return false;
+            }
+
+            if (imageSemantic == DefaultScraperSemantic.ManualSearch)
+            {
+                return true;
+            }
+
+            return this.IsManualMatchRequest() && metaSource == MetaSource.Douban;
         }
     }
 }
