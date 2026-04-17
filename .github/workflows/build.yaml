@@ -24,5 +24,5 @@ jobs:
         run: dotnet restore -p:UseLocalJellyfinReferences=true
       - name: Build
         run: dotnet build --no-restore -p:UseLocalJellyfinReferences=true
-      # - name: Test
-      #   run: dotnet test --no-restore --verbosity normal
+      - name: Test Stable lane
+        run: dotnet test Jellyfin.Plugin.MetaShark.Test/Jellyfin.Plugin.MetaShark.Test.csproj --no-build --no-restore -p:UseLocalJellyfinReferences=true --filter "TestCategory=Stable" --logger "trx;LogFileName=metashark-stable.trx"

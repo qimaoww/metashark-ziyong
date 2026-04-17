@@ -291,6 +291,64 @@
 
             var lastEpisodeGroupMap = '';
 
+            function compareOrdinalStrings(left, right) {
+                if (left === right) {
+                    return 0;
+                }
+
+                return left < right ? -1 : 1;
+            }
+
+            function normalizeEpisodeGroupMap(raw) {
+                var lines = (raw || '').split(/\r?\n/);
+                var seenSeriesIds = Object.create(null);
+                var entries = [];
+
+                for (var i = 0; i < lines.length; i++) {
+                    var trimmedLine = lines[i].trim();
+                    if (!trimmedLine || trimmedLine.indexOf('#') === 0) {
+                        continue;
+                    }
+
+                    var separatorIndex = trimmedLine.indexOf('=');
+                    if (separatorIndex < 0) {
+                        continue;
+                    }
+
+                    var seriesId = trimmedLine.substring(0, separatorIndex).trim();
+                    var groupId = trimmedLine.substring(separatorIndex + 1).trim();
+                    if (!seriesId || !groupId) {
+                        continue;
+                    }
+
+                    var comparisonKey = seriesId.toUpperCase();
+                    if (seenSeriesIds[comparisonKey] === true) {
+                        continue;
+                    }
+
+                    seenSeriesIds[comparisonKey] = true;
+                    entries.push({
+                        key: seriesId,
+                        value: groupId
+                    });
+                }
+
+                entries.sort(function (left, right) {
+                    return compareOrdinalStrings(left.key, right.key);
+                });
+
+                var canonicalLines = [];
+                for (var j = 0; j < entries.length; j++) {
+                    canonicalLines.push(entries[j].key + '=' + entries[j].value);
+                }
+
+                return canonicalLines.join('\n');
+            }
+
+            function hasSemanticMappingChange(oldRaw, newRaw) {
+                return normalizeEpisodeGroupMap(oldRaw) !== normalizeEpisodeGroupMap(newRaw);
+            }
+
             document.querySelector('#TemplateConfigPage')
                 .addEventListener('pageshow', function () {
                     console.log('metashark pageshow');
@@ -345,6 +403,8 @@
                 .addEventListener('submit', function (e) {
                     Dashboard.showLoadingMsg();
                     ApiClient.getPluginConfiguration(TemplateConfig.pluginUniqueId).then(function (config) {
+                        var previousEpisodeGroupMap = config.TmdbEpisodeGroupMap || '';
+
                         config.DoubanCookies = document.querySelector('#DoubanCookies').value;
                         var doubanProxyUrl = document.querySelector('#DoubanImageProxyBaseUrl').value;
                         config.DoubanImageProxyBaseUrl = doubanProxyUrl ? doubanProxyUrl : null;
@@ -377,7 +437,7 @@
                             Dashboard.processPluginConfigurationUpdateResult(result);
 
                             checkDoubanLogin();
-                            refreshSeriesIfMappingChanged(lastEpisodeGroupMap, config.TmdbEpisodeGroupMap);
+                            refreshSeriesIfMappingChanged(previousEpisodeGroupMap, config.TmdbEpisodeGroupMap);
                             lastEpisodeGroupMap = config.TmdbEpisodeGroupMap || '';
                         });
                     });
@@ -467,14 +527,19 @@
             }
 
             function refreshSeriesIfMappingChanged(oldMapping, newMapping) {
-                if ((oldMapping || '').trim() === (newMapping || '').trim()) {
+                if (!hasSemanticMappingChange(oldMapping, newMapping)) {
                     return;
                 }
 
                 Dashboard.showLoadingMsg();
                 $.ajax({
                     type: 'POST',
-                    url: '/plugin/metashark/tmdb/refresh-series'
+                    url: '/plugin/metashark/tmdb/refresh-series',
+                    contentType: 'application/json; charset=utf-8',
+                    data: JSON.stringify({
+                        oldMapping: oldMapping || '',
+                        newMapping: newMapping || ''
+                    })
                 }).done(function (resp) {
                     if (resp && resp.code === 1) {
                         Dashboard.alert(resp.msg || '已刷新节目元数据');

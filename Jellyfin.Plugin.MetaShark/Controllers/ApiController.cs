@@ -5,7 +5,6 @@
 namespace Jellyfin.Plugin.MetaShark.Controllers
 {
     using System;
-    using System.Collections.Generic;
     using System.IO;
     using System.Linq;
     using System.Net.Http;
@@ -13,6 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
     using Jellyfin.Plugin.MetaShark.Model;
     using MediaBrowser.Common.Extensions;
     using MediaBrowser.Common.Net;
@@ -24,6 +24,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     using MediaBrowser.Model.Providers;
     using Microsoft.AspNetCore.Authorization;
     using Microsoft.AspNetCore.Mvc;
+    using Microsoft.AspNetCore.Mvc.ModelBinding;
     using Microsoft.Extensions.Logging;
 
     [ApiController]
@@ -31,8 +32,6 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     [Route("/plugin/metashark")]
     public class ApiController : ControllerBase
     {
-        private static readonly char[] NewLineSeparators = { '\r', '\n' };
-
         private static readonly Action<ILogger, string?, Exception?> LogSkipRefreshEmptyId =
             LoggerMessage.Define<string?>(LogLevel.Warning, new EventId(1, nameof(RefreshSeriesByEpisodeGroupMap)), "Skip refresh for series with empty Id. Name: {Name}");
 
@@ -45,6 +44,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         private readonly IProviderManager providerManager;
         private readonly IFileSystem fileSystem;
         private readonly ILogger<ApiController> logger;
+        private readonly EpisodeGroupRefreshService episodeGroupRefreshService = new();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ApiController"/> class.
@@ -138,14 +138,19 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         /// </summary>
         [Route("tmdb/refresh-series")]
         [HttpPost]
-        public ApiResult RefreshSeriesByEpisodeGroupMap()
+        public ApiResult RefreshSeriesByEpisodeGroupMap([FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] TmdbEpisodeGroupRefreshRequest? request = null)
         {
-            var mapping = MetaSharkPlugin.Instance?.Configuration.TmdbEpisodeGroupMap ?? string.Empty;
-            var tmdbIds = GetMappedSeriesIds(mapping);
-            if (tmdbIds.Count == 0)
+            var currentMapping = MetaSharkPlugin.Instance?.Configuration.TmdbEpisodeGroupMap ?? string.Empty;
+            var refreshResult = this.episodeGroupRefreshService.CreateRefreshResult(
+                request?.OldMapping ?? string.Empty,
+                request?.NewMapping ?? currentMapping);
+
+            if (refreshResult.AffectedSeriesIds.Count == 0)
             {
-                return new ApiResult(0, "No mapped series ids.");
+                return new ApiResult(1, refreshResult.CreateSummaryMessage(0));
             }
+
+            var affectedSeriesIds = new System.Collections.Generic.HashSet<string>(refreshResult.AffectedSeriesIds, StringComparer.OrdinalIgnoreCase);
 
             var items = this.libraryManager.GetItemList(new InternalItemsQuery
             {
@@ -172,7 +177,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
                     continue;
                 }
 
-                if (!tmdbIds.Contains(tmdbId))
+                if (!affectedSeriesIds.Contains(tmdbId))
                 {
                     continue;
                 }
@@ -188,40 +193,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
             }
 
             LogQueuedRefresh(this.logger, queued, null);
-            return new ApiResult(1, $"Queued {queued} series refresh(es).");
-
-            static HashSet<string> GetMappedSeriesIds(string map)
-            {
-                var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                if (string.IsNullOrWhiteSpace(map))
-                {
-                    return result;
-                }
-
-                var lines = map.Split(NewLineSeparators, StringSplitOptions.RemoveEmptyEntries);
-                foreach (var line in lines)
-                {
-                    var trimmed = line.Trim();
-                    if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith('#'))
-                    {
-                        continue;
-                    }
-
-                    var parts = trimmed.Split('=', 2, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length != 2)
-                    {
-                        continue;
-                    }
-
-                    var seriesId = parts[0].Trim();
-                    if (!string.IsNullOrWhiteSpace(seriesId))
-                    {
-                        result.Add(seriesId);
-                    }
-                }
-
-                return result;
-            }
+            return new ApiResult(1, refreshResult.CreateSummaryMessage(queued));
         }
 
         private HttpClient GetHttpClient()
