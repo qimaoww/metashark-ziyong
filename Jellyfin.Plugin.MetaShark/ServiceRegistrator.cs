@@ -42,6 +42,7 @@ namespace Jellyfin.Plugin.MetaShark
             });
             serviceCollection.AddSingleton<ITvImageRefillOutcomeReporter, TvImageRefillOutcomeReporter>();
             serviceCollection.AddSingleton<ITvMissingImageRefillService, TvMissingImageRefillService>();
+            serviceCollection.AddSingleton<IMissingMetadataSearchService, MissingMetadataSearchService>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore, InMemoryEpisodeTitleBackfillCandidateStore>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPendingResolver, EpisodeTitleBackfillPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPersistence, JellyfinEpisodeTitleBackfillPersistence>();
