@@ -1,5 +1,6 @@
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
+using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
@@ -169,17 +170,172 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
-        private static Season CreateSeason(Mock<ILibraryManager> libraryManagerStub, string name, int indexNumber, string seasonDoubanId, string seriesDoubanId, string? seriesTmdbId)
+        [TestMethod]
+        public void DefaultScraperPolicy_TmdbOnlyAutomaticImagesWithParentTmdbMetaSourceStillSkipDouban()
         {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", "34860", MetaSource.Tmdb);
+                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 非手动季图片链路即使 parent series meta-source=TMDb 也不应访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                WithLibraryManager(libraryManagerStub.Object, () =>
+                {
+                    Task.Run(async () =>
+                    {
+                        var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                        var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                        Assert.AreEqual(1, images.Count, "tmdb-only 非手动季图片链路即使 parent series meta-source=TMDb 也应保持 TMDb fallback。 ");
+                        Assert.AreEqual(tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString(), images[0].Url);
+                    }).GetAwaiter().GetResult();
+                });
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public void ManualRemoteImageSearch_WithoutSeasonDoubanId_UsesTmdbFallbackWithoutException()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", "34860", MetaSource.Tmdb);
+                info.ProviderIds.Remove(BaseProvider.DoubanProviderId);
+                Assert.IsFalse(info.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId), "测试前提失败：season 不应保留 DoubanId。");
+
+                var httpContextAccessor = CreateManualRemoteImageContextAccessor();
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "手动 RemoteImages 在缺少 season DoubanId 时不应意外访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                WithLibraryManager(libraryManagerStub.Object, () =>
+                {
+                    Task.Run(async () =>
+                    {
+                        var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                        var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                        Assert.AreEqual(1, images.Count, "手动 RemoteImages 在缺少 season DoubanId 时应保持稳定并回退到 TMDb 季图。 ");
+                        Assert.AreEqual(tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString(), images[0].Url);
+                    }).GetAwaiter().GetResult();
+                });
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public void ManualRemoteImageSearch_TmdbOnly_ReturnsDoubanSeasonImage()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", "34860", MetaSource.Tmdb);
+                var httpContextAccessor = CreateManualRemoteImageContextAccessor();
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanSubject(doubanApi, new DoubanSubject
+                {
+                    Sid = "season-douban",
+                    Name = "辛普森一家 第1季",
+                    Category = "电视剧",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p1234567890.webp",
+                });
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                WithLibraryManager(libraryManagerStub.Object, () =>
+                {
+                    Task.Run(async () =>
+                    {
+                        var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                        var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                        Assert.AreEqual(1, images.Count, "手动 RemoteImages 搜索路径应返回唯一的季主图。");
+                        Assert.IsFalse(images[0].Url?.Contains("image.tmdb.org", StringComparison.OrdinalIgnoreCase) == true, "tmdb-only 下的手动季图搜索不应因为父级 series meta-source=TMDb 而错误回退到 TMDb URL。");
+                        Assert.IsTrue(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "手动 RemoteImages 搜索路径在 tmdb-only 下仍应返回 Douban 季图。当前失败说明 Douban 手动链路被误伤。\n实际 URL: " + images[0].Url);
+                    }).GetAwaiter().GetResult();
+                });
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        private static Season CreateSeason(Mock<ILibraryManager> libraryManagerStub, string name, int indexNumber, string seasonDoubanId, string seriesDoubanId, string? seriesTmdbId, MetaSource? seriesMetaSource = null)
+        {
+            var seriesProviderIds = new Dictionary<string, string>
+            {
+                { BaseProvider.DoubanProviderId, seriesDoubanId },
+            };
+            if (seriesMetaSource.HasValue)
+            {
+                seriesProviderIds[MetaSharkPlugin.ProviderId] = seriesMetaSource.Value.ToString();
+            }
+
             var series = new Series
             {
                 Id = Guid.NewGuid(),
                 Name = "辛普森一家",
                 PreferredMetadataLanguage = "zh",
-                ProviderIds = new Dictionary<string, string>
-                {
-                    { BaseProvider.DoubanProviderId, seriesDoubanId },
-                },
+                ProviderIds = seriesProviderIds,
             };
             if (!string.IsNullOrEmpty(seriesTmdbId))
             {
@@ -348,6 +504,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return memoryCache!;
         }
 
+        private static IMemoryCache GetDoubanMemoryCache(DoubanApi doubanApi)
+        {
+            var memoryCacheField = typeof(DoubanApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(memoryCacheField, "DoubanApi.memoryCache 未定义");
+
+            var memoryCache = memoryCacheField!.GetValue(doubanApi) as IMemoryCache;
+            Assert.IsNotNull(memoryCache, "DoubanApi.memoryCache 不是有效的 IMemoryCache");
+            return memoryCache!;
+        }
+
+        private static void SeedDoubanSubject(DoubanApi doubanApi, DoubanSubject subject)
+        {
+            var cache = GetDoubanMemoryCache(doubanApi);
+            cache.Set($"movie_{subject.Sid}", subject, TimeSpan.FromMinutes(5));
+            cache.Set($"celebrities_{subject.Sid}", new List<DoubanCelebrity>(), TimeSpan.FromMinutes(5));
+        }
+
         private static void SeedTmdbSeasonImages(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, string language, string seasonName)
         {
             var season = new TvSeason
@@ -395,6 +568,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Height = height,
                 VoteAverage = 8.5,
                 VoteCount = 10,
+            };
+        }
+
+        private static IHttpContextAccessor CreateManualRemoteImageContextAccessor(string itemId = "1")
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Get;
+            context.Request.Path = $"/Items/{itemId}/RemoteImages";
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
             };
         }
 

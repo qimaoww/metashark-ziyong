@@ -49,11 +49,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var season = (Season)item;
             var series = season.Series;
             var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;
-            var doubanAllowed = IsDoubanAllowed(this.ResolveImageSemantic());
+            var imageSemantic = this.ResolveImageSemantic();
+            var doubanAllowed = IsDoubanAllowed(imageSemantic);
+            var allowManualDoubanForSeasonImage = ShouldAllowDoubanForManualSeasonImageRequest(season, imageSemantic);
 
             // get image from douban
             var sid = item.GetProviderId(DoubanProviderId);
-            if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
+            if (doubanAllowed && (allowManualDoubanForSeasonImage || metaSource != MetaSource.Tmdb) && !string.IsNullOrEmpty(sid))
             {
                 var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (primary != null && !string.IsNullOrEmpty(primary.Img))
@@ -107,6 +109,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return remoteImages.OrderByLanguageDescending(language);
+        }
+
+        private static bool ShouldAllowDoubanForManualSeasonImageRequest(Season season, DefaultScraperSemantic imageSemantic)
+        {
+            ArgumentNullException.ThrowIfNull(season);
+
+            return imageSemantic == DefaultScraperSemantic.ManualSearch
+                && !string.IsNullOrEmpty(season.GetProviderId(DoubanProviderId));
         }
     }
 }

@@ -323,11 +323,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var proxyBaseUrl = Config.DoubanImageProxyBaseUrl;
             if (!string.IsNullOrWhiteSpace(proxyBaseUrl))
             {
-                baseUrl = proxyBaseUrl.TrimEnd('/');
+                baseUrl = proxyBaseUrl;
             }
 
-            var encodedUrl = HttpUtility.UrlEncode(url.ToString());
-            return new Uri($"{baseUrl}/plugin/metashark/proxy/image/?url={encodedUrl}", UriKind.Absolute);
+            return BuildProxyImageUrl(baseUrl, url);
         }
 
         protected static bool IsDoubanAllowed(DefaultScraperSemantic semantic)
@@ -829,8 +828,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(url);
             var baseUrl = this.GetBaseUrl();
-            var encodedUrl = HttpUtility.UrlEncode(url.ToString());
-            return new Uri($"{baseUrl}/plugin/metashark/proxy/image/?url={encodedUrl}", UriKind.Absolute);
+            return BuildProxyImageUrl(baseUrl, url);
         }
 
         protected void Log(string? message, params object?[] args)
@@ -976,6 +974,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return default;
+        }
+
+        private static Uri BuildProxyImageUrl(string baseUrl, Uri url)
+        {
+            var encodedUrl = HttpUtility.UrlEncode(url.ToString());
+            return new Uri($"{baseUrl.TrimEnd('/')}/plugin/metashark/proxy/image?url={encodedUrl}", UriKind.Absolute);
         }
 
         private string GetBaseUrl()
