@@ -238,9 +238,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 if (seasonGroup != null)
                 {
                     this.Log("TMDb episode group mapping resolved (season): seriesId={0} groupId={1} season={2} name={3}", seriesTmdbId, groupId, seasonNumber, seasonGroup.Name);
+                    var seasonGroupName = seasonGroup.Name?.Trim();
+                    var seasonName = seasonGroupName;
+                    if (ShouldPreserveExistingSeasonTitle(info.Name, seasonGroupName))
+                    {
+                        seasonName = info.Name.Trim();
+                    }
+
                     result.Item = new Season
                     {
-                        Name = seasonGroup.Name,
+                        Name = seasonName,
                         IndexNumber = seasonNumber,
                     };
                     result.HasMetadata = true;
@@ -273,6 +280,68 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return result;
+        }
+
+        private static bool ShouldPreserveExistingSeasonTitle(string? currentSeasonTitle, string? seasonGroupName)
+        {
+            if (string.IsNullOrWhiteSpace(currentSeasonTitle) || string.IsNullOrWhiteSpace(seasonGroupName))
+            {
+                return false;
+            }
+
+            var trimmedSeasonGroupName = seasonGroupName.Trim();
+            var hasAsciiLetter = false;
+
+            foreach (var c in trimmedSeasonGroupName)
+            {
+                if (IsCjkIdeographOrKanaOrHangul(c))
+                {
+                    return false;
+                }
+
+                if (char.IsWhiteSpace(c))
+                {
+                    continue;
+                }
+
+                if (IsAsciiLetter(c))
+                {
+                    hasAsciiLetter = true;
+                    continue;
+                }
+
+                if (char.IsDigit(c) || IsAllowedEnglishStylePunctuation(c))
+                {
+                    continue;
+                }
+
+                return false;
+            }
+
+            return hasAsciiLetter;
+        }
+
+        private static bool IsAsciiLetter(char c)
+        {
+            return (c is >= 'A' and <= 'Z') || (c is >= 'a' and <= 'z');
+        }
+
+        private static bool IsAllowedEnglishStylePunctuation(char c)
+        {
+            return c is '-' or '_' or '.' or ':' or '/' or '&' or '\'' or '(' or ')' or '+' or '!' or '#';
+        }
+
+        private static bool IsCjkIdeographOrKanaOrHangul(char c)
+        {
+            return c is >= '\u3400' and <= '\u4DBF'
+                or >= '\u4E00' and <= '\u9FFF'
+                or >= '\u3040' and <= '\u309F'
+                or >= '\u30A0' and <= '\u30FF'
+                or >= '\u31F0' and <= '\u31FF'
+                or >= '\u1100' and <= '\u11FF'
+                or >= '\u3130' and <= '\u318F'
+                or >= '\uAC00' and <= '\uD7AF'
+                or >= '\uFF66' and <= '\uFF9D';
         }
     }
 }

@@ -303,7 +303,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                 var info = new SeasonInfo()
                 {
-                    Name = "第 18 季",
+                    Name = "当前中文标题",
                     IndexNumber = 18,
                     MetadataLanguage = "zh",
                     IsAutomated = true,
@@ -321,7 +321,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 };
                 var doubanApi = CreateThrowingDoubanApi(loggerFactory, "tmdb-only 自动季元数据链路不应再访问 Douban。");
                 var tmdbApi = new TmdbApi(loggerFactory);
-                SeedTmdbSeason(tmdbApi, 34860, 18, "zh", "第18季");
+                SeedTmdbSeason(tmdbApi, 34860, 18, "zh", "Season 18");
                 var omdbApi = new OmdbApi(loggerFactory);
                 var imdbApi = new ImdbApi(loggerFactory);
 
@@ -332,7 +332,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                     Assert.IsNotNull(result.Item, "tmdb-only 应保留有效的 seriesTmdbId -> GetMetadataByTmdb(...) 季级回退。");
                     Assert.IsTrue(result.HasMetadata);
-                    Assert.AreEqual("第18季", result.Item.Name);
+                    Assert.AreEqual("Season 18", result.Item.Name, "普通 TMDb season 路径应继续直接采用 GetSeasonAsync(...) 的英文季名，不受显式剧集组英文保护影响。 ");
                     Assert.AreEqual(18, result.Item.IndexNumber);
                 }).GetAwaiter().GetResult();
             }
