@@ -16,10 +16,10 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
     public sealed class AutoCreateCollectionTask : IScheduledTask, IDisposable
     {
         private static readonly Action<ILogger, Exception?> LogStart =
-            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ExecuteAsync)), "开始扫描媒体库自动创建合集...");
+            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ExecuteAsync)), "[MetaShark] 开始自动创建合集扫描.");
 
         private static readonly Action<ILogger, Exception?> LogCompleted =
-            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(ExecuteAsync)), "扫描媒体库自动创建合集执行完成");
+            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(ExecuteAsync)), "[MetaShark] 自动创建合集扫描执行完成.");
 
         private readonly BoxSetManager boxSetManager;
         private readonly ILogger logger;

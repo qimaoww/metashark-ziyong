@@ -48,6 +48,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         /// </summary>
         public const string TmdbProviderName = "TheMovieDb";
 
+        private const string MetaSharkLogPrefix = "[MetaShark]";
+
         private static readonly Action<ILogger, string, Exception?> LogMetaSharkInfo =
             LoggerMessage.Define<string>(LogLevel.Information, new EventId(1, nameof(Log)), "[MetaShark] {Message}");
 
@@ -134,7 +136,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     }
                 }
 
-                this.Log("GetImageResponse url: {0}", urlString);
+                this.Log("开始获取图片响应. url: {0}", urlString);
 
                 // 豆瓣图，带referer下载
                 using (var requestMessage = new HttpRequestMessage(HttpMethod.Get, urlString))
@@ -147,7 +149,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
             else
             {
-                this.Log("GetImageResponse url: {0}", urlString);
+                this.Log("开始获取图片响应. url: {0}", urlString);
                 using var client = this.HttpClientFactory.CreateClient();
                 return await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
             }
@@ -160,7 +162,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return null;
             }
 
-            this.Log($"GuestDoubanSeasonByYear of [name]: {seriesName} [year]: {year}");
+            this.Log("按年份猜测 Douban 季信息. name: {0} year: {1}", seriesName, year);
 
             // 先通过suggest接口查找，减少搜索页访问次数，避免封禁（suggest没法区分电影或电视剧，排序也比搜索页差些）
             if (Config.EnableDoubanAvoidRiskControl)
@@ -169,14 +171,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var suggestItem = suggestResult.Where(x => x.Year == year && x.Name == seriesName).FirstOrDefault();
                 if (suggestItem != null)
                 {
-                    this.Log($"Found douban [id]: {suggestItem.Name}({suggestItem.Sid}) (suggest)");
+                    this.Log("已找到 Douban id（suggest）. name: {0} sid: {1}", suggestItem.Name, suggestItem.Sid);
                     return suggestItem.Sid;
                 }
 
                 suggestItem = suggestResult.Where(x => x.Year == year).FirstOrDefault();
                 if (suggestItem != null)
                 {
-                    this.Log($"Found douban [id]: {suggestItem.Name}({suggestItem.Sid}) (suggest)");
+                    this.Log("已找到 Douban id（suggest）. name: {0} sid: {1}", suggestItem.Name, suggestItem.Sid);
                     return suggestItem.Sid;
                 }
             }
@@ -190,15 +192,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var nameIndexNumber = ParseChineseSeasonNumberByName(item.Name);
                 if (nameIndexNumber.HasValue && seasonNumber.HasValue && nameIndexNumber != seasonNumber)
                 {
-                    this.Log("GuestDoubanSeasonByYear not found!");
+                    this.Log("未按年份找到 Douban 季信息");
                     return null;
                 }
 
-                this.Log($"Found douban [id]: {item.Name}({item.Sid})");
+                this.Log("已找到 Douban id. name: {0} sid: {1}", item.Name, item.Sid);
                 return item.Sid;
             }
 
-            this.Log("GuestDoubanSeasonByYear not found!");
+            this.Log("未按年份找到 Douban 季信息");
             return null;
         }
 
@@ -222,18 +224,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 seasonName = name;
             }
 
-            this.Log($"GuestDoubanSeasonBySeasonNameAsync of [name]: {seasonName} 或 {chineseSeasonName}");
+            this.Log("按季名猜测 Douban 季信息. seasonName: {0} chineseSeasonName: {1}", seasonName, chineseSeasonName);
 
             // 通过名称精确匹配
             var result = await this.DoubanApi.SearchAsync(name, cancellationToken).ConfigureAwait(false);
             var item = result.Where(x => x.Category == "电视剧" && x.Rating > 0 && (x.Name == seasonName || x.Name == chineseSeasonName)).FirstOrDefault();
             if (item != null && !string.IsNullOrEmpty(item.Sid))
             {
-                this.Log($"Found douban [id]: {item.Name}({item.Sid})");
+                this.Log("已找到 Douban id. name: {0} sid: {1}", item.Name, item.Sid);
                 return item.Sid;
             }
 
-            this.Log("GuestDoubanSeasonBySeasonNameAsync not found!");
+            this.Log("未按季名找到 Douban 季信息");
             return null;
         }
 
@@ -243,7 +245,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 当没有 season 级目录时，或 season 文件夹特殊不规范命名时，会解析不到 seasonNumber，这时 path 为空，直接返回
             if (string.IsNullOrEmpty(path))
             {
-                this.Log($"Season path is empty!");
+                this.Log("季路径为空");
                 return null;
             }
 
@@ -266,7 +268,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 if (seasonNumber > 0)
                 {
-                    this.Log($"Found season number of filename: {fileName} seasonNumber: {seasonNumber}");
+                    this.Log("已从文件名解析季号. fileName: {0} seasonNumber: {1}", fileName, seasonNumber);
                     return seasonNumber;
                 }
             }
@@ -279,7 +281,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var seasonNumber = match.Groups[1].Value.ToInt();
                 if (seasonNumber > 0)
                 {
-                    this.Log($"Found season number of filename: {fileName} seasonNumber: {seasonNumber}");
+                    this.Log("已从文件名解析季号. fileName: {0} seasonNumber: {1}", fileName, seasonNumber);
                     return seasonNumber;
                 }
             }
@@ -297,7 +299,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             {
                 if (Regex.IsMatch(fileName, entry.Key))
                 {
-                    this.Log($"Found season number of filename: {fileName} seasonNumber: {entry.Value}");
+                    this.Log("已从文件名解析季号. fileName: {0} seasonNumber: {1}", fileName, entry.Value);
                     return entry.Value;
                 }
             }
@@ -309,7 +311,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             //     var seasonNumber = match.Groups[1].Value.ToInt();
             //     if (seasonNumber > 0)
             //     {
-            //         this.Log($"Found season number of filename: {fileName} seasonNumber: {seasonNumber}");
+            //         this.Log("已从文件名解析季号. fileName: {0} seasonNumber: {1}", fileName, seasonNumber);
             //         return seasonNumber;
             //     }
             // }
@@ -535,7 +537,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var seriesId = seriesTmdbId.ToString(CultureInfo.InvariantCulture);
             if (TmdbEpisodeGroupMapping.TryGetGroupId(Config.TmdbEpisodeGroupMap, seriesId, out var groupId))
             {
-                this.Log("TMDb episode group mapping hit: seriesId={0} groupId={1} season={2} episode={3}", seriesId, groupId, seasonNumber, episodeNumber);
+                this.Log("TMDb 剧集组映射命中. seriesId={0} groupId={1} season={2} episode={3}", seriesId, groupId, seasonNumber, episodeNumber);
                 var group = await this.TmdbApi
                     .GetEpisodeGroupByIdAsync(groupId, normalizedLanguage, cancellationToken)
                     .ConfigureAwait(false);
@@ -547,7 +549,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var ep = season?.Episodes.Find(e => e.Order == episodeNumber - 1);
                     if (ep is not null)
                     {
-                        this.Log("TMDb episode group mapping resolved: seriesId={0} groupId={1} season={2} episode={3} -> S{4}E{5}", seriesId, groupId, seasonNumber, episodeNumber, ep.SeasonNumber, ep.EpisodeNumber);
+                        this.Log("TMDb 剧集组映射已解析. seriesId={0} groupId={1} season={2} episode={3} -> S{4}E{5}", seriesId, groupId, seasonNumber, episodeNumber, ep.SeasonNumber, ep.EpisodeNumber);
                         resolvedSeasonNumber = ep.SeasonNumber;
                         resolvedEpisodeNumber = ep.EpisodeNumber;
                         resolvedByEpisodeGroupMapping = true;
@@ -569,7 +571,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var ep = season?.Episodes.Find(e => e.Order == episodeNumber - 1);
                     if (ep is not null)
                     {
-                        this.Log("TMDb display order mapping resolved: seriesId={0} displayOrder={1} season={2} episode={3} -> S{4}E{5}", seriesId, displayOrder, seasonNumber, episodeNumber, ep.SeasonNumber, ep.EpisodeNumber);
+                        this.Log("TMDb 播放顺序映射已解析. seriesId={0} displayOrder={1} season={2} episode={3} -> S{4}E{5}", seriesId, displayOrder, seasonNumber, episodeNumber, ep.SeasonNumber, ep.EpisodeNumber);
                         resolvedSeasonNumber = ep.SeasonNumber;
                         resolvedEpisodeNumber = ep.EpisodeNumber;
                     }
@@ -588,7 +590,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var doubanId = this.RegDoubanIdAttribute.FirstMatchGroup(fileName);
             if (!string.IsNullOrWhiteSpace(doubanId))
             {
-                this.Log($"Found douban [id] by attr: {doubanId}");
+                this.Log("已通过属性找到 Douban id. doubanId: {0}", doubanId);
                 return doubanId;
             }
 
@@ -596,7 +598,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var searchName = !string.IsNullOrEmpty(parseResult.ChineseName) ? parseResult.ChineseName : parseResult.Name;
             info.Year = parseResult.Year;  // 默认parser对anime年份会解析出错，以anitomy为准
 
-            this.Log($"GuessByDouban of [name]: {info.Name} [file_name]: {fileName} [year]: {info.Year} [search name]: {searchName}");
+            this.Log("开始猜测 Douban 元数据. name: {0} fileName: {1} year: {2} searchName: {3}", info.Name, fileName, info.Year, searchName);
             List<DoubanSubject> result;
             DoubanSubject? item;
 
@@ -609,14 +611,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     item = result.Where(x => x.Year == info.Year && x.Name == searchName).FirstOrDefault();
                     if (item != null)
                     {
-                        this.Log($"Found douban [id]: {item.Name}({item.Sid}) (suggest)");
+                        this.Log("已找到 Douban id（suggest）. name: {0} sid: {1}", item.Name, item.Sid);
                         return item.Sid;
                     }
 
                     item = result.Where(x => x.Year == info.Year).FirstOrDefault();
                     if (item != null)
                     {
-                        this.Log($"Found douban [id]: {item.Name}({item.Sid}) (suggest)");
+                        this.Log("已找到 Douban id（suggest）. name: {0} sid: {1}", item.Name, item.Sid);
                         return item.Sid;
                     }
                 }
@@ -632,7 +634,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 item = result.Where(x => x.Category == cat && x.Year == info.Year).FirstOrDefault();
                 if (item != null)
                 {
-                    this.Log($"Found douban [id]: {item.Name}({item.Sid})");
+                    this.Log("已找到 Douban id. name: {0} sid: {1}", item.Name, item.Sid);
                     return item.Sid;
                 }
                 else
@@ -654,7 +656,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             item = result.Where(x => x.Category == cat).FirstOrDefault();
             if (item != null)
             {
-                this.Log($"Found douban [id] by first match: {item.Name}({item.Sid})");
+                this.Log("已通过首个结果找到 Douban id. name: {0} sid: {1}", item.Name, item.Sid);
                 return item.Sid;
             }
 
@@ -670,7 +672,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var tmdbId = this.RegTmdbIdAttribute.FirstMatchGroup(fileName);
             if (!string.IsNullOrWhiteSpace(tmdbId))
             {
-                this.Log($"Found tmdb [id] by attr: {tmdbId}");
+                this.Log("已通过属性找到 TMDb id. tmdbId: {0}", tmdbId);
                 return tmdbId;
             }
 
@@ -686,7 +688,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(info);
             var fileName = GetOriginalFileName(info);
 
-            this.Log($"GuestByTmdb of [name]: {name} [year]: {year}");
+            this.Log("开始猜测 TMDb 元数据. name: {0} year: {1}", name, year);
             switch (info)
             {
                 case MovieInfo:
@@ -696,7 +698,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var movieItem = FindFirst(movieResults, x => x.Title == name || x.OriginalTitle == name);
                     if (movieItem != null)
                     {
-                        this.Log($"Found tmdb [id]: {movieItem.Title}({movieItem.Id})");
+                        this.Log("已找到 TMDb id. name: {0} tmdbId: {1}", movieItem.Title, movieItem.Id);
                         return movieItem.Id.ToString(CultureInfo.InvariantCulture);
                     }
 
@@ -704,7 +706,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     if (movieItem != null)
                     {
                         // bt种子都是英文名，但电影是中日韩泰印法地区时，都不适用相似匹配，去掉限制
-                        this.Log($"Found tmdb [id]: {movieItem.Title}({movieItem.Id})");
+                        this.Log("已找到 TMDb id. name: {0} tmdbId: {1}", movieItem.Title, movieItem.Id);
                         return movieItem.Id.ToString(CultureInfo.InvariantCulture);
                     }
 
@@ -717,7 +719,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var seriesItem = FindFirst(seriesResults, x => (x.Name == name || x.OriginalName == name) && x.FirstAirDate?.Year == year);
                     if (seriesItem != null)
                     {
-                        this.Log($"Found tmdb [id]: -> {seriesItem.Name}({seriesItem.Id})");
+                        this.Log("已找到 TMDb id. name: {0} tmdbId: {1}", seriesItem.Name, seriesItem.Id);
                         return seriesItem.Id.ToString(CultureInfo.InvariantCulture);
                     }
 
@@ -725,7 +727,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     seriesItem = FindFirst(seriesResults, x => x.FirstAirDate?.Year == year);
                     if (seriesItem != null)
                     {
-                        this.Log($"Found tmdb [id]: -> {seriesItem.Name}({seriesItem.Id})");
+                        this.Log("已找到 TMDb id. name: {0} tmdbId: {1}", seriesItem.Name, seriesItem.Id);
                         return seriesItem.Id.ToString(CultureInfo.InvariantCulture);
                     }
 
@@ -733,7 +735,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     seriesItem = FindFirst(seriesResults, x => x.Name == name || x.OriginalName == name);
                     if (seriesItem != null)
                     {
-                        this.Log($"Found tmdb [id]: -> {seriesItem.Name}({seriesItem.Id})");
+                        this.Log("已找到 TMDb id. name: {0} tmdbId: {1}", seriesItem.Name, seriesItem.Id);
                         return seriesItem.Id.ToString(CultureInfo.InvariantCulture);
                     }
 
@@ -741,14 +743,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     if (seriesItem != null)
                     {
                         // bt种子都是英文名，但电影是中日韩泰印法地区时，都不适用相似匹配，去掉限制
-                        this.Log($"Found tmdb [id]: -> {seriesItem.Name}({seriesItem.Id})");
+                        this.Log("已找到 TMDb id. name: {0} tmdbId: {1}", seriesItem.Name, seriesItem.Id);
                         return seriesItem.Id.ToString(CultureInfo.InvariantCulture);
                     }
 
                     break;
             }
 
-            this.Log($"Not found tmdb id by [name]: {name} [year]: {year}");
+            this.Log("未按名称找到 TMDb id. name: {0} year: {1}", name, year);
             return null;
         }
 
@@ -768,7 +770,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     if (findResult?.MovieResults != null && findResult.MovieResults.Count > 0)
                     {
                         var tmdbId = findResult.MovieResults[0].Id;
-                        this.Log($"Found tmdb [id]: {tmdbId} by imdb id: {imdb}");
+                        this.Log("已通过 IMDB id 找到 TMDb id. imdbId: {0} tmdbId: {1}", imdb, tmdbId);
                         return $"{tmdbId}";
                     }
 
@@ -777,21 +779,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     if (findResult?.TvResults != null && findResult.TvResults.Count > 0)
                     {
                         var tmdbId = findResult.TvResults[0].Id;
-                        this.Log($"Found tmdb [id]: {tmdbId} by imdb id: {imdb}");
+                        this.Log("已通过 IMDB id 找到 TMDb id. imdbId: {0} tmdbId: {1}", imdb, tmdbId);
                         return $"{tmdbId}";
                     }
 
                     if (findResult?.TvEpisode != null && findResult.TvEpisode.Count > 0)
                     {
                         var tmdbId = findResult.TvEpisode[0].ShowId;
-                        this.Log($"Found tmdb [id]: {tmdbId} by imdb id: {imdb}");
+                        this.Log("已通过 IMDB id 找到 TMDb id. imdbId: {0} tmdbId: {1}", imdb, tmdbId);
                         return $"{tmdbId}";
                     }
 
                     if (findResult?.TvSeason != null && findResult.TvSeason.Count > 0)
                     {
                         var tmdbId = findResult.TvSeason[0].ShowId;
-                        this.Log($"Found tmdb [id]: {tmdbId} by imdb id: {imdb}");
+                        this.Log("已通过 IMDB id 找到 TMDb id. imdbId: {0} tmdbId: {1}", imdb, tmdbId);
                         return $"{tmdbId}";
                     }
 
@@ -800,7 +802,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     break;
             }
 
-            this.Log($"Not found tmdb id by imdb id: {imdb}");
+            this.Log("未按 IMDB id 找到 TMDb id. imdbId: {0}", imdb);
             return null;
         }
 
@@ -835,6 +837,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             var format = message ?? string.Empty;
             var formatted = string.Format(CultureInfo.InvariantCulture, format, args);
+            if (formatted.StartsWith(MetaSharkLogPrefix, StringComparison.Ordinal))
+            {
+                formatted = formatted.Substring(MetaSharkLogPrefix.Length).TrimStart();
+            }
+
             LogMetaSharkInfo(this.Logger, formatted, null);
         }
 

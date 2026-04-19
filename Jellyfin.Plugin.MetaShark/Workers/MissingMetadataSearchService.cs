@@ -43,11 +43,17 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             BaseItemKind.BoxSet,
         };
 
-        private static readonly Action<ILogger, Exception?> LogRunPlaceholder =
-            LoggerMessage.Define(LogLevel.Debug, new EventId(1, nameof(RunFullLibrarySearchAsync)), "Missing metadata full-library search service invoked.");
+        private static readonly Action<ILogger, Exception?> LogRunStarted =
+            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(RunFullLibrarySearchAsync)), "[MetaShark] 开始全库搜索缺失元数据条目.");
 
         private static readonly Action<ILogger, Exception?> LogRunSkippedBecauseAlreadyRunning =
-            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(RunFullLibrarySearchAsync)), "Missing metadata full-library search skipped because another run is already in progress.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(RunFullLibrarySearchAsync)), "[MetaShark] 跳过全库搜索缺失元数据条目. reason=AlreadyRunning.");
+
+        private static readonly Action<ILogger, Exception?> LogNoCandidates =
+            LoggerMessage.Define(LogLevel.Information, new EventId(3, nameof(RunFullLibrarySearchAsync)), "[MetaShark] 未找到缺失元数据条目.");
+
+        private static readonly Action<ILogger, Guid, string, string, int, Exception?> LogQueuedRefresh =
+            LoggerMessage.Define<Guid, string, string, int>(LogLevel.Debug, new EventId(4, nameof(RunFullLibrarySearchAsync)), "[MetaShark] 已排队缺失元数据刷新. itemId={ItemId} itemName={ItemName} reason={Reason} delaySeconds={DelaySeconds}.");
 
         private readonly ILogger<MissingMetadataSearchService> logger;
         private readonly ILibraryManager libraryManager;
@@ -99,11 +105,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             try
             {
-                LogRunPlaceholder(this.logger, null);
+                LogRunStarted(this.logger, null);
 
                 var candidates = this.GetMissingMetadataCandidates();
                 if (candidates.Count == 0)
                 {
+                    LogNoCandidates(this.logger, null);
                     progress.Report(100);
                     return;
                 }
@@ -113,7 +120,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                     cancellationToken.ThrowIfCancellationRequested();
 
                     var candidate = candidates[processedCount];
+                    var reason = ResolveMissingMetadataCandidateReason(candidate).ToString();
                     this.providerManager.QueueRefresh(candidate.Id, this.CreateRefreshOptions(), RefreshPriority.Normal);
+                    LogQueuedRefresh(this.logger, candidate.Id, candidate.Name ?? string.Empty, reason, (int)QueueRefreshDelay.TotalSeconds, null);
                     progress.Report((processedCount + 1) * 100.0 / candidates.Count);
 
                     await this.delayAsync(QueueRefreshDelay, cancellationToken).ConfigureAwait(false);

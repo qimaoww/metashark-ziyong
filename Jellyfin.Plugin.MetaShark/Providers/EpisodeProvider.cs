@@ -31,25 +31,25 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     public class EpisodeProvider : BaseProvider, IRemoteMetadataProvider<Episode, EpisodeInfo>, IDisposable
     {
         private static readonly Action<ILogger, string, int, int, string, Exception?> LogTvdbPlacementLookup =
-            LoggerMessage.Define<string, int, int, string>(LogLevel.Debug, new EventId(2, nameof(LogTvdbPlacementLookup)), "TVDB special placement lookup. tvdbId={TvdbId} s{Season}e{Episode} lang={Lang}");
+            LoggerMessage.Define<string, int, int, string>(LogLevel.Debug, new EventId(2, nameof(LogTvdbPlacementLookup)), "[MetaShark] 查询 TVDB 特别篇定位. tvdbId={TvdbId} s{Season}e{Episode} lang={Lang}");
 
         private static readonly Action<ILogger, string, int, int, Exception?> LogTvdbPlacementNotFound =
-            LoggerMessage.Define<string, int, int>(LogLevel.Debug, new EventId(3, nameof(LogTvdbPlacementNotFound)), "TVDB special placement not found. tvdbId={TvdbId} s{Season}e{Episode}");
+            LoggerMessage.Define<string, int, int>(LogLevel.Debug, new EventId(3, nameof(LogTvdbPlacementNotFound)), "[MetaShark] 未找到 TVDB 特别篇定位. tvdbId={TvdbId} s{Season}e{Episode}");
 
         private static readonly Action<ILogger, string, int, Exception?> LogTvdbPlacementInvalidInput =
-            LoggerMessage.Define<string, int>(LogLevel.Debug, new EventId(4, nameof(LogTvdbPlacementInvalidInput)), "TVDB placement invalid input. tvdbId={TvdbId} episode={Episode}");
+            LoggerMessage.Define<string, int>(LogLevel.Debug, new EventId(4, nameof(LogTvdbPlacementInvalidInput)), "[MetaShark] TVDB 特别篇定位入参无效. tvdbId={TvdbId} episode={Episode}");
 
         private static readonly Action<ILogger, string, Exception?> LogTvdbPlacementEmptyList =
-            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(5, nameof(LogTvdbPlacementEmptyList)), "TVDB placement empty episode list. tvdbId={TvdbId}");
+            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(5, nameof(LogTvdbPlacementEmptyList)), "[MetaShark] TVDB 特别篇列表为空. tvdbId={TvdbId}");
 
         private static readonly Action<ILogger, string, int, Exception?> LogTvdbPlacementNoMatch =
-            LoggerMessage.Define<string, int>(LogLevel.Debug, new EventId(6, nameof(LogTvdbPlacementNoMatch)), "TVDB placement no match. tvdbId={TvdbId} episode={Episode}");
+            LoggerMessage.Define<string, int>(LogLevel.Debug, new EventId(6, nameof(LogTvdbPlacementNoMatch)), "[MetaShark] TVDB 特别篇列表未命中. tvdbId={TvdbId} episode={Episode}");
 
         private static readonly Action<ILogger, string, Exception?> LogTvdbIdMissing =
-            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(7, nameof(LogTvdbIdMissing)), "TVDB id not found for series. source={Source}");
+            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(7, nameof(LogTvdbIdMissing)), "[MetaShark] 未找到剧集 TVDB id. source={Source}");
 
         private static readonly Action<ILogger, string, Exception?> LogTvdbIdResolved =
-            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(8, nameof(LogTvdbIdResolved)), "TVDB id resolved: {TvdbId}");
+            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(8, nameof(LogTvdbIdResolved)), "[MetaShark] 已解析剧集 TVDB id. tvdbId={TvdbId}");
 
         private static readonly HashSet<char> SimplifiedOverviewScriptDistinctiveCharacters = new HashSet<char>("个么乐习书亲众优伤儿这来为们让带开车辆两厉讲较听说点体与无龙猫坏关级评论丰围绕争夺复选战遗嘱发间医会现导经过国际组织怀惊计划实验档录历样欢觉观记议语误读轻还迟释难顺须顾顿预领题额颜风飞宫归马讶");
         private static readonly HashSet<char> TraditionalOverviewScriptDistinctiveCharacters = new HashSet<char>("個麼樂習書親眾優傷兒這來為們讓帶開車輛兩厲講較聽說點體與無龍貓壞關級評論豐圍繞爭奪複選戰遺囑發間醫會現導經過國際組織懷驚計畫實驗檔錄歷樣歡覺觀記議語誤讀輕還遲釋難順須顧頓預領題額顏風飛宮歸馬訝");
@@ -100,7 +100,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteSearchResult>> GetSearchResults(EpisodeInfo searchInfo, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(searchInfo);
-            this.Log($"GetEpisodeSearchResults of [name]: {searchInfo.Name}");
+            this.Log("开始搜索剧集单集候选. name: {0}", searchInfo.Name);
             return await Task.FromResult(Enumerable.Empty<RemoteSearchResult>()).ConfigureAwait(false);
         }
 
@@ -115,7 +115,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 覆盖所有元数据：info的Name、IndexNumber和ParentIndexNumber是从文件名解析出来的，provinceIds保留所有旧值
             // 搜索缺少的元数据：info的Name、IndexNumber和ParentIndexNumber是从当前的元数据获取，provinceIds保留所有旧值
             var fileName = Path.GetFileName(info.Path);
-            this.Log($"GetEpisodeMetadata of [name]: {info.Name} [fileName]: {fileName} number: {info.IndexNumber} ParentIndexNumber: {info.ParentIndexNumber} IsMissingEpisode: {info.IsMissingEpisode} EnableTmdb: {Config.EnableTmdb} DisplayOrder: {info.SeriesDisplayOrder}");
+            this.Log("开始获取单集元数据. name: {0} fileName: {1} episodeNumber: {2} seasonNumber: {3} isMissingEpisode: {4} enableTmdb: {5} displayOrder: {6}", info.Name, fileName, info.IndexNumber, info.ParentIndexNumber, info.IsMissingEpisode, Config.EnableTmdb, info.SeriesDisplayOrder);
             var result = new MetadataResult<Episode>();
 
             // Allowing this will dramatically increase scan times
@@ -150,7 +150,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             if (episodeNumber is null or 0 || seasonNumber is null || string.IsNullOrEmpty(seriesTmdbId))
             {
-                this.Log("缺少元数据. episodeNumber: {0} seasonNumber: {1} seriesTmdbId:{2}", episodeNumber, seasonNumber, seriesTmdbId);
+                this.Log("缺少单集元数据. episodeNumber: {0} seasonNumber: {1} seriesTmdbId: {2}", episodeNumber, seasonNumber, seriesTmdbId);
                 return result;
             }
 
@@ -169,7 +169,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 .ConfigureAwait(false);
             if (episodeResult == null)
             {
-                this.Log("找不到tmdb剧集数据. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, seasonNumber, episodeNumber, info.SeriesDisplayOrder);
+                this.Log("未找到 TMDb 单集数据. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, seasonNumber, episodeNumber, info.SeriesDisplayOrder);
                 return result;
             }
 
@@ -250,7 +250,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         item.AirsBeforeEpisodeNumber = placement.AirsBeforeEpisodeNumber;
                         item.AirsAfterSeasonNumber = placement.AirsAfterSeasonNumber;
                         this.Log(
-                            "TVDB special placement result. tvdbId: {0} s{1}e{2} -> beforeSeason: {3} beforeEpisode: {4} afterSeason: {5}",
+                            "TVDB 特别篇定位结果. tvdbId: {0} s{1}e{2} -> beforeSeason: {3} beforeEpisode: {4} afterSeason: {5}",
                             seriesTvdbId,
                             seasonNumber,
                             episodeNumber,
@@ -265,7 +265,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
                 else
                 {
-                    this.Log("TVDB special placement skipped (missing tvdb id). s{0}e{1}", seasonNumber, episodeNumber);
+                    this.Log("跳过 TVDB 特别篇定位，缺少 TVDB id. s{0}e{1}", seasonNumber, episodeNumber);
                 }
             }
 
@@ -306,7 +306,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var selectedOverviewSource = translationOverviewDiagnostic.Overview != null
                     ? "translation"
                     : detailsOverviewDiagnostic.Overview != null ? "details" : "none";
-                this.LogEpisodeOverviewInputs(
+                this.LogOverviewDiagnosticsInputs(
                     episodeId,
                     itemPath,
                     detailsOverview,
@@ -315,7 +315,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     seasonOverview,
                     loggedMetadataRefreshMode,
                     loggedReplaceAllMetadata);
-                this.LogEpisodeOverviewDecision(
+                this.LogOverviewDiagnosticsDecision(
                     episodeId,
                     itemPath,
                     CreateEpisodeLocalizedValue(overviewDecision.Overview, overviewDecision.ResultLanguage),
@@ -443,7 +443,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // TODO: 会导致覆盖用户手动修改元数据的季数
             if (parseResult.ParentIndexNumber.HasValue && parseResult.ParentIndexNumber > 0 && info.ParentIndexNumber != parseResult.ParentIndexNumber)
             {
-                this.Log("FixSeasonNumber by anitomy. old: {0} new: {1}", info.ParentIndexNumber, parseResult.ParentIndexNumber);
+                this.Log("已按 Anitomy 修正季号. old: {0} new: {1}", info.ParentIndexNumber, parseResult.ParentIndexNumber);
                 info.ParentIndexNumber = parseResult.ParentIndexNumber;
             }
 
@@ -473,13 +473,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var guestSeasonNumber = this.GuessSeasonNumberByDirectoryName(seasonFolderPath);
                     if (guestSeasonNumber.HasValue && guestSeasonNumber != info.ParentIndexNumber)
                     {
-                        this.Log("FixSeasonNumber by season path. old: {0} new: {1}", info.ParentIndexNumber, guestSeasonNumber);
+                        this.Log("已按季目录修正季号. old: {0} new: {1}", info.ParentIndexNumber, guestSeasonNumber);
                         info.ParentIndexNumber = guestSeasonNumber;
                     }
                 }
                 else
                 {
-                    this.Log("FixSeasonNumber by virtual season. old: {0} new: {1}", info.ParentIndexNumber, 1);
+                    this.Log("已按虚拟季修正季号. old: {0} new: {1}", info.ParentIndexNumber, 1);
                     info.ParentIndexNumber = 1;
                 }
             }
@@ -496,7 +496,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 if (guestSeasonNumber.HasValue && guestSeasonNumber != info.ParentIndexNumber)
                 {
-                    this.Log("FixSeasonNumber by season path. old: {0} new: {1}", info.ParentIndexNumber, guestSeasonNumber);
+                    this.Log("已按季目录修正季号. old: {0} new: {1}", info.ParentIndexNumber, guestSeasonNumber);
                     info.ParentIndexNumber = guestSeasonNumber;
                 }
             }
@@ -504,7 +504,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 识别特典
             if (info.ParentIndexNumber is null && NameParser.IsAnime(fileName) && (parseResult.IsSpecial || NameParser.IsSpecialDirectory(info.Path)))
             {
-                this.Log("FixSeasonNumber to special. old: {0} new: 0", info.ParentIndexNumber);
+                this.Log("已将季号修正为特别篇. old: {0} new: 0", info.ParentIndexNumber);
                 info.ParentIndexNumber = 0;
             }
 
@@ -517,7 +517,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 修正 episode number
             if (parseResult.IndexNumber.HasValue && info.IndexNumber != parseResult.IndexNumber)
             {
-                this.Log("FixEpisodeNumber by anitomy. old: {0} new: {1}", info.IndexNumber, parseResult.IndexNumber);
+                this.Log("已按 Anitomy 修正集号. old: {0} new: {1}", info.IndexNumber, parseResult.IndexNumber);
                 info.IndexNumber = parseResult.IndexNumber;
             }
 
@@ -1012,7 +1012,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private void LogSearchMissingMetadataTitleBackfillInputs(Guid itemId, string itemPath, string? lookupLanguage, string? titleMetadataLanguage, string? episodePreferredLanguage, string? seriesPreferredLanguage, string? seasonPreferredLanguage, EpisodeLocalizedValue? detailsTitle, EpisodeLocalizedValue? translationTitle, EpisodeLocalizedValue? effectiveProviderTitle, bool isSearchMissingMetadataRequest)
         {
             this.Logger.LogInformation(
-                "EpisodeTitleBackfillInputs itemId={ItemId} itemPath={ItemPath} lookupLanguage={LookupLanguage} titleMetadataLanguage={TitleMetadataLanguage} episodePreferredLanguage={EpisodePreferredLanguage} seriesPreferredLanguage={SeriesPreferredLanguage} seasonPreferredLanguage={SeasonPreferredLanguage} detailsTitle={DetailsTitle} detailsTitleSourceLanguage={DetailsTitleSourceLanguage} translationTitle={TranslationTitle} translationTitleSourceLanguage={TranslationTitleSourceLanguage} effectiveProviderTitle={EffectiveProviderTitle} effectiveProviderTitleSourceLanguage={EffectiveProviderTitleSourceLanguage} isSearchMissingMetadataRequest={IsSearchMissingMetadataRequest}.",
+                "[MetaShark] 剧集标题回填输入. itemId={ItemId} itemPath={ItemPath} lookupLanguage={LookupLanguage} titleMetadataLanguage={TitleMetadataLanguage} episodePreferredLanguage={EpisodePreferredLanguage} seriesPreferredLanguage={SeriesPreferredLanguage} seasonPreferredLanguage={SeasonPreferredLanguage} detailsTitle={DetailsTitle} detailsTitleSourceLanguage={DetailsTitleSourceLanguage} translationTitle={TranslationTitle} translationTitleSourceLanguage={TranslationTitleSourceLanguage} effectiveProviderTitle={EffectiveProviderTitle} effectiveProviderTitleSourceLanguage={EffectiveProviderTitleSourceLanguage} isSearchMissingMetadataRequest={IsSearchMissingMetadataRequest}.",
                 itemId,
                 itemPath,
                 lookupLanguage ?? string.Empty,
@@ -1033,7 +1033,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             this.Logger.Log(
                 liveVisible ? LogLevel.Information : LogLevel.Debug,
-                "EpisodeTitleBackfillQueued itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} candidateTitle={CandidateTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                "[MetaShark] 已排队剧集标题回填. itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} candidateTitle={CandidateTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
                 itemId,
                 itemPath,
                 originalTitle,
@@ -1042,7 +1042,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 replaceAllMetadata ?? string.Empty);
         }
 
-        private void LogEpisodeOverviewInputs(Guid itemId, string itemPath, EpisodeLocalizedValue? detailsOverview, EpisodeLocalizedValue? translationOverview, string? seriesOverview, string? seasonOverview, string? metadataRefreshMode, string? replaceAllMetadata)
+        private void LogOverviewDiagnosticsInputs(Guid itemId, string itemPath, EpisodeLocalizedValue? detailsOverview, EpisodeLocalizedValue? translationOverview, string? seriesOverview, string? seasonOverview, string? metadataRefreshMode, string? replaceAllMetadata)
         {
             var details = DescribeOverviewText(detailsOverview?.Value, detailsOverview?.SourceLanguage);
             var translation = DescribeOverviewText(translationOverview?.Value, translationOverview?.SourceLanguage);
@@ -1050,7 +1050,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var season = DescribeOverviewText(seasonOverview, null);
 
             this.Logger.LogDebug(
-                "EpisodeOverviewInputs itemId={ItemId} itemPath={ItemPath} detailsOverviewState={DetailsOverviewState} detailsOverviewLength={DetailsOverviewLength} detailsOverviewHash={DetailsOverviewHash} detailsOverviewSourceLanguage={DetailsOverviewSourceLanguage} detailsOverviewScriptKind={DetailsOverviewScriptKind} translationOverviewState={TranslationOverviewState} translationOverviewLength={TranslationOverviewLength} translationOverviewHash={TranslationOverviewHash} translationOverviewSourceLanguage={TranslationOverviewSourceLanguage} translationOverviewScriptKind={TranslationOverviewScriptKind} seriesOverviewState={SeriesOverviewState} seriesOverviewLength={SeriesOverviewLength} seriesOverviewHash={SeriesOverviewHash} seriesOverviewSourceLanguage={SeriesOverviewSourceLanguage} seriesOverviewScriptKind={SeriesOverviewScriptKind} seasonOverviewState={SeasonOverviewState} seasonOverviewLength={SeasonOverviewLength} seasonOverviewHash={SeasonOverviewHash} seasonOverviewSourceLanguage={SeasonOverviewSourceLanguage} seasonOverviewScriptKind={SeasonOverviewScriptKind} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                "[MetaShark] 剧集简介诊断输入. itemId={ItemId} itemPath={ItemPath} detailsOverviewState={DetailsOverviewState} detailsOverviewLength={DetailsOverviewLength} detailsOverviewHash={DetailsOverviewHash} detailsOverviewSourceLanguage={DetailsOverviewSourceLanguage} detailsOverviewScriptKind={DetailsOverviewScriptKind} translationOverviewState={TranslationOverviewState} translationOverviewLength={TranslationOverviewLength} translationOverviewHash={TranslationOverviewHash} translationOverviewSourceLanguage={TranslationOverviewSourceLanguage} translationOverviewScriptKind={TranslationOverviewScriptKind} seriesOverviewState={SeriesOverviewState} seriesOverviewLength={SeriesOverviewLength} seriesOverviewHash={SeriesOverviewHash} seriesOverviewSourceLanguage={SeriesOverviewSourceLanguage} seriesOverviewScriptKind={SeriesOverviewScriptKind} seasonOverviewState={SeasonOverviewState} seasonOverviewLength={SeasonOverviewLength} seasonOverviewHash={SeasonOverviewHash} seasonOverviewSourceLanguage={SeasonOverviewSourceLanguage} seasonOverviewScriptKind={SeasonOverviewScriptKind} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
                 itemId,
                 itemPath,
                 details.State,
@@ -1077,12 +1077,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 replaceAllMetadata ?? string.Empty);
         }
 
-        private void LogEpisodeOverviewDecision(Guid itemId, string itemPath, EpisodeLocalizedValue? selectedOverview, string selectedOverviewSource, string rejectReason, string translationRejectReason, string detailsRejectReason, string? metadataRefreshMode, string? replaceAllMetadata)
+        private void LogOverviewDiagnosticsDecision(Guid itemId, string itemPath, EpisodeLocalizedValue? selectedOverview, string selectedOverviewSource, string rejectReason, string translationRejectReason, string detailsRejectReason, string? metadataRefreshMode, string? replaceAllMetadata)
         {
             var selected = DescribeOverviewText(selectedOverview?.Value, selectedOverview?.SourceLanguage);
 
             this.Logger.LogDebug(
-                "EpisodeOverviewDecision itemId={ItemId} itemPath={ItemPath} selectedOverviewState={SelectedOverviewState} selectedOverviewLength={SelectedOverviewLength} selectedOverviewHash={SelectedOverviewHash} selectedOverviewSourceLanguage={SelectedOverviewSourceLanguage} selectedOverviewScriptKind={SelectedOverviewScriptKind} selectedOverviewSource={SelectedOverviewSource} rejectReason={RejectReason} translationRejectReason={TranslationRejectReason} detailsRejectReason={DetailsRejectReason} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                "[MetaShark] 剧集简介诊断决策. itemId={ItemId} itemPath={ItemPath} selectedOverviewState={SelectedOverviewState} selectedOverviewLength={SelectedOverviewLength} selectedOverviewHash={SelectedOverviewHash} selectedOverviewSourceLanguage={SelectedOverviewSourceLanguage} selectedOverviewScriptKind={SelectedOverviewScriptKind} selectedOverviewSource={SelectedOverviewSource} rejectReason={RejectReason} translationRejectReason={TranslationRejectReason} detailsRejectReason={DetailsRejectReason} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
                 itemId,
                 itemPath,
                 selected.State,
@@ -1102,7 +1102,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             this.Logger.Log(
                 liveVisible ? LogLevel.Information : LogLevel.Debug,
-                "EpisodeTitleBackfillDecision reason={Reason} itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} resolvedTitle={ResolvedTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                "[MetaShark] 剧集标题回填决策. reason={Reason} itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} resolvedTitle={ResolvedTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
                 reason,
                 itemId,
                 itemPath,
@@ -1293,7 +1293,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var parseResult = NameParser.ParseEpisode(fileName);
             if (parseResult.IsExtra)
             {
-                this.Log($"Found anime extra of [name]: {fileName}");
+                this.Log("识别到动画特典，跳过常规单集处理. name: {0}", fileName);
                 var result = new MetadataResult<Episode>();
                 result.HasMetadata = true;
 

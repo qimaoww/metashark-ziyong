@@ -1,10 +1,12 @@
 using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -41,14 +43,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     CancellationToken.None),
                 Times.Once);
 
-            loggerStub.Verify(
-                x => x.Log(
-                    LogLevel.Debug,
-                    It.IsAny<EventId>(),
-                    It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("MetadataImport", StringComparison.Ordinal)),
-                    It.IsAny<Exception>(),
-                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-                Times.Once);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Name"] = series.Name,
+                    ["Id"] = series.Id,
+                    ["UpdateReason"] = ItemUpdateType.MetadataImport,
+                },
+                originalFormatContains: "[MetaShark] 收到电视缺图回填条目更新事件",
+                messageContains: ["[MetaShark] 收到电视缺图回填条目更新事件", $"itemId={series.Id}", "updateReason=MetadataImport"]);
         }
     }
 }

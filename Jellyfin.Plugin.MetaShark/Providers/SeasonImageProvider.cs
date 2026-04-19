@@ -45,7 +45,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteImageInfo>> GetImages(BaseItem item, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(item);
-            this.Log($"GetSeasonImages for item: {item.Name} number: {item.IndexNumber}");
+            this.Log("开始获取季图片. name: {0} seasonNumber: {1}", item.Name, item.IndexNumber);
             var season = (Season)item;
             var series = season.Series;
             var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;

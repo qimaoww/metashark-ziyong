@@ -4,6 +4,7 @@ using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Controllers;
 using Jellyfin.Plugin.MetaShark.Model;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
@@ -68,6 +69,16 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.AreEqual(1, result.Code);
             Assert.AreEqual(CreateExpectedSummary(queued: 1, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
             AssertQueuedSeries(harness.QueueCalls, addedSeries.Id);
+            LogAssert.AssertLoggedOnce(
+                harness.LoggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Count"] = 1,
+                },
+                originalFormatContains: "[MetaShark] 已排队剧集组映射刷新",
+                messageContains: ["[MetaShark] 已排队剧集组映射刷新", "Count=1"]);
         }
 
         [TestMethod]
@@ -147,6 +158,16 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.AreEqual(1, result.Code);
             Assert.AreEqual(CreateExpectedSummary(queued: 0, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
             Assert.AreEqual(0, harness.QueueCalls.Count);
+            LogAssert.AssertLoggedOnce(
+                harness.LoggerStub,
+                LogLevel.Warning,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Name"] = "Series with empty Id",
+                },
+                originalFormatContains: "[MetaShark] 跳过剧集组映射刷新",
+                messageContains: ["[MetaShark] 跳过剧集组映射刷新", "reason=EmptyId", "name=Series with empty Id"]);
         }
 
         [TestMethod]
@@ -310,15 +331,18 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
                 .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, options, priority) => queueCalls.Add(new QueueRefreshCall(itemId, options, priority)));
 
+            var loggerStub = new Mock<ILogger<ApiController>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
             var controller = new ApiController(
                 new Mock<IHttpClientFactory>().Object,
                 new DoubanApi(this.loggerFactory),
                 libraryManagerStub.Object,
                 providerManagerStub.Object,
                 new Mock<IFileSystem>().Object,
-                this.loggerFactory.CreateLogger<ApiController>());
+                loggerStub.Object);
 
-            return new ControllerHarness(controller, materializedItems, libraryManagerStub, queueCalls);
+            return new ControllerHarness(controller, materializedItems, libraryManagerStub, queueCalls, loggerStub);
         }
 
         private sealed record QueueRefreshCall(Guid ItemId, MetadataRefreshOptions Options, RefreshPriority Priority);
@@ -329,12 +353,14 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 ApiController controller,
                 IReadOnlyList<BaseItem> items,
                 Mock<ILibraryManager> libraryManagerStub,
-                IReadOnlyCollection<QueueRefreshCall> queueCalls)
+                IReadOnlyCollection<QueueRefreshCall> queueCalls,
+                Mock<ILogger<ApiController>> loggerStub)
             {
                 this.Controller = controller;
                 this.Items = items;
                 this.LibraryManagerStub = libraryManagerStub;
                 this.QueueCalls = queueCalls;
+                this.LoggerStub = loggerStub;
             }
 
             public ApiController Controller { get; }
@@ -344,6 +370,8 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             public Mock<ILibraryManager> LibraryManagerStub { get; }
 
             public IReadOnlyCollection<QueueRefreshCall> QueueCalls { get; }
+
+            public Mock<ILogger<ApiController>> LoggerStub { get; }
 
             public void Dispose()
             {

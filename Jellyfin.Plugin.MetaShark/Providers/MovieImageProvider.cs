@@ -52,7 +52,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
             var doubanAllowed = IsDoubanAllowed(this.ResolveImageSemantic());
-            this.Log($"GetImages for item: {item.Name} lang: {item.GetPreferredMetadataLanguage()} [metaSource]: {metaSource}");
+            this.Log("开始获取电影图片. name: {0} lang: {1} metaSource: {2}", item.Name, item.GetPreferredMetadataLanguage(), metaSource);
             if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
             {
                 var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
@@ -150,7 +150,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return remoteImages.OrderByLanguageDescending(language);
             }
 
-            this.Log($"Got images failed because the images of \"{item.Name}\" is empty!");
+            this.Log("获取电影图片失败，没有可用图片. name: {0}", item.Name);
             return new List<RemoteImageInfo>();
         }
 
@@ -170,7 +170,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var photo = await this.DoubanApi.GetWallpaperBySidAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (photo != null && photo.Count > 0)
                 {
-                    this.Log("GetBackdrop from douban sid: {0}", sid);
+                    this.Log("开始获取 Douban 背景图. sid: {0}", sid);
                     list = photo.Where(x => x.Width >= 1280 && x.Width <= 4096 && x.Width > x.Height * 1.3).Select(x =>
                     {
                         if (Config.EnableDoubanBackdropRaw)
@@ -209,7 +209,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 if (movie != null && !string.IsNullOrEmpty(movie.BackdropPath))
                 {
-                    this.Log("GetBackdrop from tmdb id: {0} lang: {1}", tmdbId, language);
+                    this.Log("开始获取 TMDb 背景图. tmdbId: {0} lang: {1}", tmdbId, language);
                     list.Add(new RemoteImageInfo
                     {
                         ProviderName = this.Name,
@@ -230,7 +230,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var language = item.GetPreferredMetadataLanguage();
             if (Config.EnableTmdbLogo && !string.IsNullOrEmpty(tmdbId))
             {
-                this.Log("GetLogos from tmdb id: {0}", tmdbId);
+                this.Log("开始获取 TMDb Logo. tmdbId: {0}", tmdbId);
                 var images = await this.TmdbApi
                 .GetMovieImagesAsync(tmdbId.ToInt(), string.Empty, string.Empty, cancellationToken)
                 .ConfigureAwait(false);

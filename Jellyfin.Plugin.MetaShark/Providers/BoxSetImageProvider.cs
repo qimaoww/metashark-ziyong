@@ -55,7 +55,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(item);
             var tmdbId = Convert.ToInt32(item.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
-            this.Log($"GetBoxSetImages of [name]: {item.Name} [tmdbId]: {tmdbId}");
+            this.Log("开始获取合集图片. name: {0} tmdbId: {1}", item.Name, tmdbId);
 
             if (tmdbId <= 0)
             {

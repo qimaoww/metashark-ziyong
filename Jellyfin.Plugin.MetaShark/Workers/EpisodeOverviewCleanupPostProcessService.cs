@@ -116,7 +116,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 this.pendingResolver.ReleaseClaim(candidate, claimToken);
                 this.logger.LogError(
                     ex,
-                    "Failed to persist episode overview cleanup for {ItemId}. trigger={Trigger} itemPath={ItemPath} currentOverview={CurrentOverview} updateReason={UpdateReason}.",
+                    "[MetaShark] 剧集简介清理保存失败. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} currentOverview={CurrentOverview} updateReason={UpdateReason}.",
                     episode.Id,
                     triggerName,
                     episode.Path ?? string.Empty,
@@ -127,7 +127,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             this.pendingResolver.Complete(candidate);
             this.logger.LogDebug(
-                "Applied episode overview cleanup for {ItemId}. trigger={Trigger} itemPath={ItemPath} currentOverviewLength={CurrentOverviewLength} updateReason={UpdateReason}.",
+                "[MetaShark] 已应用剧集简介清理. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} currentOverviewLength={CurrentOverviewLength} updateReason={UpdateReason}.",
                 episode.Id,
                 triggerName,
                 episode.Path ?? string.Empty,

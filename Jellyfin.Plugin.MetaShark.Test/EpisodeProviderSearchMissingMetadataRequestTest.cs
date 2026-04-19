@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
@@ -104,11 +106,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(TimeSpan.FromMinutes(2), savedCandidate.ExpiresAtUtc - savedCandidate.QueuedAtUtc);
             Assert.AreEqual(savedCandidate.QueuedAtUtc, savedCandidate.NextAttemptAtUtc.AddSeconds(-10));
             Assert.AreEqual(0, savedCandidate.AttemptCount);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "[MetaShark] 剧集标题回填决策", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
         }
 
         [TestMethod]
-        public async Task GetMetadata_WhenSearchMissingMetadataCandidateQueued_LogsEpisodeTitleBackfillDecisionAtInformation()
+        public async Task GetMetadata_WhenSearchMissingMetadataCandidateQueued_LogsTitleBackfillDecisionAtInformation()
         {
             EnsurePluginInstance();
             MetaSharkPlugin.Instance!.Configuration.EnableSearchMissingMetadataEpisodeTitleBackfill = true;
@@ -146,7 +148,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertLoggedMessage(
                 loggerProvider,
                 "EpisodeProvider",
-                "EpisodeTitleBackfillDecision",
+                "[MetaShark] 剧集标题回填决策",
                 "CandidateQueued",
                 $"itemId={episodeItem.Id}",
                 $"itemPath={info.Path}",
@@ -155,7 +157,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertLoggedMessage(
                 loggerProvider,
                 "EpisodeProvider",
-                "EpisodeTitleBackfillQueued",
+                "[MetaShark] 已排队剧集标题回填",
                 $"itemId={episodeItem.Id}",
                 $"itemPath={info.Path}",
                 "metadataRefreshMode=FullRefresh",
@@ -163,7 +165,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_WhenSearchMissingMetadataCandidateQueued_LogsEpisodeTitleBackfillInputsAtInformation()
+        public async Task GetMetadata_WhenSearchMissingMetadataCandidateQueued_LogsTitleBackfillInputsAtInformation()
         {
             EnsurePluginInstance();
             MetaSharkPlugin.Instance!.Configuration.EnableSearchMissingMetadataEpisodeTitleBackfill = true;
@@ -211,7 +213,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(
                 loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Information
                     && message.Category.Contains("EpisodeProvider", StringComparison.Ordinal)
-                    && message.Message.Contains("EpisodeTitleBackfillInputs", StringComparison.Ordinal)
+                    && message.Message.Contains("[MetaShark] 剧集标题回填输入", StringComparison.Ordinal)
                     && message.Message.Contains("lookupLanguage=", StringComparison.Ordinal)
                     && message.Message.Contains("titleMetadataLanguage=zh-CN", StringComparison.Ordinal)
                     && message.Message.Contains("episodePreferredLanguage=zh-CN", StringComparison.Ordinal)
@@ -224,7 +226,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     && message.Message.Contains("effectiveProviderTitle=皇后回宫", StringComparison.Ordinal)
                     && message.Message.Contains("effectiveProviderTitleSourceLanguage=zh-CN", StringComparison.Ordinal)
                     && message.Message.Contains("isSearchMissingMetadataRequest=True", StringComparison.Ordinal)),
-                "目标 backfill 链路必须输出一条 EpisodeTitleBackfillInputs Information 日志，并带上 title decision 关键输入。");
+                "目标 backfill 链路必须输出一条中文的剧集标题回填输入 Information 日志，并带上 title decision 关键输入。");
         }
 
         [TestMethod]
@@ -266,9 +268,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(
                 loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Information
                     && message.Category.Contains(nameof(EpisodeProvider), StringComparison.Ordinal)
-                    && (message.Message.Contains("EpisodeOverviewInputs", StringComparison.Ordinal)
-                        || message.Message.Contains("EpisodeOverviewDecision", StringComparison.Ordinal))),
-                "overview 诊断日志只应用于临时排障；Task 7 收尾后不应继续在 Information 留下 EpisodeOverviewInputs/Decision 噪音。");
+                    && (message.Message.Contains("[MetaShark] 剧集简介诊断输入", StringComparison.Ordinal)
+                        || message.Message.Contains("[MetaShark] 剧集简介诊断决策", StringComparison.Ordinal))),
+                "overview 诊断日志只应用于临时排障；Task 7 收尾后不应继续在 Information 留下中文诊断日志噪音。");
         }
 
         [TestMethod]
@@ -310,12 +312,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(
                 loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Debug
                     && message.Category.Contains(nameof(EpisodeProvider), StringComparison.Ordinal)
-                    && message.Message.Contains("EpisodeOverviewInputs", StringComparison.Ordinal)),
+                    && message.Message.Contains("[MetaShark] 剧集简介诊断输入", StringComparison.Ordinal)),
                 "overview 输入诊断在收尾后仍应保留 Debug 可见性，便于必要时复盘 search-missing overview 链路。");
             Assert.IsTrue(
                 loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Debug
                     && message.Category.Contains(nameof(EpisodeProvider), StringComparison.Ordinal)
-                    && message.Message.Contains("EpisodeOverviewDecision", StringComparison.Ordinal)),
+                    && message.Message.Contains("[MetaShark] 剧集简介诊断决策", StringComparison.Ordinal)),
                 "overview 决策诊断在收尾后仍应保留 Debug 可见性，避免完全失去 provider 排障证据。");
         }
 
@@ -364,14 +366,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertLoggedMessage(
                 loggerProvider,
                 "EpisodeProvider",
-                "EpisodeTitleBackfillDecision",
+                "[MetaShark] 剧集标题回填决策",
                 "CandidateQueued",
                 $"itemId={episodeItem.Id}",
                 $"itemPath={info.Path}");
             AssertLoggedMessage(
                 loggerProvider,
                 "EpisodeProvider",
-                "EpisodeTitleBackfillQueued",
+                "[MetaShark] 已排队剧集标题回填",
                 $"itemId={episodeItem.Id}",
                 $"itemPath={info.Path}");
         }
@@ -420,7 +422,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("皇后回宫", result.Item!.Name);
             Assert.IsNotNull(savedCandidate, "当 lookup language 缺失但当前 Episode 偏好 zh-CN 时，来源语言合同仍应允许入队 candidate。");
             Assert.AreEqual("皇后回宫", savedCandidate!.CandidateTitle);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "[MetaShark] 剧集标题回填决策", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
         }
 
         [TestMethod]
@@ -508,7 +510,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("第 1 集", result.Item!.Name, "显式 lookup language 存在时，provider 不应退回当前 Episode 的 zh-CN 偏好语言。");
             storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "StrictZhCnRejected", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(
+                loggerProvider,
+                "EpisodeProvider",
+                LogLevel.Information,
+                new Dictionary<string, object?>
+                {
+                    ["Reason"] = "StrictZhCnRejected",
+                    ["ItemId"] = episodeItem.Id,
+                    ["ItemPath"] = info.Path,
+                    ["MetadataRefreshMode"] = "FullRefresh",
+                    ["ReplaceAllMetadata"] = "false",
+                },
+                "[MetaShark] 剧集标题回填决策",
+                "[MetaShark] 剧集标题回填决策",
+                "StrictZhCnRejected");
         }
 
         [TestMethod]
@@ -554,8 +570,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("皇后回宫", result.Item!.Name);
             Assert.IsNotNull(savedCandidate, "当 lookup language 为 bare zh 时，应先提升到显式 zh-CN 目标来源，再继续当前 title backfill 链路。");
             Assert.AreEqual("皇后回宫", savedCandidate!.CandidateTitle);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "EpisodeTitleBackfillInputs", "lookupLanguage=zh", "titleMetadataLanguage=zh-CN", "detailsTitle=皇后回宫", "detailsTitleSourceLanguage=zh-CN", "effectiveProviderTitleSourceLanguage=zh-CN");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "[MetaShark] 剧集标题回填决策", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "[MetaShark] 剧集标题回填输入", "lookupLanguage=zh", "titleMetadataLanguage=zh-CN", "detailsTitle=皇后回宫", "detailsTitleSourceLanguage=zh-CN", "effectiveProviderTitleSourceLanguage=zh-CN");
         }
 
         [TestMethod]
@@ -601,7 +617,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("皇后回宫", result.Item!.Name);
             Assert.IsNotNull(savedCandidate, "当 details.name 只是 generic 编号标题，而 zh-CN translation 给出有效标题时，provider 应继续入队 candidate。");
             Assert.AreEqual("皇后回宫", savedCandidate!.CandidateTitle);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "[MetaShark] 剧集标题回填决策", "CandidateQueued", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
         }
 
         [DataTestMethod]
@@ -684,7 +700,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("第 1 集", result.Item!.Name);
             storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "ResolvedTitleSameAsOriginal", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(
+                loggerProvider,
+                "EpisodeProvider",
+                LogLevel.Information,
+                new Dictionary<string, object?>
+                {
+                    ["Reason"] = "ResolvedTitleSameAsOriginal",
+                    ["ItemId"] = episodeItem.Id,
+                    ["ItemPath"] = info.Path,
+                    ["MetadataRefreshMode"] = "FullRefresh",
+                    ["ReplaceAllMetadata"] = "false",
+                },
+                "[MetaShark] 剧集标题回填决策",
+                "[MetaShark] 剧集标题回填决策",
+                "ResolvedTitleSameAsOriginal");
         }
 
         [TestMethod]
@@ -796,7 +826,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
             _ = await provider.GetMetadata(info, CancellationToken.None);
 
             storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "RequestNotSearchMissingMetadata", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=true");
+            AssertLoggedMessage(
+                loggerProvider,
+                "EpisodeProvider",
+                LogLevel.Debug,
+                new Dictionary<string, object?>
+                {
+                    ["Reason"] = "RequestNotSearchMissingMetadata",
+                    ["ItemId"] = episodeItem.Id,
+                    ["ItemPath"] = info.Path,
+                    ["MetadataRefreshMode"] = "FullRefresh",
+                    ["ReplaceAllMetadata"] = "true",
+                },
+                "[MetaShark] 剧集标题回填决策",
+                "[MetaShark] 剧集标题回填决策",
+                "RequestNotSearchMissingMetadata");
         }
 
         [TestMethod]
@@ -836,8 +880,22 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("第 1 集", result.Item!.Name);
             storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "ResolvedTitleSameAsOriginal", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "EpisodeTitleBackfillInputs", "lookupLanguage=zh", "titleMetadataLanguage=zh-CN", "detailsTitle=第 1 集", "detailsTitleSourceLanguage=zh-CN");
+            AssertLoggedMessage(
+                loggerProvider,
+                "EpisodeProvider",
+                LogLevel.Information,
+                new Dictionary<string, object?>
+                {
+                    ["Reason"] = "ResolvedTitleSameAsOriginal",
+                    ["ItemId"] = episodeItem.Id,
+                    ["ItemPath"] = info.Path,
+                    ["MetadataRefreshMode"] = "FullRefresh",
+                    ["ReplaceAllMetadata"] = "false",
+                },
+                "[MetaShark] 剧集标题回填决策",
+                "[MetaShark] 剧集标题回填决策",
+                "ResolvedTitleSameAsOriginal");
+            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "[MetaShark] 剧集标题回填输入", "lookupLanguage=zh", "titleMetadataLanguage=zh-CN", "detailsTitle=第 1 集", "detailsTitleSourceLanguage=zh-CN");
         }
 
         [TestMethod]
@@ -876,7 +934,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(result.Item);
             Assert.AreEqual("第 1 集", result.Item!.Name);
             storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
-            AssertLoggedMessage(loggerProvider, "EpisodeProvider", "ResolvedTitleEmpty", "metadataRefreshMode=FullRefresh", "replaceAllMetadata=false");
+            AssertLoggedMessage(
+                loggerProvider,
+                "EpisodeProvider",
+                LogLevel.Information,
+                new Dictionary<string, object?>
+                {
+                    ["Reason"] = "ResolvedTitleEmpty",
+                    ["ItemId"] = episodeItem.Id,
+                    ["ItemPath"] = info.Path,
+                    ["MetadataRefreshMode"] = "FullRefresh",
+                    ["ReplaceAllMetadata"] = "false",
+                },
+                "[MetaShark] 剧集标题回填决策",
+                "[MetaShark] 剧集标题回填决策",
+                "ResolvedTitleEmpty");
         }
 
         private static EpisodeProvider CreateProvider(
@@ -923,6 +995,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var matches = loggerProvider.Messages.Any(message => message.Category.Contains(categoryFragment, StringComparison.Ordinal)
                 && fragments.All(fragment => message.Message.Contains(fragment, StringComparison.Ordinal)));
             Assert.IsTrue(matches, $"Expected log containing fragments: {string.Join(", ", fragments)}");
+        }
+
+        private static void AssertLoggedMessage(TestLoggerProvider loggerProvider, string categoryFragment, LogLevel level, IReadOnlyDictionary<string, object?> stateContains, string originalFormatContains, params string[] messageContains)
+        {
+            var matches = loggerProvider.Messages.Where(message => message.Category.Contains(categoryFragment, StringComparison.Ordinal)
+                    && message.LogLevel == level
+                    && messageContains.All(fragment => message.Message.Contains(fragment, StringComparison.Ordinal))
+                    && message.OriginalFormat.Contains(originalFormatContains, StringComparison.Ordinal)
+                    && stateContains.All(expected => message.StructuredState.TryGetValue(expected.Key, out var actual) && Equals(actual, expected.Value)))
+                .ToList();
+
+            Assert.IsTrue(
+                matches.Count > 0,
+                $"Expected structured log. Category={categoryFragment}, Level={level}, OriginalFormatContains={originalFormatContains}, MessageContains=[{string.Join(", ", messageContains)}], StateContains=[{string.Join(", ", stateContains.Select(pair => $"{pair.Key}={pair.Value}"))}].");
         }
 
         private static DefaultHttpContext CreateHttpContext(string metadataRefreshMode, string replaceAllMetadata)
@@ -1092,11 +1178,38 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
             {
-                this.messages.Add(new LoggedMessage(this.categoryName, logLevel, eventId, formatter(state, exception)));
+                this.messages.Add(new LoggedMessage(this.categoryName, logLevel, eventId, formatter(state, exception), ExtractStructuredState(state), ExtractOriginalFormat(state)));
+            }
+
+            private static IReadOnlyDictionary<string, object?> ExtractStructuredState<TState>(TState state)
+            {
+                if (state is IEnumerable<KeyValuePair<string, object?>> pairs)
+                {
+                    return pairs.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                }
+
+                return new Dictionary<string, object?>(StringComparer.Ordinal);
+            }
+
+            private static string ExtractOriginalFormat<TState>(TState state)
+            {
+                if (state is IEnumerable<KeyValuePair<string, object?>> pairs)
+                {
+                    foreach (var pair in pairs)
+                    {
+                        if (string.Equals(pair.Key, "{OriginalFormat}", StringComparison.Ordinal)
+                            && pair.Value is string originalFormat)
+                        {
+                            return originalFormat;
+                        }
+                    }
+                }
+
+                return string.Empty;
             }
         }
 
-        private sealed record LoggedMessage(string Category, LogLevel LogLevel, EventId EventId, string Message);
+        private sealed record LoggedMessage(string Category, LogLevel LogLevel, EventId EventId, string Message, IReadOnlyDictionary<string, object?> StructuredState, string OriginalFormat);
 
         private sealed class NullScope : IDisposable
         {

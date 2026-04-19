@@ -40,7 +40,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteSearchResult>> GetSearchResults(MovieInfo searchInfo, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(searchInfo);
-            this.Log($"GetSearchResults of [name]: {searchInfo.Name}");
+            this.Log("开始搜索电影候选. name: {0}", searchInfo.Name);
             var result = new List<RemoteSearchResult>();
             if (string.IsNullOrEmpty(searchInfo.Name))
             {
@@ -101,7 +101,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
             var hasTmdbMeta = metaSource == MetaSource.Tmdb && !string.IsNullOrEmpty(tmdbId);
             var hasDoubanMeta = doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid);
-            this.Log($"GetMovieMetadata of [name]: {info.Name} [fileName]: {fileName} metaSource: {metaSource} EnableTmdb: {Config.EnableTmdb}");
+            this.Log("开始获取电影元数据. name: {0} fileName: {1} metaSource: {2} enableTmdb: {3}", info.Name, fileName, metaSource, Config.EnableTmdb);
             if (!hasDoubanMeta && !hasTmdbMeta)
             {
                 // 处理extras影片
@@ -129,7 +129,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
             {
-                this.Log($"GetMovieMetadata of douban [sid]: \"{sid}\"");
+                this.Log("通过 Douban 获取电影元数据. sid: \"{0}\"", sid);
                 var subject = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (subject == null)
                 {
@@ -226,13 +226,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
             }
 
-            this.Log($"匹配失败！可检查下年份是否与豆瓣一致，是否需要登录访问. [name]: {info.Name} [year]: {info.Year}");
+            this.Log("电影匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
             return result;
         }
 
         private async Task<MetadataResult<Movie>> GetMetadataByTmdb(string tmdbId, MovieInfo info, CancellationToken cancellationToken)
         {
-            this.Log($"GetMovieMetadata of tmdb [id]: \"{tmdbId}\"");
+            this.Log("通过 TMDb 获取电影元数据. tmdbId: \"{0}\"", tmdbId);
             var result = new MetadataResult<Movie>();
             var movieResult = await this.TmdbApi
                             .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
@@ -262,7 +262,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 if (tagCount > 0)
                 {
-                    this.Log("TMDb tags added for movie: id={0} name={1} count={2}", movieResult.Id, movieResult.Title ?? movieResult.OriginalTitle, tagCount);
+                    this.Log("已写入电影 TMDb 标签. id={0} name={1} count={2}", movieResult.Id, movieResult.Title ?? movieResult.OriginalTitle, tagCount);
                 }
             }
 
@@ -319,14 +319,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var parseResult = NameParser.Parse(fileName);
             if (parseResult.IsExtra)
             {
-                this.Log($"Found extra of [name]: {fileName}");
+                this.Log("识别到影片特典，跳过处理. name: {0}", fileName);
                 return new MetadataResult<Movie>();
             }
 
             // 动画常用特典文件夹
             if (NameParser.IsSpecialDirectory(info.Path) || NameParser.IsExtraDirectory(info.Path))
             {
-                this.Log($"Found extra of [name]: {fileName}");
+                this.Log("识别到影片特典，跳过处理. name: {0}", fileName);
                 return new MetadataResult<Movie>();
             }
 

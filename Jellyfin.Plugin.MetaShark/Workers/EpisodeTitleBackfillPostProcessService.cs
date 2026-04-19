@@ -81,7 +81,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
 
             this.logger.LogDebug(
-                "Received episode title backfill post-process event trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                "[MetaShark] 收到剧集标题回填后处理事件. trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
                 triggerName,
                 episode.Id,
                 episode.Path ?? string.Empty,
@@ -152,7 +152,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 this.pendingResolver.ReleaseClaim(candidate, claimToken);
                 this.logger.LogError(
                     ex,
-                    "Failed to persist episode title backfill for {ItemId}. trigger={Trigger} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                    "[MetaShark] 剧集标题回填保存失败. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
                     episode.Id,
                     triggerName,
                     itemPath,
@@ -164,7 +164,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             this.pendingResolver.Complete(candidate);
             this.logger.LogInformation(
-                "Applied episode title backfill for {ItemId}. trigger={Trigger} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                "[MetaShark] 已应用剧集标题回填. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
                 episode.Id,
                 triggerName,
                 itemPath,
@@ -189,7 +189,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             if (string.IsNullOrWhiteSpace(detail))
             {
                 this.logger.LogInformation(
-                    "EpisodeTitleBackfillSkip reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                    "[MetaShark] 跳过剧集标题回填. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
                     reason,
                     triggerName,
                     episode.Id,
@@ -202,7 +202,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
 
             this.logger.LogInformation(
-                "EpisodeTitleBackfillSkip reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason} detail={Detail}.",
+                "[MetaShark] 跳过剧集标题回填. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason} detail={Detail}.",
                 reason,
                 triggerName,
                 episode.Id,

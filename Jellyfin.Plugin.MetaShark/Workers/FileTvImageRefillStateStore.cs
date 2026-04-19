@@ -19,7 +19,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         };
 
         private static readonly Action<ILogger, string, Exception?> LogStateLoadFailed =
-            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "Failed to load TV image refill state from {Path}. Resetting state.");
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "[MetaShark] 电视缺图回填状态加载失败，已重置状态. path={Path}.");
 
         private readonly object syncRoot = new object();
         private readonly ILogger<FileTvImageRefillStateStore> logger;

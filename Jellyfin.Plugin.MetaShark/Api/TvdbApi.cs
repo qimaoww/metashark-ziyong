@@ -32,49 +32,49 @@ namespace Jellyfin.Plugin.MetaShark.Api
         };
 
         private static readonly Action<ILogger, int, Exception?> LogTvdbDisabled =
-            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(2, nameof(LogTvdbDisabled)), "TVDB disabled by config. seriesId={SeriesId}");
+            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(2, nameof(LogTvdbDisabled)), "[MetaShark] TVDB 已在配置中禁用. 剧集ID={SeriesId}");
 
         private static readonly Action<ILogger, int, string, int, string, Exception?> LogTvdbFetchEpisodes =
-            LoggerMessage.Define<int, string, int, string>(LogLevel.Debug, new EventId(3, nameof(LogTvdbFetchEpisodes)), "TVDB fetch episodes. seriesId={SeriesId} seasonType={SeasonType} season={Season} lang={Lang}");
+            LoggerMessage.Define<int, string, int, string>(LogLevel.Debug, new EventId(3, nameof(LogTvdbFetchEpisodes)), "[MetaShark] 开始获取 TVDB 剧集. 剧集ID={SeriesId} 季类型={SeasonType} 季号={Season} 语言={Lang}");
 
         private static readonly Action<ILogger, int, string, Exception?> LogTvdbRequestPage =
-            LoggerMessage.Define<int, string>(LogLevel.Debug, new EventId(4, nameof(LogTvdbRequestPage)), "TVDB request page {Page}: {Url}");
+            LoggerMessage.Define<int, string>(LogLevel.Debug, new EventId(4, nameof(LogTvdbRequestPage)), "[MetaShark] 请求 TVDB 分页数据. 页码={Page} 地址={Url}");
 
         private static readonly Action<ILogger, int, Exception?> LogTvdbNullResponse =
-            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(5, nameof(LogTvdbNullResponse)), "TVDB request returned null response. seriesId={SeriesId}");
+            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(5, nameof(LogTvdbNullResponse)), "[MetaShark] TVDB 请求返回空响应. 剧集ID={SeriesId}");
 
         private static readonly Action<ILogger, int, Exception?> LogTvdbRequestFailed =
-            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(6, nameof(LogTvdbRequestFailed)), "TVDB request failed. status={StatusCode}");
+            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(6, nameof(LogTvdbRequestFailed)), "[MetaShark] TVDB 请求失败. 状态码={StatusCode}");
 
         private static readonly Action<ILogger, int, string, Exception?> LogTvdbRequestFailedInfo =
-            LoggerMessage.Define<int, string>(LogLevel.Information, new EventId(15, nameof(LogTvdbRequestFailedInfo)), "TVDB request failed. status={StatusCode} url={Url}");
+            LoggerMessage.Define<int, string>(LogLevel.Information, new EventId(15, nameof(LogTvdbRequestFailedInfo)), "[MetaShark] TVDB 请求失败. 状态码={StatusCode} 地址={Url}");
 
         private static readonly Action<ILogger, int, Exception?> LogTvdbMissingEpisodes =
-            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(7, nameof(LogTvdbMissingEpisodes)), "TVDB response missing episodes. seriesId={SeriesId}");
+            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(7, nameof(LogTvdbMissingEpisodes)), "[MetaShark] TVDB 响应缺少剧集数据. 剧集ID={SeriesId}");
 
         private static readonly Action<ILogger, int, Exception?> LogTvdbEpisodesPageCount =
-            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(8, nameof(LogTvdbEpisodesPageCount)), "TVDB episodes page count={Count}");
+            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(8, nameof(LogTvdbEpisodesPageCount)), "[MetaShark] TVDB 剧集页条目数={Count}");
 
         private static readonly Action<ILogger, int, Exception?> LogTvdbPaginationEnded =
-            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(9, nameof(LogTvdbPaginationEnded)), "TVDB pagination ended at page {Page}");
+            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(9, nameof(LogTvdbPaginationEnded)), "[MetaShark] TVDB 分页结束. 页码={Page}");
 
         private static readonly Action<ILogger, Exception?> LogTvdbTokenCacheHit =
-            LoggerMessage.Define(LogLevel.Debug, new EventId(10, nameof(LogTvdbTokenCacheHit)), "TVDB token cache hit");
+            LoggerMessage.Define(LogLevel.Debug, new EventId(10, nameof(LogTvdbTokenCacheHit)), "[MetaShark] 命中 TVDB 令牌缓存");
 
         private static readonly Action<ILogger, Exception?> LogTvdbApiKeyMissing =
-            LoggerMessage.Define(LogLevel.Debug, new EventId(11, nameof(LogTvdbApiKeyMissing)), "TVDB api key not configured");
+            LoggerMessage.Define(LogLevel.Debug, new EventId(11, nameof(LogTvdbApiKeyMissing)), "[MetaShark] 未配置 TVDB 访问密钥");
 
         private static readonly Action<ILogger, int, Exception?> LogTvdbLoginFailed =
-            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(12, nameof(LogTvdbLoginFailed)), "TVDB login failed. status={StatusCode}");
+            LoggerMessage.Define<int>(LogLevel.Debug, new EventId(12, nameof(LogTvdbLoginFailed)), "[MetaShark] TVDB 登录失败. 状态码={StatusCode}");
 
         private static readonly Action<ILogger, Exception?> LogTvdbEmptyToken =
-            LoggerMessage.Define(LogLevel.Debug, new EventId(13, nameof(LogTvdbEmptyToken)), "TVDB login returned empty token");
+            LoggerMessage.Define(LogLevel.Debug, new EventId(13, nameof(LogTvdbEmptyToken)), "[MetaShark] TVDB 登录返回空令牌");
 
         private static readonly Action<ILogger, Exception?> LogTvdbTokenStored =
-            LoggerMessage.Define(LogLevel.Debug, new EventId(14, nameof(LogTvdbTokenStored)), "TVDB token stored in cache");
+            LoggerMessage.Define(LogLevel.Debug, new EventId(14, nameof(LogTvdbTokenStored)), "[MetaShark] TVDB 令牌已写入缓存");
 
         private static readonly Action<ILogger, string, bool, bool, Exception?> LogTvdbConfigLoaded =
-            LoggerMessage.Define<string, bool, bool>(LogLevel.Information, new EventId(17, nameof(LogTvdbConfigLoaded)), "TVDB config loaded. host={Host} hasKey={HasKey} hasPin={HasPin}");
+            LoggerMessage.Define<string, bool, bool>(LogLevel.Information, new EventId(17, nameof(LogTvdbConfigLoaded)), "[MetaShark] 已加载 TVDB 配置. 主机={Host} 已配置密钥={HasKey} 已配置口令={HasPin}");
 
         private readonly ILogger<TvdbApi> logger;
         private readonly MemoryCache memoryCache;
@@ -88,7 +88,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         {
             this.logger = loggerFactory.CreateLogger<TvdbApi>();
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
-            this.logTvdbError = LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(TvdbApi)), "TVDB request failed in {Operation}");
+            this.logTvdbError = LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(TvdbApi)), "[MetaShark] TVDB 请求异常. 操作={Operation}");
 
             var config = MetaSharkPlugin.Instance?.Configuration;
             this.apiKey = config?.TvdbApiKey ?? string.Empty;

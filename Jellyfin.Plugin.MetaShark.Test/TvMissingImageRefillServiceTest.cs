@@ -10,6 +10,7 @@ using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -54,7 +55,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     RefreshPriority.Normal),
                 Times.Once);
 
-            VerifyLoggedMessage(loggerStub, LogLevel.Debug, "Primary,Backdrop,Logo", Times.Once());
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Name"] = "Series A",
+                    ["Id"] = series.Id,
+                    ["MissingImages"] = "Primary,Backdrop,Logo",
+                },
+                originalFormatContains: "[MetaShark] 已排队电视缺图回填",
+                messageContains: ["[MetaShark] 已排队电视缺图回填", "itemId=", "missingImages=Primary,Backdrop,Logo"]);
         }
 
         [TestMethod]
@@ -85,7 +97,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
                 Times.Never);
 
-            VerifyLoggedMessage(loggerStub, LogLevel.Debug, "no supported images are missing", Times.Once());
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Name"] = "Series A",
+                    ["Id"] = series.Id,
+                },
+                originalFormatContains: "[MetaShark] 跳过电视缺图回填",
+                messageContains: ["[MetaShark] 跳过电视缺图回填", "reason=NoMissingImages", "itemId="]);
         }
 
         [TestMethod]
@@ -219,7 +241,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
                 Times.Never);
 
-            VerifyLoggedMessage(loggerStub, LogLevel.Debug, "ImageUpdate", Times.Once());
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Name"] = "Series A",
+                    ["Id"] = series.Id,
+                    ["UpdateReason"] = ItemUpdateType.ImageUpdate,
+                },
+                originalFormatContains: "[MetaShark] 跳过电视缺图回填",
+                messageContains: ["[MetaShark] 跳过电视缺图回填", "reason=UpdateReasonRejected", "updateReason=ImageUpdate"]);
         }
 
         [TestMethod]
@@ -302,16 +335,5 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 new Mock<IFileSystem>().Object);
         }
 
-        private static void VerifyLoggedMessage(Mock<ILogger> loggerStub, LogLevel level, string fragment, Times times)
-        {
-            loggerStub.Verify(
-                x => x.Log(
-                    level,
-                    It.IsAny<EventId>(),
-                    It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(fragment, StringComparison.Ordinal)),
-                    It.IsAny<Exception>(),
-                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-                times);
-        }
     }
 }

@@ -37,7 +37,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteSearchResult>> GetSearchResults(SeasonInfo searchInfo, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(searchInfo);
-            this.Log($"GetSeasonSearchResults of [name]: {searchInfo.Name}");
+            this.Log("开始搜索季候选. name: {0}", searchInfo.Name);
             return await Task.FromResult(Enumerable.Empty<RemoteSearchResult>()).ConfigureAwait(false);
         }
 
@@ -56,7 +56,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var seasonNumber = info.IndexNumber; // S00/Season 00特典目录会为0
             var seasonSid = info.GetProviderId(DoubanProviderId);
             var fileName = Path.GetFileName(info.Path);
-            this.Log($"GetSeasonMetaData of [name]: {info.Name} [fileName]: {fileName} number: {info.IndexNumber} seriesTmdbId: {seriesTmdbId} sid: {sid} metaSource: {metaSource} EnableTmdb: {Config.EnableTmdb}");
+            this.Log("开始获取季元数据. name: {0} fileName: {1} seasonNumber: {2} seriesTmdbId: {3} sid: {4} metaSource: {5} enableTmdb: {6}", info.Name, fileName, info.IndexNumber, seriesTmdbId, sid, metaSource, Config.EnableTmdb);
             if (!doubanAllowed)
             {
                 if (!string.IsNullOrWhiteSpace(seriesTmdbId))
@@ -120,13 +120,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                             ProviderIds = new Dictionary<string, string> { { DoubanProviderId, c.Id } },
                         }));
 
-                        this.Log($"Season [{info.Name}] found douban [sid]: {seasonSid}");
+                        this.Log("已找到季 Douban sid. name: {0} sid: {1}", info.Name, seasonSid);
                         return result;
                     }
                 }
                 else
                 {
-                    this.Log($"Season [{info.Name}] not found douban season id!");
+                    this.Log("未找到季 Douban id. name: {0}", info.Name);
                 }
 
                 // 豆瓣找不到季数据，尝试获取tmdb的季数据
@@ -172,7 +172,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var doubanId = this.RegDoubanIdAttribute.FirstMatchGroup(fileName);
             if (!string.IsNullOrWhiteSpace(doubanId))
             {
-                this.Log($"Found season douban [id] by attr: {doubanId}");
+                this.Log("已通过属性找到季 Douban id. doubanId: {0}", doubanId);
                 return doubanId;
             }
 
@@ -230,14 +230,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             if (TmdbEpisodeGroupMapping.TryGetGroupId(Config.TmdbEpisodeGroupMap, seriesTmdbId, out var groupId))
             {
-                this.Log("TMDb episode group mapping hit (season): seriesId={0} groupId={1} season={2}", seriesTmdbId, groupId, seasonNumber);
+                this.Log("TMDb 剧集组命中（季）: seriesId={0} groupId={1} season={2}", seriesTmdbId, groupId, seasonNumber);
                 var group = await this.TmdbApi
                     .GetEpisodeGroupByIdAsync(groupId, info.MetadataLanguage, cancellationToken)
                     .ConfigureAwait(false);
                 var seasonGroup = group?.Groups.FirstOrDefault(g => g.Order == seasonNumber);
                 if (seasonGroup != null)
                 {
-                    this.Log("TMDb episode group mapping resolved (season): seriesId={0} groupId={1} season={2} name={3}", seriesTmdbId, groupId, seasonNumber, seasonGroup.Name);
+                    this.Log("TMDb 剧集组已解析（季）: seriesId={0} groupId={1} season={2} name={3}", seriesTmdbId, groupId, seasonNumber, seasonGroup.Name);
                     var seasonGroupName = seasonGroup.Name?.Trim();
                     var seasonName = seasonGroupName;
                     if (ShouldPreserveExistingSeasonTitle(info.Name, seasonGroupName))
@@ -260,7 +260,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 .ConfigureAwait(false);
             if (seasonResult == null)
             {
-                this.Log($"Not found season from TMDB. {info.Name} seriesTmdbId: {seriesTmdbId} seasonNumber: {seasonNumber}");
+                this.Log("未找到 TMDb 季数据. name: {0} seriesTmdbId: {1} seasonNumber: {2}", info.Name, seriesTmdbId, seasonNumber);
                 return result;
             }
 

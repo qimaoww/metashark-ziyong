@@ -32,40 +32,40 @@ namespace Jellyfin.Plugin.MetaShark.Api
         public const string HTTPREFERER = "https://www.douban.com/";
 
         private static readonly Action<ILogger, string, Exception?> LogCookieAddFailed =
-            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(1, nameof(LoadLoadDoubanCookie)), "Failed to add cookie: {ErrorMessage}");
+            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(1, nameof(LoadLoadDoubanCookie)), "[MetaShark] 添加 Douban Cookie 失败. 错误信息={ErrorMessage}");
 
         private static readonly Action<ILogger, string, HttpStatusCode, Exception?> LogSearchFailed =
-            LoggerMessage.Define<string, HttpStatusCode>(LogLevel.Warning, new EventId(2, nameof(SearchAsync)), "douban搜索请求失败. keyword: {Keyword} statusCode: {StatusCode}");
+            LoggerMessage.Define<string, HttpStatusCode>(LogLevel.Warning, new EventId(2, nameof(SearchAsync)), "[MetaShark] Douban 搜索请求失败. 关键词={Keyword} 状态码={StatusCode}");
 
         private static readonly Action<ILogger, string, Exception?> LogRiskControl =
-            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(3, nameof(SearchAsync)), "douban触发风控，可能ip被封，请到插件配置中打开防封禁功能。。。keyword: {Keyword}");
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(3, nameof(SearchAsync)), "[MetaShark] Douban 触发风控，可能 IP 被封. 关键词={Keyword}");
 
         private static readonly Action<ILogger, string, Exception?> LogSearchEmpty =
-            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4, nameof(SearchAsync)), "douban搜索不到内容，这消息大量出现时，可能触发了爬虫风控。。。keyword: {Keyword}");
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4, nameof(SearchAsync)), "[MetaShark] Douban 未搜索到内容，频繁出现时可能触发风控. 关键词={Keyword}");
 
         private static readonly Action<ILogger, string, HttpStatusCode, Exception?> LogSuggestFailed =
-            LoggerMessage.Define<string, HttpStatusCode>(LogLevel.Warning, new EventId(5, nameof(SearchBySuggestAsync)), "douban suggest请求失败. keyword: {Keyword} statusCode: {StatusCode}");
+            LoggerMessage.Define<string, HttpStatusCode>(LogLevel.Warning, new EventId(5, nameof(SearchBySuggestAsync)), "[MetaShark] Douban 联想搜索请求失败. 关键词={Keyword} 状态码={StatusCode}");
 
         private static readonly Action<ILogger, string, Exception?> LogSuggestError =
-            LoggerMessage.Define<string>(LogLevel.Error, new EventId(6, nameof(SearchBySuggestAsync)), "SearchBySuggestAsync error. keyword: {Keyword}");
+            LoggerMessage.Define<string>(LogLevel.Error, new EventId(6, nameof(SearchBySuggestAsync)), "[MetaShark] Douban 联想搜索失败. 关键词={Keyword}");
 
         private static readonly Action<ILogger, string, Exception?> LogPageMissing =
-            LoggerMessage.Define<string>(LogLevel.Error, new EventId(7, nameof(GetMovieAsync)), "获取不到douban页面内容，可能触发douban防爬或页面结构已改变! url: {Url}");
+            LoggerMessage.Define<string>(LogLevel.Error, new EventId(7, nameof(GetMovieAsync)), "[MetaShark] 未获取到 Douban 页面内容，可能触发风控或页面结构已变化. 地址={Url}");
 
         private static readonly Action<ILogger, string, Exception?> LogPageBlocked =
-            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(12, nameof(GetMovieAsync)), "douban页面被禁止访问或触发风控，已跳过刮削. url: {Url}");
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(12, nameof(GetMovieAsync)), "[MetaShark] Douban 页面被禁止访问或触发风控，已跳过刮削. 地址={Url}");
 
         private static readonly Action<ILogger, string, Exception?> LogCelebrityPhotosError =
-            LoggerMessage.Define<string>(LogLevel.Error, new EventId(8, nameof(GetCelebrityPhotosAsync)), "GetCelebrityPhotosAsync error. cid: {CelebrityId}");
+            LoggerMessage.Define<string>(LogLevel.Error, new EventId(8, nameof(GetCelebrityPhotosAsync)), "[MetaShark] 获取 Douban 人物照片失败. 人物编号={CelebrityId}");
 
         private static readonly Action<ILogger, string, Exception?> LogWallpaperError =
-            LoggerMessage.Define<string>(LogLevel.Error, new EventId(9, nameof(GetWallpaperBySidAsync)), "GetWallpaperBySidAsync error. sid: {Sid}");
+            LoggerMessage.Define<string>(LogLevel.Error, new EventId(9, nameof(GetWallpaperBySidAsync)), "[MetaShark] 获取 Douban 壁纸失败. 条目编号={Sid}");
 
         private static readonly Action<ILogger, Exception?> LogCheckLoginError =
-            LoggerMessage.Define(LogLevel.Error, new EventId(10, nameof(CheckLoginAsync)), "CheckLoginAsync error.");
+            LoggerMessage.Define(LogLevel.Error, new EventId(10, nameof(CheckLoginAsync)), "[MetaShark] 检查 Douban 登录状态失败.");
 
         private static readonly Action<ILogger, Exception?> LogGetLoginInfoError =
-            LoggerMessage.Define(LogLevel.Error, new EventId(11, nameof(GetLoginInfoAsync)), "GetLoginInfoAsync error.");
+            LoggerMessage.Define(LogLevel.Error, new EventId(11, nameof(GetLoginInfoAsync)), "[MetaShark] 获取 Douban 登录信息失败.");
 
         private static readonly object Lock = new object();
         private readonly ILogger<DoubanApi> logger;

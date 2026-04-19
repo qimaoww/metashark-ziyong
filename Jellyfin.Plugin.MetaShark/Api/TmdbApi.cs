@@ -54,7 +54,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         {
             this.logger = loggerFactory.CreateLogger<TmdbApi>();
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
-            this.logTmdbError = LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(TmdbApi)), "TMDb request failed in {Operation}");
+            this.logTmdbError = LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(TmdbApi)), "[MetaShark] TMDB 请求异常. 操作={Operation}");
             var config = MetaSharkPlugin.Instance?.Configuration;
             this.apiKey = string.IsNullOrEmpty(config?.TmdbApiKey) ? DefaultApiKey : config.TmdbApiKey;
             this.apiHost = string.IsNullOrEmpty(config?.TmdbHost) ? DefaultApiHost : config.TmdbHost;

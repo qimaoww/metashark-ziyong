@@ -1,10 +1,12 @@
 using Jellyfin.Plugin.MetaShark.Model;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System.Reflection;
+using System.Collections.Generic;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -65,6 +67,55 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(0, persistence.SaveCallCount);
             Assert.IsNull(PeekCandidateByPath(candidateStore, itemPath));
+        }
+
+        [TestMethod]
+        public async Task ExecuteDueCycleAsync_WhenPostProcessThrows_LogsUnifiedRetryFailure()
+        {
+            var itemId = Guid.NewGuid();
+            var itemPath = "/library/tv/series-a/Season 01/episode-error.mkv";
+            var nowUtc = DateTimeOffset.UtcNow;
+            var candidateStore = new InMemoryEpisodeOverviewCleanupCandidateStore();
+            candidateStore.Save(CreatePathAwareCandidate(itemId, itemPath, string.Empty, nowUtc.AddMinutes(-1), nowUtc.AddSeconds(-1)));
+
+            var episode = new Episode
+            {
+                Id = itemId,
+                Name = "第 1 集",
+                Path = itemPath,
+                Overview = "错误旧简介",
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub.Setup(x => x.FindByPath(itemPath, false)).Returns(episode);
+
+            var postProcessServiceStub = new Mock<IEpisodeOverviewCleanupPostProcessService>();
+            postProcessServiceStub
+                .Setup(x => x.TryApplyAsync(It.IsAny<ItemChangeEventArgs>(), IEpisodeOverviewCleanupPostProcessService.DeferredRetryTrigger, CancellationToken.None))
+                .ThrowsAsync(new InvalidOperationException("boom"));
+
+            var loggerStub = new Mock<ILogger<EpisodeOverviewCleanupDeferredRetryWorker>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var worker = new EpisodeOverviewCleanupDeferredRetryWorker(
+                candidateStore,
+                new EpisodeOverviewCleanupPendingResolver(candidateStore, libraryManagerStub.Object),
+                postProcessServiceStub.Object,
+                loggerStub.Object);
+
+            await ExecuteDueCycleAsync(worker, nowUtc).ConfigureAwait(false);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Error,
+                expectException: true,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = itemId,
+                    ["ItemPath"] = itemPath,
+                },
+                originalFormatContains: "[MetaShark] 剧集简介清理延迟重试失败",
+                messageContains: ["[MetaShark] 剧集简介清理延迟重试失败", "trigger=DeferredRetry", $"itemId={itemId}", $"itemPath={itemPath}"]);
         }
 
         private static EpisodeOverviewCleanupCandidate CreatePathAwareCandidate(Guid itemId, string itemPath, string originalOverviewSnapshot, DateTimeOffset queuedAtUtc, DateTimeOffset nextAttemptAtUtc)

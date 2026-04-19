@@ -17,10 +17,10 @@ namespace Jellyfin.Plugin.MetaShark.Api
     public class ImdbApi : IDisposable
     {
         private static readonly Action<ILogger, string, Exception?> LogCheckNewImdbIdError =
-            LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(CheckNewIDAsync)), "CheckNewImdbID error. id: {ImdbId}");
+            LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(CheckNewIDAsync)), "[MetaShark] 检查 IMDB 新 ID 失败. IMDB编号={ImdbId}");
 
         private static readonly Action<ILogger, string, Exception?> LogCheckPersonImdbIdError =
-            LoggerMessage.Define<string>(LogLevel.Error, new EventId(2, nameof(CheckPersonNewIDAsync)), "CheckPersonNewImdbID error. id: {ImdbId}");
+            LoggerMessage.Define<string>(LogLevel.Error, new EventId(2, nameof(CheckPersonNewIDAsync)), "[MetaShark] 检查人物 IMDB 新 ID 失败. IMDB编号={ImdbId}");
 
         private readonly ILogger<ImdbApi> logger;
         private readonly MemoryCache memoryCache;

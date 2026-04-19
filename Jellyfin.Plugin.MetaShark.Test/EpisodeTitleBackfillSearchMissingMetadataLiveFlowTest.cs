@@ -99,7 +99,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(
                 loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Information
                     && message.Category.Contains(nameof(EpisodeProvider), StringComparison.Ordinal)
-                    && message.Message.Contains("EpisodeTitleBackfillDecision", StringComparison.Ordinal)
+                    && message.Message.Contains("[MetaShark] 剧集标题回填决策", StringComparison.Ordinal)
                     && message.Message.Contains("CandidateQueued", StringComparison.Ordinal)
                     && message.Message.Contains($"itemId={harness.Episode.Id}", StringComparison.Ordinal)
                     && message.Message.Contains($"itemPath={harness.Info.Path}", StringComparison.Ordinal)
@@ -109,7 +109,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(
                 loggerProvider.Messages.Any(message => message.LogLevel == LogLevel.Information
                     && message.Category.Contains(nameof(EpisodeProvider), StringComparison.Ordinal)
-                    && message.Message.Contains("EpisodeTitleBackfillQueued", StringComparison.Ordinal)
+                    && message.Message.Contains("[MetaShark] 已排队剧集标题回填", StringComparison.Ordinal)
                     && message.Message.Contains($"itemId={harness.Episode.Id}", StringComparison.Ordinal)
                     && message.Message.Contains($"itemPath={harness.Info.Path}", StringComparison.Ordinal)
                     && message.Message.Contains("metadataRefreshMode=FullRefresh", StringComparison.Ordinal)

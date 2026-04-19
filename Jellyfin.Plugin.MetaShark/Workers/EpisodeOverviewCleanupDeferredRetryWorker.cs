@@ -18,16 +18,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private static readonly TimeSpan RetryScanInterval = TimeSpan.FromSeconds(5);
 
         private static readonly Action<ILogger, Exception?> LogWorkerStart =
-            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "Starting episode-overview-cleanup deferred-retry worker.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "[MetaShark] 开始剧集简介清理延迟重试工作器.");
 
         private static readonly Action<ILogger, Exception?> LogWorkerStop =
-            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(StopAsync)), "Stopping episode-overview-cleanup deferred-retry worker.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(StopAsync)), "[MetaShark] 剧集简介清理延迟重试工作器已停止.");
 
         private static readonly Action<ILogger, Exception?> LogCycleFailed =
-            LoggerMessage.Define(LogLevel.Error, new EventId(3, nameof(ExecuteLoopAsync)), "Episode overview cleanup deferred-retry cycle failed.");
+            LoggerMessage.Define(LogLevel.Error, new EventId(3, nameof(ExecuteLoopAsync)), "[MetaShark] 剧集简介清理延迟重试轮询失败.");
 
         private static readonly Action<ILogger, Guid, string, Exception?> LogRetryFailed =
-            LoggerMessage.Define<Guid, string>(LogLevel.Error, new EventId(4, nameof(ProcessCandidateAsync)), "Episode overview cleanup deferred-retry apply failed for item {ItemId} path {ItemPath} trigger=DeferredRetry.");
+            LoggerMessage.Define<Guid, string>(LogLevel.Error, new EventId(4, nameof(ProcessCandidateAsync)), "[MetaShark] 剧集简介清理延迟重试失败. itemId={ItemId} itemPath={ItemPath} trigger=DeferredRetry.");
 
         private readonly IEpisodeOverviewCleanupCandidateStore candidateStore;
         private readonly IEpisodeOverviewCleanupPendingResolver pendingResolver;

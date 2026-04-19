@@ -33,10 +33,10 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     public class ApiController : ControllerBase
     {
         private static readonly Action<ILogger, string?, Exception?> LogSkipRefreshEmptyId =
-            LoggerMessage.Define<string?>(LogLevel.Warning, new EventId(1, nameof(RefreshSeriesByEpisodeGroupMap)), "Skip refresh for series with empty Id. Name: {Name}");
+            LoggerMessage.Define<string?>(LogLevel.Warning, new EventId(1, nameof(RefreshSeriesByEpisodeGroupMap)), "[MetaShark] 跳过剧集组映射刷新. reason=EmptyId name={Name}.");
 
         private static readonly Action<ILogger, int, Exception?> LogQueuedRefresh =
-            LoggerMessage.Define<int>(LogLevel.Information, new EventId(2, nameof(RefreshSeriesByEpisodeGroupMap)), "Queued refresh for {Count} series from episode group map.");
+            LoggerMessage.Define<int>(LogLevel.Information, new EventId(2, nameof(RefreshSeriesByEpisodeGroupMap)), "[MetaShark] 已排队剧集组映射刷新. Count={Count}.");
 
         private readonly DoubanApi doubanApi;
         private readonly IHttpClientFactory httpClientFactory;

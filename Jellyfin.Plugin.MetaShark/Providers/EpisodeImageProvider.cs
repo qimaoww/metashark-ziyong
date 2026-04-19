@@ -48,7 +48,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteImageInfo>> GetImages(BaseItem item, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(item);
-            this.Log($"GetEpisodeImages of [name]: {item.Name} number: {item.IndexNumber} ParentIndexNumber: {item.ParentIndexNumber}");
+            this.Log("开始获取单集图片. name: {0} episodeNumber: {1} seasonNumber: {2}", item.Name, item.IndexNumber, item.ParentIndexNumber);
 
             var episode = (MediaBrowser.Controller.Entities.TV.Episode)item;
             MediaBrowser.Controller.Entities.TV.Series? series;
@@ -72,7 +72,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (!parsedTmdbId || seriesTmdbId <= 0)
             {
                 this.outcomeReporter.ReportHardMiss(item, "MissingSeriesTmdbId");
-                this.Log($"[GetEpisodeImages] The seriesTmdbId is empty!");
+                this.Log("获取单集图片失败，seriesTmdbId 为空");
                 return Enumerable.Empty<RemoteImageInfo>();
             }
 
@@ -82,7 +82,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (seasonNumber is null || episodeNumber is null or 0)
             {
                 this.outcomeReporter.ReportHardMiss(item, "InvalidEpisodeNumber");
-                this.Log($"[GetEpisodeImages] The seasonNumber or episodeNumber is empty! seasonNumber: {seasonNumber} episodeNumber: {episodeNumber}");
+                this.Log("获取单集图片失败，seasonNumber 或 episodeNumber 为空. seasonNumber: {0} episodeNumber: {1}", seasonNumber, episodeNumber);
                 return Enumerable.Empty<RemoteImageInfo>();
             }
 
@@ -94,7 +94,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (episodeResult == null)
             {
                 this.outcomeReporter.ReportHardMiss(item, "EpisodeNotFound");
-                this.Log("GetEpisodeImages] 找不到tmdb剧集数据. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, seasonNumber, episodeNumber, displayOrder);
+                this.Log("未找到 TMDb 单集图片数据. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, seasonNumber, episodeNumber, displayOrder);
                 return Enumerable.Empty<RemoteImageInfo>();
             }
 

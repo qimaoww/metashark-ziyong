@@ -24,16 +24,16 @@ using Microsoft.Extensions.Logging;
 public sealed class BoxSetManager : IHostedService, IDisposable
 {
     private static readonly Action<ILogger, Exception?> LogCollectionDisabled =
-        LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ScanLibrary)), "插件配置中未打开自动创建合集功能");
+        LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ScanLibrary)), "[MetaShark] 跳过自动创建合集扫描. reason=FeatureDisabled.");
 
     private static readonly Action<ILogger, int, Exception?> LogCollectionsFound =
-        LoggerMessage.Define<int>(LogLevel.Information, new EventId(2, nameof(ScanLibrary)), "共找到 {Count} 个合集信息");
+        LoggerMessage.Define<int>(LogLevel.Information, new EventId(2, nameof(ScanLibrary)), "[MetaShark] 找到 {Count} 个待处理合集.");
 
     private static readonly Action<ILogger, string, string, Exception?> LogCreateCollection =
-        LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(3, nameof(AddMoviesToCollection)), "创建合集 [{CollectionName}]，添加电影：{MoviesNames}");
+        LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(3, nameof(AddMoviesToCollection)), "[MetaShark] 已创建合集. collectionName={CollectionName} movies={MoviesNames}.");
 
     private static readonly Action<ILogger, string, string, Exception?> LogUpdateCollection =
-        LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(4, nameof(AddMoviesToCollection)), "更新合集 [{CollectionName}]，添加电影：{MoviesNames}");
+        LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(4, nameof(AddMoviesToCollection)), "[MetaShark] 已更新合集. collectionName={CollectionName} movies={MoviesNames}.");
 
     private readonly ILibraryManager libraryManager;
     private readonly ICollectionManager collectionManager;

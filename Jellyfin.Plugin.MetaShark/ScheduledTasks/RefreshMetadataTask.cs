@@ -28,19 +28,19 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
     public class RefreshMetadataTask : IScheduledTask
     {
         private static readonly Action<ILogger, Exception?> LogTaskStart =
-            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ExecuteAsync)), "Starting task to refresh items with missing provider IDs.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ExecuteAsync)), "[MetaShark] 开始刷新缺少 provider ID 的条目.");
 
         private static readonly Action<ILogger, Exception?> LogNoItems =
-            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(ExecuteAsync)), "No items found missing both Douban and TMDB provider IDs.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(ExecuteAsync)), "[MetaShark] 未找到缺少 provider ID 的条目.");
 
         private static readonly Action<ILogger, int, Exception?> LogItemsFound =
-            LoggerMessage.Define<int>(LogLevel.Information, new EventId(3, nameof(ExecuteAsync)), "Found {Count} items to refresh.");
+            LoggerMessage.Define<int>(LogLevel.Information, new EventId(3, nameof(ExecuteAsync)), "[MetaShark] 找到 {Count} 个待刷新条目.");
 
         private static readonly Action<ILogger, string, Guid, Exception?> LogQueueRefresh =
-            LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(4, nameof(ExecuteAsync)), "Queueing refresh for item: {Name} (Id: {Id})");
+            LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(4, nameof(ExecuteAsync)), "[MetaShark] 已排队刷新条目. name={Name} itemId={Id}.");
 
         private static readonly Action<ILogger, int, Exception?> LogFinished =
-            LoggerMessage.Define<int>(LogLevel.Information, new EventId(5, nameof(ExecuteAsync)), "Finished queueing refreshes for {Count} items.");
+            LoggerMessage.Define<int>(LogLevel.Information, new EventId(5, nameof(ExecuteAsync)), "[MetaShark] 缺少 provider ID 的条目刷新排队完成. Count={Count}.");
 
         private readonly ILogger<RefreshMetadataTask> logger;
         private readonly ILibraryManager libraryManager;

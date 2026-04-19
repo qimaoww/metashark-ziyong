@@ -2,6 +2,7 @@ using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Providers;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
@@ -15,6 +16,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Serialization;
@@ -283,6 +285,176 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 plugin.Configuration.DefaultScraperMode = originalMode;
                 plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
             }
+        }
+
+        [TestMethod]
+        public async Task EpisodeProviderLog_GetSearchResults_UsesChineseSummary()
+        {
+            var providerLogger = new Mock<ILogger>();
+            providerLogger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var providerLoggerFactory = new Mock<ILoggerFactory>();
+            providerLoggerFactory.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(providerLogger.Object);
+
+            using var apiLoggerFactory = LoggerFactory.Create(builder => { });
+            var provider = new EpisodeProvider(
+                new DefaultHttpClientFactory(),
+                providerLoggerFactory.Object,
+                new Mock<ILibraryManager>().Object,
+                new Mock<IHttpContextAccessor>().Object,
+                new DoubanApi(apiLoggerFactory),
+                new TmdbApi(apiLoggerFactory),
+                new OmdbApi(apiLoggerFactory),
+                new ImdbApi(apiLoggerFactory),
+                new TvdbApi(apiLoggerFactory));
+
+            var results = (await provider.GetSearchResults(new EpisodeInfo { Name = string.Empty }, CancellationToken.None).ConfigureAwait(false)).ToList();
+
+            Assert.AreEqual(0, results.Count);
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: ["[MetaShark] 开始搜索剧集单集候选. name: "]);
+        }
+
+        [TestMethod]
+        public async Task EpisodeProviderLog_GetMetadata_WhenTvdbIdMissing_UsesChineseSkipMessage()
+        {
+            EnsurePluginInstance();
+            MetaSharkPlugin.Instance!.Configuration.EnableTvdbSpecialsWithinSeasons = true;
+
+            var providerLogger = new Mock<ILogger>();
+            providerLogger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var providerLoggerFactory = new Mock<ILoggerFactory>();
+            providerLoggerFactory.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(providerLogger.Object);
+
+            using var apiLoggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(apiLoggerFactory);
+            SeedEpisode(tmdbApi, 0, 0, 1, "en", "en", new TvEpisode
+            {
+                Name = "Pilot",
+                Overview = "Seeded overview",
+                AirDate = new DateTime(2024, 1, 1),
+                VoteAverage = 8.1,
+            });
+
+            var provider = new EpisodeProvider(
+                new DefaultHttpClientFactory(),
+                providerLoggerFactory.Object,
+                new Mock<ILibraryManager>().Object,
+                new Mock<IHttpContextAccessor>().Object,
+                new DoubanApi(apiLoggerFactory),
+                tmdbApi,
+                new OmdbApi(apiLoggerFactory),
+                new ImdbApi(apiLoggerFactory),
+                new TvdbApi(apiLoggerFactory));
+
+            var result = await provider.GetMetadata(
+                new EpisodeInfo
+                {
+                    Name = "Episode 1",
+                    Path = "/test/Series/S00/episode-01.mkv",
+                    MetadataLanguage = "en",
+                    ParentIndexNumber = 0,
+                    IndexNumber = 1,
+                    SeriesProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), "not-an-int" },
+                    },
+                },
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            LogAssert.AssertLoggedAtLeastOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: ["[MetaShark] 开始获取单集元数据. name: Episode 1"]);
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: ["[MetaShark] 跳过 TVDB 特别篇定位，缺少 TVDB id. s0e1"]);
+        }
+
+        [TestMethod]
+        public async Task EpisodeProviderLog_GetMetadata_WhenTvdbIdPresent_UsesChineseStructuredMessages()
+        {
+            EnsurePluginInstance();
+            MetaSharkPlugin.Instance!.Configuration.EnableTvdbSpecialsWithinSeasons = true;
+
+            var providerLogger = new Mock<ILogger>();
+            providerLogger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var providerLoggerFactory = new Mock<ILoggerFactory>();
+            providerLoggerFactory.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(providerLogger.Object);
+
+            using var apiLoggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(apiLoggerFactory);
+            SeedEpisode(tmdbApi, 0, 0, 1, "en", "en", new TvEpisode
+            {
+                Name = "Pilot",
+                Overview = "Seeded overview",
+                AirDate = new DateTime(2024, 1, 1),
+                VoteAverage = 8.1,
+            });
+
+            var provider = new EpisodeProvider(
+                new DefaultHttpClientFactory(),
+                providerLoggerFactory.Object,
+                new Mock<ILibraryManager>().Object,
+                new Mock<IHttpContextAccessor>().Object,
+                new DoubanApi(apiLoggerFactory),
+                tmdbApi,
+                new OmdbApi(apiLoggerFactory),
+                new ImdbApi(apiLoggerFactory),
+                new TvdbApi(apiLoggerFactory));
+
+            var result = await provider.GetMetadata(
+                new EpisodeInfo
+                {
+                    Name = "Episode 1",
+                    Path = "/test/Series/S00/episode-01.mkv",
+                    MetadataLanguage = "en",
+                    ParentIndexNumber = 0,
+                    IndexNumber = 1,
+                    SeriesProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), "not-an-int" },
+                        { MetadataProvider.Tvdb.ToString(), "321" },
+                    },
+                },
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    { "TvdbId", "321" },
+                    { "Season", 0 },
+                    { "Episode", 1 },
+                    { "Lang", "en" },
+                },
+                originalFormatContains: "[MetaShark] 查询 TVDB 特别篇定位");
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    { "TvdbId", "321" },
+                    { "Season", 0 },
+                    { "Episode", 1 },
+                },
+                originalFormatContains: "[MetaShark] 未找到 TVDB 特别篇定位");
         }
 
     }

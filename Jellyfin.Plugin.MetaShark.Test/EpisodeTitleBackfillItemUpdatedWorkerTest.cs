@@ -1,10 +1,12 @@
 using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -44,6 +46,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     IEpisodeTitleBackfillPostProcessService.ItemUpdatedTrigger,
                     CancellationToken.None),
                 Times.Once);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Name"] = episode.Name,
+                    ["Id"] = episode.Id,
+                    ["ItemPath"] = episode.Path,
+                    ["UpdateReason"] = ItemUpdateType.MetadataImport,
+                },
+                originalFormatContains: "[MetaShark] 收到剧集标题回填条目更新事件",
+                messageContains: ["[MetaShark] 收到剧集标题回填条目更新事件", "trigger=ItemUpdated", $"itemId={episode.Id}", $"itemPath={episode.Path}"]);
         }
 
         [TestMethod]
@@ -107,18 +123,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 }));
 
             Assert.AreSame(expectedException, actualException);
-            loggerStub.Verify(
-                x => x.Log(
-                    LogLevel.Error,
-                    It.IsAny<EventId>(),
-                    It.Is<It.IsAnyType>((state, _) =>
-                        state.ToString()!.Contains(episode.Id.ToString(), StringComparison.Ordinal)
-                        && state.ToString()!.Contains(episode.Path!, StringComparison.Ordinal)
-                        && state.ToString()!.Contains("trigger=ItemUpdated", StringComparison.Ordinal)
-                        && state.ToString()!.Contains("MetadataDownload", StringComparison.Ordinal)),
-                    expectedException,
-                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-                Times.Once);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Error,
+                expectException: true,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Id"] = episode.Id,
+                    ["ItemPath"] = episode.Path,
+                    ["UpdateReason"] = ItemUpdateType.MetadataDownload,
+                },
+                originalFormatContains: "[MetaShark] 剧集标题回填后处理失败",
+                messageContains: ["[MetaShark] 剧集标题回填后处理失败", "trigger=ItemUpdated", $"itemId={episode.Id}", $"itemPath={episode.Path}"]);
         }
     }
 }

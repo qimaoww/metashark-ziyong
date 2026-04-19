@@ -15,13 +15,13 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     public sealed class EpisodeTitleBackfillItemUpdatedWorker : IHostedService
     {
         private static readonly Action<ILogger, Exception?> LogWorkerStart =
-            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "Starting episode-title-backfill item-updated worker.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "[MetaShark] 开始剧集标题回填条目更新工作器.");
 
         private static readonly Action<ILogger, string, Guid, string, ItemUpdateType, Exception?> LogItemUpdated =
-            LoggerMessage.Define<string, Guid, string, ItemUpdateType>(LogLevel.Debug, new EventId(2, nameof(OnItemUpdated)), "Received episode item-updated event for {Name} ({Id}) path {ItemPath} trigger=ItemUpdated updateReason={UpdateReason}.");
+            LoggerMessage.Define<string, Guid, string, ItemUpdateType>(LogLevel.Debug, new EventId(2, nameof(OnItemUpdated)), "[MetaShark] 收到剧集标题回填条目更新事件. name={Name} itemId={Id} itemPath={ItemPath} trigger=ItemUpdated updateReason={UpdateReason}.");
 
         private static readonly Action<ILogger, Guid, string, ItemUpdateType, Exception?> LogPostProcessFailed =
-            LoggerMessage.Define<Guid, string, ItemUpdateType>(LogLevel.Error, new EventId(3, nameof(OnItemUpdated)), "Episode title backfill post-process failed for item {Id} path {ItemPath} trigger=ItemUpdated updateReason={UpdateReason}.");
+            LoggerMessage.Define<Guid, string, ItemUpdateType>(LogLevel.Error, new EventId(3, nameof(OnItemUpdated)), "[MetaShark] 剧集标题回填后处理失败. itemId={Id} itemPath={ItemPath} trigger=ItemUpdated updateReason={UpdateReason}.");
 
         private readonly ILibraryManager libraryManager;
         private readonly IEpisodeTitleBackfillPostProcessService postProcessService;

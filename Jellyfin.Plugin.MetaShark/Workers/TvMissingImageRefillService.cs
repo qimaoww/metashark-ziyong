@@ -25,28 +25,28 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     public sealed class TvMissingImageRefillService : ITvMissingImageRefillService
     {
         private static readonly Action<ILogger, int, Exception?> LogScanCandidates =
-            LoggerMessage.Define<int>(LogLevel.Information, new EventId(1, nameof(QueueMissingImagesForFullLibraryScan)), "Found {Count} TV items for missing image refill scan.");
+            LoggerMessage.Define<int>(LogLevel.Information, new EventId(1, nameof(QueueMissingImagesForFullLibraryScan)), "[MetaShark] 找到 {Count} 个待补图电视条目.");
 
         private static readonly Action<ILogger, string, Guid, string, Exception?> LogQueuedRefresh =
-            LoggerMessage.Define<string, Guid, string>(LogLevel.Debug, new EventId(2, nameof(QueueMissingImagesForFullLibraryScan)), "Queueing TV missing-image refill for {Name} ({Id}) with missing images {MissingImages}.");
+            LoggerMessage.Define<string, Guid, string>(LogLevel.Debug, new EventId(2, nameof(QueueMissingImagesForFullLibraryScan)), "[MetaShark] 已排队电视缺图回填. name={Name} itemId={Id} missingImages={MissingImages}.");
 
         private static readonly Action<ILogger, Guid, Exception?> LogSkipEmptyId =
-            LoggerMessage.Define<Guid>(LogLevel.Debug, new EventId(3, nameof(QueueMissingImagesForUpdatedItem)), "Skipping TV missing-image refill for empty Id ({Id}).");
+            LoggerMessage.Define<Guid>(LogLevel.Debug, new EventId(3, nameof(QueueMissingImagesForUpdatedItem)), "[MetaShark] 跳过电视缺图回填. reason=EmptyId itemId={Id}.");
 
         private static readonly Action<ILogger, string, Exception?> LogSkipDisabledImageFetcher =
-            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(4, nameof(QueueMissingImagesForUpdatedItem)), "Skipping TV missing-image refill because image fetcher is disabled for {Name}.");
+            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(4, nameof(QueueMissingImagesForUpdatedItem)), "[MetaShark] 跳过电视缺图回填. reason=ImageFetcherDisabled name={Name}.");
 
         private static readonly Action<ILogger, string, Guid, Exception?> LogSkipNoMissingImages =
-            LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(5, nameof(QueueIfMissingAndEnabled)), "Skipping TV missing-image refill for {Name} ({Id}) because no supported images are missing.");
+            LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(5, nameof(QueueIfMissingAndEnabled)), "[MetaShark] 跳过电视缺图回填. reason=NoMissingImages name={Name} itemId={Id}.");
 
         private static readonly Action<ILogger, string, Guid, ItemUpdateType, Exception?> LogSkipImageUpdate =
-            LoggerMessage.Define<string, Guid, ItemUpdateType>(LogLevel.Debug, new EventId(6, nameof(QueueMissingImagesForUpdatedItem)), "Skipping TV missing-image refill for {Name} ({Id}) because update reason is {UpdateReason}.");
+            LoggerMessage.Define<string, Guid, ItemUpdateType>(LogLevel.Debug, new EventId(6, nameof(QueueMissingImagesForUpdatedItem)), "[MetaShark] 跳过电视缺图回填. reason=UpdateReasonRejected name={Name} itemId={Id} updateReason={UpdateReason}.");
 
         private static readonly Action<ILogger, string, Guid, string, Exception?> LogSkipHardMiss =
-            LoggerMessage.Define<string, Guid, string>(LogLevel.Debug, new EventId(7, nameof(QueueIfMissingAndEnabled)), "Skipping TV missing-image refill for {Name} ({Id}) because state is hard miss: {Reason}.");
+            LoggerMessage.Define<string, Guid, string>(LogLevel.Debug, new EventId(7, nameof(QueueIfMissingAndEnabled)), "[MetaShark] 跳过电视缺图回填. state=HardMiss name={Name} itemId={Id} reason={Reason}.");
 
         private static readonly Action<ILogger, string, Guid, DateTimeOffset, Exception?> LogSkipCooldown =
-            LoggerMessage.Define<string, Guid, DateTimeOffset>(LogLevel.Debug, new EventId(8, nameof(QueueIfMissingAndEnabled)), "Skipping TV missing-image refill for {Name} ({Id}) because cooldown is active until {NextRetryAtUtc}.");
+            LoggerMessage.Define<string, Guid, DateTimeOffset>(LogLevel.Debug, new EventId(8, nameof(QueueIfMissingAndEnabled)), "[MetaShark] 跳过电视缺图回填. reason=CooldownActive name={Name} itemId={Id} nextRetryAtUtc={NextRetryAtUtc}.");
 
         private readonly ILogger<TvMissingImageRefillService> logger;
         private readonly ILibraryManager libraryManager;

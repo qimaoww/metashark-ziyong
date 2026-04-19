@@ -1,4 +1,5 @@
 using Jellyfin.Plugin.MetaShark.Model;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -26,6 +27,35 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(null, episode.Overview);
             Assert.AreEqual(1, persistence.SaveCallCount);
             Assert.IsNull(candidateStore.Peek(episode.Id));
+        }
+
+        [TestMethod]
+        public async Task TryApplyAsync_CleanupSuccess_LogsUnifiedApplyMessage()
+        {
+            var episode = CreateEpisode("错误旧简介");
+            var candidateStore = new InMemoryEpisodeOverviewCleanupCandidateStore();
+            candidateStore.Save(CreateCandidate(episode.Id, episode.Path!, string.Empty));
+            var persistence = new RecordingEpisodeOverviewCleanupPersistence();
+            var loggerStub = new Mock<ILogger<EpisodeOverviewCleanupPostProcessService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var service = new EpisodeOverviewCleanupPostProcessService(candidateStore, persistence, loggerStub.Object);
+
+            await service.TryApplyAsync(CreateUpdate(episode, ItemUpdateType.MetadataDownload), IEpisodeOverviewCleanupPostProcessService.ItemUpdatedTrigger, CancellationToken.None).ConfigureAwait(false);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = episode.Id,
+                    ["Trigger"] = IEpisodeOverviewCleanupPostProcessService.ItemUpdatedTrigger,
+                    ["ItemPath"] = episode.Path,
+                    ["CurrentOverviewLength"] = "错误旧简介".Length,
+                    ["UpdateReason"] = ItemUpdateType.MetadataDownload,
+                },
+                originalFormatContains: "[MetaShark] 已应用剧集简介清理",
+                messageContains: ["[MetaShark] 已应用剧集简介清理", "trigger=ItemUpdated", $"itemId={episode.Id}"]);
         }
 
         [TestMethod]
@@ -138,14 +168,30 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var episode = CreateEpisode("错误旧简介");
             var candidateStore = new InMemoryEpisodeOverviewCleanupCandidateStore();
             candidateStore.Save(CreateCandidate(episode.Id, episode.Path!, string.Empty));
+            var loggerStub = new Mock<ILogger<EpisodeOverviewCleanupPostProcessService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
             var persistence = new Mock<IEpisodeOverviewCleanupPersistence>();
             persistence.Setup(x => x.SaveAsync(episode, CancellationToken.None)).ThrowsAsync(new InvalidOperationException("boom"));
-            var service = CreateService(candidateStore, persistence.Object);
+            var service = new EpisodeOverviewCleanupPostProcessService(candidateStore, persistence.Object, loggerStub.Object);
 
             await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => service.TryApplyAsync(CreateUpdate(episode, ItemUpdateType.MetadataDownload), IEpisodeOverviewCleanupPostProcessService.ItemUpdatedTrigger, CancellationToken.None)).ConfigureAwait(false);
 
             Assert.AreEqual("错误旧简介", episode.Overview);
             Assert.IsNotNull(candidateStore.Peek(episode.Id));
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Error,
+                expectException: true,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = episode.Id,
+                    ["Trigger"] = IEpisodeOverviewCleanupPostProcessService.ItemUpdatedTrigger,
+                    ["ItemPath"] = episode.Path,
+                    ["CurrentOverview"] = "错误旧简介",
+                    ["UpdateReason"] = ItemUpdateType.MetadataDownload,
+                },
+                originalFormatContains: "[MetaShark] 剧集简介清理保存失败",
+                messageContains: ["[MetaShark] 剧集简介清理保存失败", "trigger=ItemUpdated", $"itemId={episode.Id}"]);
         }
 
         private static EpisodeOverviewCleanupPostProcessService CreateService(IEpisodeOverviewCleanupCandidateStore candidateStore, IEpisodeOverviewCleanupPersistence persistence)

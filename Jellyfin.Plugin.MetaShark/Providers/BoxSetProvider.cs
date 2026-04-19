@@ -92,7 +92,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(info);
             var tmdbId = Convert.ToInt32(info.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
             var language = info.MetadataLanguage;
-            this.Log($"GetBoxSetMetadata of [name]: {info.Name} [tmdbId]: {tmdbId} EnableTmdb: {Config.EnableTmdb}");
+            this.Log("开始获取合集元数据. name: {0} tmdbId: {1} enableTmdb: {2}", info.Name, tmdbId, Config.EnableTmdb);
 
             // We don't already have an Id, need to fetch it
             if (tmdbId <= 0)

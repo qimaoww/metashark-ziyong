@@ -51,7 +51,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var language = item.GetPreferredMetadataLanguage();
             var doubanAllowed = IsDoubanAllowed(this.ResolveImageSemantic());
             var usedDouban = false;
-            this.Log($"GetImages for item: {item.Name} [metaSource]: {metaSource}");
+            this.Log("开始获取人物图片. name: {0} metaSource: {1}", item.Name, metaSource);
             if (doubanAllowed && !string.IsNullOrEmpty(cid))
             {
                 var celebrity = await this.DoubanApi.GetCelebrityAsync(cid, cancellationToken).ConfigureAwait(false);
@@ -114,7 +114,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             if (list.Count == 0)
             {
-                this.Log($"Got images failed because the images of \"{item.Name}\" is empty!");
+                this.Log("获取人物图片失败，没有可用图片. name: {0}", item.Name);
             }
 
             return list.OrderByLanguageDescending(language);

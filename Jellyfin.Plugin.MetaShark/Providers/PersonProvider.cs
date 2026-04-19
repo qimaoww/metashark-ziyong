@@ -39,7 +39,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteSearchResult>> GetSearchResults(PersonLookupInfo searchInfo, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(searchInfo);
-            this.Log($"GetPersonSearchResults of [name]: {searchInfo.Name}");
+            this.Log("开始搜索人物候选. name: {0}", searchInfo.Name);
 
             var result = new List<RemoteSearchResult>();
             if (!IsDoubanAllowed(DefaultScraperSemantic.ManualSearch))
@@ -89,7 +89,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var doubanAllowed = IsDoubanAllowed(semantic);
 
             var cid = info.GetProviderId(DoubanProviderId);
-            this.Log($"GetPersonMetadata of [name]: {info.Name} [cid]: {cid}");
+            this.Log("开始获取人物元数据. name: {0} cid: {1}", info.Name, cid);
             if (doubanAllowed && !string.IsNullOrEmpty(cid))
             {
                 var c = await this.DoubanApi.GetCelebrityAsync(cid, cancellationToken).ConfigureAwait(false);
@@ -134,7 +134,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         if (findResult?.PersonResults != null && findResult.PersonResults.Count > 0)
                         {
                             var foundTmdbId = findResult.PersonResults.First().Id.ToString(CultureInfo.InvariantCulture);
-                            this.Log($"GetPersonMetadata of found tmdb [id]: {foundTmdbId}");
+                            this.Log("已找到人物 TMDb id. tmdbId: {0}", foundTmdbId);
                             item.SetProviderId(MetadataProvider.Tmdb, $"{foundTmdbId}");
                         }
                     }
@@ -149,7 +149,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             // jellyfin强制最后一定使用默认的TheMovieDb插件获取一次，这里不太必要（除了使用自己的域名）
             var personTmdbId = info.GetProviderId(MetadataProvider.Tmdb);
-            this.Log($"GetPersonMetadata of [personTmdbId]: {personTmdbId}");
+            this.Log("通过 TMDb 获取人物元数据. personTmdbId: {0}", personTmdbId);
             if (!string.IsNullOrEmpty(personTmdbId))
             {
                 return await this.GetMetadataByTmdb(personTmdbId.ToInt(), info, cancellationToken).ConfigureAwait(false);

@@ -3,6 +3,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
@@ -18,6 +19,7 @@ using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Providers;
@@ -1047,6 +1049,108 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 plugin.Configuration.EnableTmdb = originalEnableTmdb;
                 plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
             }
+        }
+
+        [TestMethod]
+        public async Task SeriesProviderLog_GetSearchResults_WithInvalidTmdbId_UsesChineseDecisionMessage()
+        {
+            var providerLogger = new Mock<ILogger>();
+            providerLogger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var providerLoggerFactory = new Mock<ILoggerFactory>();
+            providerLoggerFactory.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(providerLogger.Object);
+
+            using var apiLoggerFactory = LoggerFactory.Create(builder => { });
+            var provider = new SeriesProvider(
+                new DefaultHttpClientFactory(),
+                providerLoggerFactory.Object,
+                new Mock<ILibraryManager>().Object,
+                new Mock<IHttpContextAccessor>().Object,
+                new DoubanApi(apiLoggerFactory),
+                new TmdbApi(apiLoggerFactory),
+                new OmdbApi(apiLoggerFactory),
+                new ImdbApi(apiLoggerFactory));
+
+            var results = (await provider.GetSearchResults(
+                new SeriesInfo
+                {
+                    Name = string.Empty,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), "abc" },
+                    },
+                },
+                CancellationToken.None).ConfigureAwait(false)).ToList();
+
+            Assert.AreEqual(0, results.Count);
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: new[] { "开始搜索剧集候选. name: " });
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: new[] { "跳过显式 TMDb ID 匹配，provider id 无效. rawProviderId: 'abc' fallbackToTitleSearch: False" });
+        }
+
+        [TestMethod]
+        public async Task SeriesProviderLog_GetMetadataByTmdb_UsesChineseSummary()
+        {
+            var providerLogger = new Mock<ILogger>();
+            providerLogger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var providerLoggerFactory = new Mock<ILoggerFactory>();
+            providerLoggerFactory.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(providerLogger.Object);
+
+            using var apiLoggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(apiLoggerFactory);
+            SeedTmdbSeries(tmdbApi, 45247, "zh-CN", "花牌情缘");
+
+            var provider = new SeriesProvider(
+                new DefaultHttpClientFactory(),
+                providerLoggerFactory.Object,
+                new Mock<ILibraryManager>().Object,
+                new Mock<IHttpContextAccessor>().Object,
+                new DoubanApi(apiLoggerFactory),
+                tmdbApi,
+                new OmdbApi(apiLoggerFactory),
+                new ImdbApi(apiLoggerFactory));
+
+            var result = await provider.GetMetadata(
+                new SeriesInfo
+                {
+                    Name = "花牌情缘",
+                    MetadataLanguage = "zh-CN",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { MetaSharkPlugin.ProviderId, "Tmdb_45247" },
+                        { MetadataProvider.Tmdb.ToString(), "45247" },
+                    },
+                },
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            LogAssert.AssertLoggedAtLeastOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: new[]
+                {
+                    "开始获取剧集元数据. name: 花牌情缘",
+                    "metaSource: Tmdb",
+                    "enableTmdb: True",
+                });
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: new[] { "通过 TMDb 获取剧集元数据. tmdbId: \"45247\"" });
         }
 
     }

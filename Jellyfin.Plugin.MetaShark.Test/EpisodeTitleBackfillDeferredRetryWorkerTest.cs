@@ -3,6 +3,7 @@ using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Common.Configuration;
@@ -139,6 +140,55 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task ExecuteDueCycleAsync_WhenPostProcessThrows_LogsUnifiedRetryFailure()
+        {
+            SetFeatureEnabled(true);
+
+            var nowUtc = DateTimeOffset.UtcNow;
+            var itemId = Guid.NewGuid();
+            var itemPath = "/library/tv/series-a/Season 01/episode-error.mkv";
+            var candidateStore = new InMemoryEpisodeTitleBackfillCandidateStore();
+            candidateStore.Save(CreatePathAwareCandidate(itemId, itemPath, nowUtc.AddMinutes(-1), nowUtc.AddSeconds(-1), 0));
+
+            var episode = new Episode
+            {
+                Id = itemId,
+                Name = "第 1 集",
+                Path = itemPath,
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub.Setup(x => x.FindByPath(itemPath, false)).Returns(episode);
+
+            var postProcessServiceStub = new Mock<IEpisodeTitleBackfillPostProcessService>();
+            postProcessServiceStub
+                .Setup(x => x.TryApplyAsync(It.IsAny<ItemChangeEventArgs>(), IEpisodeTitleBackfillPostProcessService.DeferredRetryTrigger, CancellationToken.None))
+                .ThrowsAsync(new InvalidOperationException("boom"));
+
+            var loggerStub = new Mock<ILogger<EpisodeTitleBackfillDeferredRetryWorker>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var worker = new EpisodeTitleBackfillDeferredRetryWorker(
+                candidateStore,
+                CreateResolver(candidateStore, libraryManagerStub.Object),
+                postProcessServiceStub.Object,
+                loggerStub.Object);
+
+            await ExecuteDueCycleAsync(worker, nowUtc).ConfigureAwait(false);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Error,
+                expectException: true,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = itemId,
+                    ["ItemPath"] = itemPath,
+                },
+                originalFormatContains: "[MetaShark] 剧集标题回填延迟重试失败",
+                messageContains: ["[MetaShark] 剧集标题回填延迟重试失败", "trigger=DeferredRetry", $"itemId={itemId}", $"itemPath={itemPath}"]);
+        }
+
+        [TestMethod]
         public async Task ExecuteAsync_WhenItemUpdatedNeverArrives_UsesDeferredRetryAndLogsAnchors()
         {
             SetFeatureEnabled(true);
@@ -179,7 +229,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             var persistence = new RecordingEpisodeTitleBackfillPersistence();
             var resolver = CreateResolver(candidateStore, libraryManagerStub.Object);
-            var postProcessService = CreatePostProcessService(candidateStore, resolver, persistence, loggerFactory);
+            var postProcessLoggerStub = new Mock<ILogger<EpisodeTitleBackfillPostProcessService>>();
+            postProcessLoggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var postProcessService = new EpisodeTitleBackfillPostProcessService(candidateStore, resolver, persistence, postProcessLoggerStub.Object);
             var worker = CreateWorker(candidateStore, resolver, postProcessService, loggerFactory);
 
             await ExecuteDueCycleAsync(worker, queuedCandidate!.NextAttemptAtUtc.AddSeconds(1)).ConfigureAwait(false);
@@ -192,7 +244,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 loggerProvider,
                 LogLevel.Information,
                 nameof(EpisodeProvider),
-                "EpisodeTitleBackfillDecision",
+                "[MetaShark] 剧集标题回填决策",
                 "CandidateQueued",
                 $"itemId={episode.Id}",
                 $"itemPath={info.Path}");
@@ -200,16 +252,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 loggerProvider,
                 LogLevel.Information,
                 nameof(EpisodeProvider),
-                "EpisodeTitleBackfillQueued",
+                "[MetaShark] 已排队剧集标题回填",
                 $"itemId={episode.Id}",
                 $"itemPath={info.Path}");
-            AssertLoggedMessage(
-                loggerProvider,
+            LogAssert.AssertLoggedOnce(
+                postProcessLoggerStub,
                 LogLevel.Information,
-                nameof(EpisodeTitleBackfillPostProcessService),
-                "Applied episode title backfill",
-                "trigger=DeferredRetry",
-                $"itemPath={info.Path}");
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = episode.Id,
+                    ["Trigger"] = IEpisodeTitleBackfillPostProcessService.DeferredRetryTrigger,
+                    ["ItemPath"] = info.Path,
+                    ["CandidateTitle"] = "皇后回宫",
+                    ["UpdateReason"] = ItemUpdateType.MetadataDownload,
+                },
+                originalFormatContains: "[MetaShark] 已应用剧集标题回填",
+                messageContains: ["[MetaShark] 已应用剧集标题回填", "trigger=DeferredRetry", $"itemPath={info.Path}"]);
         }
 
         private static EpisodeTitleBackfillPostProcessService CreatePostProcessService(

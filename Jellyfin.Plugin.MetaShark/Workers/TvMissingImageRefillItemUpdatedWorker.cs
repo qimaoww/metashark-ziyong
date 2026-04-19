@@ -15,10 +15,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     public sealed class TvMissingImageRefillItemUpdatedWorker : IHostedService
     {
         private static readonly Action<ILogger, Exception?> LogWorkerStart =
-            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "Starting TV missing-image refill item-updated worker.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "[MetaShark] 开始电视缺图回填条目更新工作器.");
 
         private static readonly Action<ILogger, string, Guid, ItemUpdateType, Exception?> LogItemUpdated =
-            LoggerMessage.Define<string, Guid, ItemUpdateType>(LogLevel.Debug, new EventId(2, nameof(OnItemUpdated)), "Received TV item-updated event for {Name} ({Id}) with reason {UpdateReason}.");
+            LoggerMessage.Define<string, Guid, ItemUpdateType>(LogLevel.Debug, new EventId(2, nameof(OnItemUpdated)), "[MetaShark] 收到电视缺图回填条目更新事件. name={Name} itemId={Id} updateReason={UpdateReason}.");
 
         private readonly ILibraryManager libraryManager;
         private readonly ITvMissingImageRefillService refillService;

@@ -14,6 +14,7 @@ using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using CandidateReason = Jellyfin.Plugin.MetaShark.Workers.MissingMetadataCandidateReason;
 
 namespace Jellyfin.Plugin.MetaShark.Test
@@ -126,6 +127,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Returns(new List<BaseItem> { completeMovie, completeSeason, unsupportedPerson });
 
             var providerManagerStub = new Mock<IProviderManager>();
+            var loggerStub = new Mock<ILogger<MissingMetadataSearchService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
             var service = CreateService(
                 libraryManagerStub.Object,
                 providerManagerStub.Object,
@@ -133,7 +136,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     delayInvocations.Add(new DelayInvocation { Delay = delay, CancellationToken = token });
                     return Task.CompletedTask;
-                });
+                },
+                logger: loggerStub.Object);
 
             await service.RunFullLibrarySearchAsync(progress, CancellationToken.None).ConfigureAwait(false);
 
@@ -142,6 +146,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
                 Times.Never);
             Assert.AreEqual(0, delayInvocations.Count);
+            LogAssert.AssertLoggedOnce(loggerStub, LogLevel.Information, expectException: false, originalFormatContains: "[MetaShark] 开始全库搜索缺失元数据条目", messageContains: ["[MetaShark] 开始全库搜索缺失元数据条目"]);
+            LogAssert.AssertLoggedOnce(loggerStub, LogLevel.Information, expectException: false, originalFormatContains: "[MetaShark] 未找到缺失元数据条目", messageContains: ["[MetaShark] 未找到缺失元数据条目"]);
         }
 
         [TestMethod]
@@ -180,6 +186,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         Priority = priority,
                     }));
 
+            var loggerStub = new Mock<ILogger<MissingMetadataSearchService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
             var service = CreateService(
                 libraryManagerStub.Object,
                 providerManagerStub.Object,
@@ -187,7 +196,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     delayInvocations.Add(new DelayInvocation { Delay = delay, CancellationToken = token });
                     return Task.CompletedTask;
-                });
+                },
+                logger: loggerStub.Object);
 
             await service.RunFullLibrarySearchAsync(progress, cancellationTokenSource.Token).ConfigureAwait(false);
 
@@ -208,6 +218,47 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Assert.AreEqual(RefreshPriority.Normal, invocation.Priority);
                 AssertFixedRefreshOptions(invocation.Options);
             }
+
+            LogAssert.AssertLoggedOnce(loggerStub, LogLevel.Information, expectException: false, originalFormatContains: "[MetaShark] 开始全库搜索缺失元数据条目", messageContains: ["[MetaShark] 开始全库搜索缺失元数据条目"]);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = missingProviderMovie.Id,
+                    ["ItemName"] = "Movie Missing Provider",
+                    ["Reason"] = CandidateReason.MissingProviderIds.ToString(),
+                    ["DelaySeconds"] = 5,
+                },
+                originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
+                messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingProviderIds"]);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = missingOverviewSeries.Id,
+                    ["ItemName"] = "Series Missing Overview",
+                    ["Reason"] = CandidateReason.MissingOverview.ToString(),
+                    ["DelaySeconds"] = 5,
+                },
+                originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
+                messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingOverview"]);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = defaultTitleEpisode.Id,
+                    ["ItemName"] = "第 1 集",
+                    ["Reason"] = CandidateReason.DefaultEpisodeTitle.ToString(),
+                    ["DelaySeconds"] = 5,
+                },
+                originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
+                messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=DefaultEpisodeTitle"]);
         }
 
         [TestMethod]
@@ -265,7 +316,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 CollectionAssert.AreEqual(new[] { missingProviderMovie.Id }, queueInvocations.Select(x => x.ItemId).ToArray());
                 Assert.AreEqual(1, delayInvocations.Count);
                 CollectionAssert.AreEqual(new[] { 100d }, secondProgress.Values.ToArray());
-                VerifyLoggedMessage(loggerStub, LogLevel.Information, "skipped because another run is already in progress");
+                LogAssert.AssertLoggedOnce(
+                    loggerStub,
+                    LogLevel.Information,
+                    expectException: false,
+                    originalFormatContains: "[MetaShark] 跳过全库搜索缺失元数据条目",
+                    messageContains: ["[MetaShark] 跳过全库搜索缺失元数据条目", "reason=AlreadyRunning"]);
             }
             finally
             {
@@ -391,18 +447,6 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(MetadataRefreshMode.FullRefresh, options.ImageRefreshMode);
             Assert.IsFalse(options.ReplaceAllMetadata);
             Assert.IsFalse(options.ReplaceAllImages);
-        }
-
-        private static void VerifyLoggedMessage(Mock<ILogger<MissingMetadataSearchService>> loggerStub, LogLevel level, params string[] fragments)
-        {
-            loggerStub.Verify(
-                x => x.Log(
-                    level,
-                    It.IsAny<EventId>(),
-                    It.Is<It.IsAnyType>((state, _) => fragments.All(fragment => state.ToString()!.Contains(fragment, StringComparison.Ordinal))),
-                    It.IsAny<Exception>(),
-                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-                Times.AtLeastOnce);
         }
 
         private sealed class ProgressRecorder : IProgress<double>

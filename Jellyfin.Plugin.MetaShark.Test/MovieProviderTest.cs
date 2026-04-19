@@ -3,6 +3,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
@@ -612,6 +613,93 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 plugin.Configuration.EnableTmdb = originalEnableTmdb;
                 plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
             }
+        }
+
+        [TestMethod]
+        public async Task MovieProviderLog_GetSearchResults_UsesChineseSummary()
+        {
+            var providerLogger = new Mock<ILogger>();
+            providerLogger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var providerLoggerFactory = new Mock<ILoggerFactory>();
+            providerLoggerFactory.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(providerLogger.Object);
+
+            using var apiLoggerFactory = LoggerFactory.Create(builder => { });
+            var provider = new MovieProvider(
+                new DefaultHttpClientFactory(),
+                providerLoggerFactory.Object,
+                new Mock<ILibraryManager>().Object,
+                new Mock<IHttpContextAccessor>().Object,
+                new DoubanApi(apiLoggerFactory),
+                new TmdbApi(apiLoggerFactory),
+                new OmdbApi(apiLoggerFactory),
+                new ImdbApi(apiLoggerFactory));
+
+            var results = (await provider.GetSearchResults(new MovieInfo { Name = string.Empty }, CancellationToken.None).ConfigureAwait(false)).ToList();
+
+            Assert.AreEqual(0, results.Count);
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: new[] { "开始搜索电影候选. name: " });
+        }
+
+        [TestMethod]
+        public async Task MovieProviderLog_GetMetadataByTmdb_UsesChineseSummary()
+        {
+            var providerLogger = new Mock<ILogger>();
+            providerLogger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var providerLoggerFactory = new Mock<ILoggerFactory>();
+            providerLoggerFactory.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(providerLogger.Object);
+
+            using var apiLoggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(apiLoggerFactory);
+            SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
+
+            var provider = new MovieProvider(
+                new DefaultHttpClientFactory(),
+                providerLoggerFactory.Object,
+                new Mock<ILibraryManager>().Object,
+                new Mock<IHttpContextAccessor>().Object,
+                new DoubanApi(apiLoggerFactory),
+                tmdbApi,
+                new OmdbApi(apiLoggerFactory),
+                new ImdbApi(apiLoggerFactory));
+
+            var result = await provider.GetMetadata(
+                new MovieInfo
+                {
+                    Name = "示例电影",
+                    MetadataLanguage = "zh-CN",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { MetaSharkPlugin.ProviderId, "Tmdb_123" },
+                        { MetadataProvider.Tmdb.ToString(), "123" },
+                    },
+                },
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            LogAssert.AssertLoggedAtLeastOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: new[]
+                {
+                    "开始获取电影元数据. name: 示例电影",
+                    "metaSource: Tmdb",
+                    "enableTmdb: True",
+                });
+            LogAssert.AssertLoggedOnce(
+                providerLogger,
+                LogLevel.Information,
+                expectException: false,
+                originalFormatContains: "[MetaShark] {Message}",
+                messageContains: new[] { "通过 TMDb 获取电影元数据. tmdbId: \"123\"" });
         }
     }
 }

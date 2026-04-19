@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Model;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
@@ -12,6 +13,7 @@ using MediaBrowser.Model.Serialization;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -58,7 +60,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             candidateStoreStub.Verify(x => x.Peek(episode.Id), Times.Once);
             candidateStoreStub.Verify(x => x.Remove(episode.Id, episode.Path), Times.Once);
             persistenceStub.Verify(x => x.SaveAsync(episode, CancellationToken.None), Times.Once);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, episode.Id.ToString(), "第 1 集", "皇后回宫", "MetadataImport");
+            AssertAppliedLog(loggerStub, episode.Id, episode.Path!, "第 1 集", "皇后回宫", ItemUpdateType.MetadataImport);
         }
 
         [TestMethod]
@@ -331,7 +333,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             candidateStoreStub.Verify(x => x.Peek(It.IsAny<Guid>()), Times.Never);
             candidateStoreStub.Verify(x => x.Remove(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
             persistenceStub.Verify(x => x.SaveAsync(It.IsAny<Episode>(), It.IsAny<CancellationToken>()), Times.Never);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, "EpisodeTitleBackfillSkip", "UpdateReasonRejected", "trigger=ItemUpdated", episode.Id.ToString(), episode.Name!, "candidateTitle=", updateReason.ToString());
+            AssertSkipLog(loggerStub, "UpdateReasonRejected", episode.Id, episode.Path!, episode.Name!, string.Empty, updateReason);
         }
 
         [TestMethod]
@@ -370,7 +372,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("第 1 集", disabledEpisode.Name);
             Assert.AreEqual("皇后回宫", retryEpisode.Name);
             persistenceStub.Verify(x => x.SaveAsync(retryEpisode, CancellationToken.None), Times.Once);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, "EpisodeTitleBackfillSkip", "FeatureDisabled", "trigger=ItemUpdated", episodeId.ToString(), disabledEpisode.Name!, "candidateTitle=", "MetadataImport");
+            AssertSkipLog(loggerStub, "FeatureDisabled", episodeId, disabledEpisode.Path!, disabledEpisode.Name!, string.Empty, ItemUpdateType.MetadataImport);
         }
 
         [TestMethod]
@@ -392,7 +394,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             candidateStoreStub.Verify(x => x.Peek(episode.Id), Times.Once);
             candidateStoreStub.Verify(x => x.Remove(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
             persistenceStub.Verify(x => x.SaveAsync(It.IsAny<Episode>(), It.IsAny<CancellationToken>()), Times.Never);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, "EpisodeTitleBackfillSkip", "NoCandidate", "trigger=ItemUpdated", episode.Id.ToString(), episode.Name!, "candidateTitle=", "MetadataImport");
+            AssertSkipLog(loggerStub, "NoCandidate", episode.Id, episode.Path!, episode.Name!, string.Empty, ItemUpdateType.MetadataImport);
         }
 
         [DataTestMethod]
@@ -422,7 +424,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             candidateStoreStub.Verify(x => x.Peek(episode.Id), Times.Once);
             candidateStoreStub.Verify(x => x.Remove(episode.Id, episode.Path), Times.Once);
             persistenceStub.Verify(x => x.SaveAsync(It.IsAny<Episode>(), It.IsAny<CancellationToken>()), Times.Never);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, "EpisodeTitleBackfillSkip", "Locked", "trigger=ItemUpdated", episode.Id.ToString(), "第 1 集", "皇后回宫", "MetadataImport");
+            AssertSkipLog(loggerStub, "Locked", episode.Id, episode.Path!, "第 1 集", "皇后回宫", ItemUpdateType.MetadataImport);
         }
 
         [TestMethod]
@@ -443,7 +445,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             candidateStoreStub.Verify(x => x.Remove(episode.Id, episode.Path), Times.Once);
             persistenceStub.Verify(x => x.SaveAsync(It.IsAny<Episode>(), It.IsAny<CancellationToken>()), Times.Never);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, "EpisodeTitleBackfillSkip", "TitleSnapshotMismatch", "trigger=ItemUpdated", episode.Id.ToString(), "第 1 集", "detail=第 2 集", "皇后回宫", "MetadataImport");
+            AssertSkipLog(loggerStub, "TitleSnapshotMismatch", episode.Id, episode.Path!, "第 1 集", "皇后回宫", ItemUpdateType.MetadataImport, detail: "第 2 集");
         }
 
         [TestMethod]
@@ -464,7 +466,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             candidateStoreStub.Verify(x => x.Remove(episode.Id, episode.Path), Times.Once);
             persistenceStub.Verify(x => x.SaveAsync(It.IsAny<Episode>(), It.IsAny<CancellationToken>()), Times.Never);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, "EpisodeTitleBackfillSkip", "CurrentTitleNotDefault", "trigger=ItemUpdated", episode.Id.ToString(), "重逢", "皇后回宫", "MetadataImport");
+            AssertSkipLog(loggerStub, "CurrentTitleNotDefault", episode.Id, episode.Path!, "重逢", "皇后回宫", ItemUpdateType.MetadataImport);
         }
 
         [TestMethod]
@@ -485,7 +487,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             candidateStoreStub.Verify(x => x.Remove(episode.Id, episode.Path), Times.Once);
             persistenceStub.Verify(x => x.SaveAsync(It.IsAny<Episode>(), It.IsAny<CancellationToken>()), Times.Never);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, "EpisodeTitleBackfillSkip", "CurrentEqualsCandidate", "trigger=ItemUpdated", episode.Id.ToString(), "currentTitle=第 1 集", "candidateTitle=第 1 集", "MetadataImport");
+            AssertSkipLog(loggerStub, "CurrentEqualsCandidate", episode.Id, episode.Path!, "第 1 集", "第 1 集", ItemUpdateType.MetadataImport);
         }
 
         [TestMethod]
@@ -523,7 +525,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("皇后回宫", firstEpisode.Name);
             Assert.AreEqual("第 1 集", secondEpisode.Name);
             persistenceStub.Verify(x => x.SaveAsync(It.IsAny<Episode>(), CancellationToken.None), Times.Once);
-            VerifyLoggedMessage(loggerStub, LogLevel.Information, "EpisodeTitleBackfillSkip", "NoCandidate", "trigger=ItemUpdated", episodeId.ToString(), "第 1 集", "candidateTitle=", "MetadataImport");
+            AssertSkipLog(loggerStub, "NoCandidate", episodeId, firstEpisode.Path!, "第 1 集", string.Empty, ItemUpdateType.MetadataImport);
         }
 
         [TestMethod]
@@ -701,16 +703,74 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return peekByPathMethod!.Invoke(candidateStore, new object[] { itemPath }) as EpisodeTitleBackfillCandidate;
         }
 
-        private static void VerifyLoggedMessage(Mock<ILogger<EpisodeTitleBackfillPostProcessService>> loggerStub, LogLevel level, params string[] fragments)
+        private static void AssertAppliedLog(
+            Mock<ILogger<EpisodeTitleBackfillPostProcessService>> loggerStub,
+            Guid itemId,
+            string itemPath,
+            string currentTitle,
+            string candidateTitle,
+            ItemUpdateType updateReason,
+            string trigger = IEpisodeTitleBackfillPostProcessService.ItemUpdatedTrigger)
         {
-            loggerStub.Verify(
-                x => x.Log(
-                    level,
-                    It.IsAny<EventId>(),
-                    It.Is<It.IsAnyType>((state, _) => fragments.All(fragment => state.ToString()!.Contains(fragment, StringComparison.Ordinal))),
-                    It.IsAny<Exception>(),
-                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-                Times.AtLeastOnce);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = itemId,
+                    ["Trigger"] = trigger,
+                    ["ItemPath"] = itemPath,
+                    ["CurrentTitle"] = currentTitle,
+                    ["CandidateTitle"] = candidateTitle,
+                    ["UpdateReason"] = updateReason,
+                },
+                originalFormatContains: "[MetaShark] 已应用剧集标题回填",
+                messageContains: ["[MetaShark] 已应用剧集标题回填", $"trigger={trigger}", $"itemId={itemId}"]);
+        }
+
+        private static void AssertSkipLog(
+            Mock<ILogger<EpisodeTitleBackfillPostProcessService>> loggerStub,
+            string reason,
+            Guid itemId,
+            string itemPath,
+            string currentTitle,
+            string candidateTitle,
+            ItemUpdateType updateReason,
+            string trigger = IEpisodeTitleBackfillPostProcessService.ItemUpdatedTrigger,
+            string? detail = null)
+        {
+            var stateContains = new Dictionary<string, object?>
+            {
+                ["Reason"] = reason,
+                ["Trigger"] = trigger,
+                ["ItemId"] = itemId,
+                ["ItemPath"] = itemPath,
+                ["CurrentTitle"] = currentTitle,
+                ["CandidateTitle"] = candidateTitle,
+                ["UpdateReason"] = updateReason,
+            };
+
+            var messageContains = new List<string>
+            {
+                "[MetaShark] 跳过剧集标题回填",
+                $"reason={reason}",
+                $"trigger={trigger}",
+            };
+
+            if (!string.IsNullOrWhiteSpace(detail))
+            {
+                stateContains["Detail"] = detail;
+                messageContains.Add($"detail={detail}");
+            }
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: stateContains,
+                originalFormatContains: "[MetaShark] 跳过剧集标题回填",
+                messageContains: [.. messageContains]);
         }
 
         private static void SetRequiredProperty<T>(EpisodeTitleBackfillCandidate candidate, string propertyName, T value)

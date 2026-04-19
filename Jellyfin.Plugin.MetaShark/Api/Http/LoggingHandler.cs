@@ -17,7 +17,7 @@ namespace Jellyfin.Plugin.MetaShark.Api.Http
     public class LoggingHandler : DelegatingHandler
     {
         private static readonly Action<ILogger, string?, Exception?> LogRequest =
-            LoggerMessage.Define<string?>(LogLevel.Information, new EventId(1, nameof(SendAsync)), "Requesting {RequestUri}");
+            LoggerMessage.Define<string?>(LogLevel.Information, new EventId(1, nameof(SendAsync)), "[MetaShark] 发起请求. requestUri={RequestUri}");
 
         private readonly ILogger<LoggingHandler> logger;
 

@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         public const string DEFAULTAPIKEY = "2c9d9507";
 
         private static readonly Action<ILogger, string, Exception?> LogGetByImdbError =
-            LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(GetByImdbID)), "GetByImdbID error. id: {ImdbId}");
+            LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(GetByImdbID)), "[MetaShark] 通过 IMDB ID 获取 OMDB 数据失败. IMDB编号={ImdbId}");
 
         private readonly ILogger<OmdbApi> logger;
         private readonly MemoryCache memoryCache;

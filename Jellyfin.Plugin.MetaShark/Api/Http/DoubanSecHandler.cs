@@ -20,8 +20,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
     // solves the SHA-512 nonce challenge and retries the original request once.
     public class DoubanSecHandler : DelegatingHandler
     {
+        private static readonly Action<ILogger, string?, Exception?> LogRiskControlTriggered =
+            LoggerMessage.Define<string?>(LogLevel.Warning, new EventId(1, nameof(SendAsync)), "[MetaShark] Douban 触发风控. requestUri={RequestUri}");
+
         private static readonly Action<ILogger, string?, Exception?> LogChallengeFailure =
-            LoggerMessage.Define<string?>(LogLevel.Warning, new EventId(1, nameof(SendAsync)), "处理 douban 验证页面失败: {RequestUri}");
+            LoggerMessage.Define<string?>(LogLevel.Warning, new EventId(2, nameof(SendAsync)), "[MetaShark] 处理 Douban 验证页面失败. requestUri={RequestUri}");
 
         private readonly ILogger logger;
 
@@ -52,6 +55,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(body) && (body.Contains("name=\"cha\"", StringComparison.OrdinalIgnoreCase) || body.Contains("id=\"cha\"", StringComparison.OrdinalIgnoreCase) || body.Contains("name=\"tok\"", StringComparison.OrdinalIgnoreCase)))
                 {
+                    LogRiskControlTriggered(this.logger, originalRequestUri?.ToString(), null);
+
                     var context = BrowsingContext.New();
                     var doc = await context.OpenAsync(req => req.Content(body), cancellationToken).ConfigureAwait(false);
 

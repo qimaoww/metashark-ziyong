@@ -40,7 +40,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteSearchResult>> GetSearchResults(SeriesInfo searchInfo, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(searchInfo);
-            this.Log($"GetSearchResults of [name]: {searchInfo.Name}");
+            this.Log("开始搜索剧集候选. name: {0}", searchInfo.Name);
             var result = new List<RemoteSearchResult>();
             var hasExactTmdbHit = false;
             var hasUsableTitle = !string.IsNullOrWhiteSpace(searchInfo.Name);
@@ -51,19 +51,19 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var formattedTmdbId = FormatProviderIdForLog(tmdbIdStr);
                 if (string.IsNullOrWhiteSpace(tmdbIdStr))
                 {
-                    this.Log($"GetSearchResults skipping explicit TMDb ID match: provider id empty/whitespace (raw provider id: {formattedTmdbId}), fallbackToTitleSearch: {hasUsableTitle}");
+                    this.Log("跳过显式 TMDb ID 匹配，provider id 为空. rawProviderId: {0} fallbackToTitleSearch: {1}", formattedTmdbId, hasUsableTitle);
                 }
                 else if (!int.TryParse(tmdbIdStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId))
                 {
-                    this.Log($"GetSearchResults skipping explicit TMDb ID match: invalid provider id {formattedTmdbId}, fallbackToTitleSearch: {hasUsableTitle}");
+                    this.Log("跳过显式 TMDb ID 匹配，provider id 无效. rawProviderId: {0} fallbackToTitleSearch: {1}", formattedTmdbId, hasUsableTitle);
                 }
                 else if (tmdbId <= 0)
                 {
-                    this.Log($"GetSearchResults skipping explicit TMDb ID match: non-positive provider id {formattedTmdbId}, fallbackToTitleSearch: {hasUsableTitle}");
+                    this.Log("跳过显式 TMDb ID 匹配，provider id 小于等于 0. rawProviderId: {0} fallbackToTitleSearch: {1}", formattedTmdbId, hasUsableTitle);
                 }
                 else
                 {
-                    this.Log($"GetSearchResults trying exact TMDb ID match: {tmdbId}");
+                    this.Log("尝试显式 TMDb ID 精确匹配. tmdbId: {0}", tmdbId);
                     var tvShow = await this.TmdbApi.GetSeriesAsync(tmdbId, searchInfo.MetadataLanguage, searchInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
                     if (tvShow != null)
                     {
@@ -72,7 +72,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     }
                     else
                     {
-                        this.Log($"GetSearchResults exact TMDb ID match returned no series for provider id {formattedTmdbId}, fallbackToTitleSearch: {hasUsableTitle}");
+                        this.Log("显式 TMDb ID 未命中剧集，回退标题搜索. rawProviderId: {0} fallbackToTitleSearch: {1}", formattedTmdbId, hasUsableTitle);
                     }
                 }
             }
@@ -101,7 +101,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             {
                 if (hasExactTmdbHit)
                 {
-                    this.Log("GetSearchResults skipping TMDb title search after exact TMDb ID hit");
+                    this.Log("已命中显式 TMDb ID，跳过 TMDb 标题搜索");
                 }
                 else
                 {
@@ -134,7 +134,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
             var hasTmdbMeta = metaSource == MetaSource.Tmdb && !string.IsNullOrEmpty(tmdbId);
             var hasDoubanMeta = doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid);
-            this.Log($"GetSeriesMetadata of [name]: {info.Name} [fileName]: {fileName} metaSource: {metaSource} EnableTmdb: {Config.EnableTmdb}");
+            this.Log("开始获取剧集元数据. name: {0} fileName: {1} metaSource: {2} enableTmdb: {3}", info.Name, fileName, metaSource, Config.EnableTmdb);
             if (!hasDoubanMeta && !hasTmdbMeta)
             {
                 // 自动扫描搜索匹配元数据
@@ -155,7 +155,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
             {
-                this.Log($"GetSeriesMetadata of douban [sid]: {sid}");
+                this.Log("通过 Douban 获取剧集元数据. sid: {0}", sid);
                 var subject = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (subject == null)
                 {
@@ -239,7 +239,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
             }
 
-            this.Log($"匹配失败！可检查下年份是否与豆瓣一致，是否需要登录访问. [name]: {info.Name} [year]: {info.Year}");
+            this.Log("剧集匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
             return result;
         }
 
@@ -308,7 +308,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return result;
             }
 
-            this.Log($"GetSeriesMetadata of tmdb [id]: \"{tmdbId}\"");
+            this.Log("通过 TMDb 获取剧集元数据. tmdbId: \"{0}\"", tmdbId);
             var tvShow = await this.TmdbApi
                 .GetSeriesAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
                 .ConfigureAwait(false);
@@ -346,7 +346,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
                 else
                 {
-                    this.Log($"Can not found tmdb [id] by imdb id: \"{imdb}\"");
+                    this.Log("未找到 TMDb id. imdbId: \"{0}\"", imdb);
                 }
             }
 
@@ -360,7 +360,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
                 else
                 {
-                    this.Log($"Can not found tmdb [id] by name: \"{name}\" and year: \"{year}\"");
+                    this.Log("未找到 TMDb id. name: \"{0}\" year: \"{1}\"", name, year);
                 }
             }
 
@@ -429,7 +429,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 if (tagCount > 0)
                 {
-                    this.Log("TMDb tags added for series: id={0} name={1} count={2}", seriesResult.Id, seriesResult.Name, tagCount);
+                    this.Log("已写入剧集 TMDb 标签. id={0} name={1} count={2}", seriesResult.Id, seriesResult.Name, tagCount);
                 }
             }
 
@@ -508,7 +508,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (!string.IsNullOrWhiteSpace(externalIds.TvdbId))
             {
                 series.SetProviderId(MetadataProvider.Tvdb, externalIds.TvdbId);
-                this.Log("Set series tvdb id by tmdb external ids. tmdbId: {0} tvdbId: {1}", tmdbId, externalIds.TvdbId);
+                this.Log("已通过 TMDb 外部 ID 写入剧集 TVDB id. tmdbId: {0} tvdbId: {1}", tmdbId, externalIds.TvdbId);
             }
         }
 
