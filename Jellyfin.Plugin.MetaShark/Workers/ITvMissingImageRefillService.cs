@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
     public interface ITvMissingImageRefillService
     {
-        void QueueMissingImagesForFullLibraryScan(CancellationToken cancellationToken);
+        TvMissingImageRefillScanSummary QueueMissingImagesForFullLibraryScan(CancellationToken cancellationToken);
 
         void QueueMissingImagesForUpdatedItem(ItemChangeEventArgs e, CancellationToken cancellationToken);
     }

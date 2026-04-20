@@ -27,11 +27,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
         public void QueueMissingImages_FullScan_QueuesSeriesWhenPrimaryIsMissingAndImageFetcherEnabled()
         {
             var series = new Series { Id = Guid.NewGuid(), Name = "Series A", Path = "/library/tv/series-a" };
+            var seriesWithImages = new Series { Id = Guid.NewGuid(), Name = "Series B", Path = "/library/tv/series-b" };
+            seriesWithImages.SetImagePath(ImageType.Primary, "https://example.com/images/series-b-primary.jpg");
+            seriesWithImages.SetImagePath(ImageType.Backdrop, "https://example.com/images/series-b-backdrop.jpg");
+            seriesWithImages.SetImagePath(ImageType.Logo, "https://example.com/images/series-b-logo.png");
 
             var libraryManagerStub = new Mock<ILibraryManager>();
             libraryManagerStub
                 .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
-                .Returns(new List<BaseItem> { series });
+                .Returns(new List<BaseItem> { series, seriesWithImages });
 
             var providerManagerStub = new Mock<IProviderManager>();
 
@@ -39,10 +43,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
             baseItemManagerStub
                 .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
+            baseItemManagerStub
+                .Setup(x => x.IsImageFetcherEnabled(seriesWithImages, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
+                .Returns(true);
 
             var service = CreateServiceWithLogger(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object, out var loggerStub);
 
-            service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
+            var summary = service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
             providerManagerStub.Verify(
                 x => x.QueueRefresh(
@@ -67,6 +74,46 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 },
                 originalFormatContains: "[MetaShark] 已排队电视缺图回填",
                 messageContains: ["[MetaShark] 已排队电视缺图回填", "itemId=", "missingImages=Primary,Backdrop,Logo"]);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Name"] = "Series B",
+                    ["Id"] = seriesWithImages.Id,
+                },
+                originalFormatContains: "[MetaShark] 跳过电视缺图回填",
+                messageContains: ["[MetaShark] 跳过电视缺图回填", "reason=NoMissingImages", "itemId="]);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["CandidateCount"] = 2,
+                    ["QueuedCount"] = 1,
+                    ["SkippedCount"] = 1,
+                    ["SkippedReasons"] = "NoMissingImages=1",
+                },
+                originalFormatContains: "[MetaShark] 电视缺图回填扫描完成",
+                messageContains: ["candidateCount=2", "queuedCount=1", "skippedCount=1", "skippedReasons=NoMissingImages=1"]);
+
+            Assert.IsFalse(
+                loggerStub.Invocations.Any(invocation =>
+                    string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal) &&
+                    invocation.Arguments.Count == 5 &&
+                    invocation.Arguments[0] is LogLevel level &&
+                    level == LogLevel.Information &&
+                    invocation.Arguments[2]?.ToString()?.Contains("找到", StringComparison.Ordinal) == true),
+                "旧的信息级文案仍然存在。");
+
+            Assert.AreEqual(2, summary.CandidateCount);
+            Assert.AreEqual(1, summary.QueuedCount);
+            Assert.AreEqual(1, summary.SkippedCount);
+            Assert.AreEqual("NoMissingImages=1", summary.SkippedReasons);
         }
 
         [TestMethod]
@@ -91,7 +138,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             var service = CreateServiceWithLogger(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object, out var loggerStub);
 
-            service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
+            var summary = service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
             providerManagerStub.Verify(
                 x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
@@ -108,6 +155,34 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 },
                 originalFormatContains: "[MetaShark] 跳过电视缺图回填",
                 messageContains: ["[MetaShark] 跳过电视缺图回填", "reason=NoMissingImages", "itemId="]);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["CandidateCount"] = 1,
+                    ["QueuedCount"] = 0,
+                    ["SkippedCount"] = 1,
+                    ["SkippedReasons"] = "NoMissingImages=1",
+                },
+                originalFormatContains: "[MetaShark] 电视缺图回填扫描完成",
+                messageContains: ["candidateCount=1", "queuedCount=0", "skippedCount=1", "skippedReasons=NoMissingImages=1"]);
+
+            Assert.IsFalse(
+                loggerStub.Invocations.Any(invocation =>
+                    string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal) &&
+                    invocation.Arguments.Count == 5 &&
+                    invocation.Arguments[0] is LogLevel level &&
+                    level == LogLevel.Information &&
+                    invocation.Arguments[2]?.ToString()?.Contains("找到", StringComparison.Ordinal) == true),
+                "旧的信息级文案仍然存在。");
+
+            Assert.AreEqual(1, summary.CandidateCount);
+            Assert.AreEqual(0, summary.QueuedCount);
+            Assert.AreEqual(1, summary.SkippedCount);
+            Assert.AreEqual("NoMissingImages=1", summary.SkippedReasons);
         }
 
         [TestMethod]

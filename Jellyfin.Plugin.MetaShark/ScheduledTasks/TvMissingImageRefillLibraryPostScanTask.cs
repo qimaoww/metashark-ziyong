@@ -14,10 +14,10 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
     public sealed class TvMissingImageRefillLibraryPostScanTask : ILibraryPostScanTask
     {
         private static readonly Action<ILogger, Exception?> LogTaskStart =
-            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(Run)), "[MetaShark] 开始电视缺图回填媒体库扫描后任务.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(Run)), "[MetaShark] 开始电视缺图回填媒体库扫描后任务，准备排队缺图回填.");
 
-        private static readonly Action<ILogger, Exception?> LogTaskFinished =
-            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(Run)), "[MetaShark] 电视缺图回填媒体库扫描后任务执行完成.");
+        private static readonly Action<ILogger, int, int, int, bool, Exception?> LogTaskFinished =
+            LoggerMessage.Define<int, int, int, bool>(LogLevel.Information, new EventId(2, nameof(Run)), "[MetaShark] 电视缺图回填媒体库扫描后任务已完成排队，后台补图异步继续. candidateCount={CandidateCount} queuedCount={QueuedCount} skippedCount={SkippedCount} refillContinuesAsync={RefillContinuesAsync}.");
 
         private readonly ILogger<TvMissingImageRefillLibraryPostScanTask> logger;
         private readonly ITvMissingImageRefillService refillService;
@@ -34,9 +34,9 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         {
             ArgumentNullException.ThrowIfNull(progress);
             LogTaskStart(this.logger, null);
-            this.refillService.QueueMissingImagesForFullLibraryScan(cancellationToken);
+            var summary = this.refillService.QueueMissingImagesForFullLibraryScan(cancellationToken);
             progress.Report(100);
-            LogTaskFinished(this.logger, null);
+            LogTaskFinished(this.logger, summary.CandidateCount, summary.QueuedCount, summary.SkippedCount, true, null);
             return Task.CompletedTask;
         }
     }

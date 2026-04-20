@@ -24,8 +24,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
     public sealed class TvMissingImageRefillService : ITvMissingImageRefillService
     {
-        private static readonly Action<ILogger, int, Exception?> LogScanCandidates =
-            LoggerMessage.Define<int>(LogLevel.Information, new EventId(1, nameof(QueueMissingImagesForFullLibraryScan)), "[MetaShark] 找到 {Count} 个待补图电视条目.");
+        private static readonly Action<ILogger, int, int, int, string, Exception?> LogScanSummary =
+            LoggerMessage.Define<int, int, int, string>(LogLevel.Information, new EventId(1, nameof(QueueMissingImagesForFullLibraryScan)), "[MetaShark] 电视缺图回填扫描完成. candidateCount={CandidateCount} queuedCount={QueuedCount} skippedCount={SkippedCount} skippedReasons={SkippedReasons}.");
 
         private static readonly Action<ILogger, string, Guid, string, Exception?> LogQueuedRefresh =
             LoggerMessage.Define<string, Guid, string>(LogLevel.Debug, new EventId(2, nameof(QueueMissingImagesForFullLibraryScan)), "[MetaShark] 已排队电视缺图回填. name={Name} itemId={Id} missingImages={MissingImages}.");
@@ -75,16 +75,40 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 loggerFactory);
         }
 
-        public void QueueMissingImagesForFullLibraryScan(CancellationToken cancellationToken)
+        public TvMissingImageRefillScanSummary QueueMissingImagesForFullLibraryScan(CancellationToken cancellationToken)
         {
             var items = this.GetTvItemsForRefill();
-            LogScanCandidates(this.logger, items.Count, null);
+
+            var queuedCount = 0;
+            var skippedCount = 0;
+            var skippedReasonCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
             foreach (var item in items)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                this.QueueIfMissingAndEnabled(item);
+
+                var skippedReason = this.QueueIfMissingAndEnabled(item);
+                if (skippedReason is null)
+                {
+                    queuedCount++;
+                    continue;
+                }
+
+                skippedCount++;
+                if (skippedReasonCounts.TryGetValue(skippedReason, out var count))
+                {
+                    skippedReasonCounts[skippedReason] = count + 1;
+                }
+                else
+                {
+                    skippedReasonCounts[skippedReason] = 1;
+                }
             }
+
+            var summary = new TvMissingImageRefillScanSummary(items.Count, queuedCount, skippedCount, FormatSkippedReasons(skippedReasonCounts));
+            LogScanSummary(this.logger, summary.CandidateCount, summary.QueuedCount, summary.SkippedCount, summary.SkippedReasons, null);
+
+            return summary;
         }
 
         public void QueueMissingImagesForUpdatedItem(ItemChangeEventArgs e, CancellationToken cancellationToken)
@@ -107,6 +131,20 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.QueueIfMissingAndEnabled(item);
         }
 
+        private static string FormatSkippedReasons(Dictionary<string, int> skippedReasonCounts)
+        {
+            if (skippedReasonCounts.Count == 0)
+            {
+                return "None";
+            }
+
+            return string.Join(
+                ";",
+                skippedReasonCounts
+                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => $"{pair.Key}={pair.Value}"));
+        }
+
         private List<BaseItem> GetTvItemsForRefill()
         {
             var query = new InternalItemsQuery
@@ -120,17 +158,17 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return this.libraryManager.GetItemList(query);
         }
 
-        private void QueueIfMissingAndEnabled(BaseItem? item)
+        private string? QueueIfMissingAndEnabled(BaseItem? item)
         {
             if (item is not Series && item is not Season && item is not Episode)
             {
-                return;
+                return "NonTvItem";
             }
 
             if (item.Id == Guid.Empty)
             {
                 LogSkipEmptyId(this.logger, item.Id, null);
-                return;
+                return "EmptyId";
             }
 
             var fingerprint = TvImageRefillFingerprint.Create(item);
@@ -143,26 +181,26 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             if (this.TryHandleStructuralHardMiss(item, fingerprint, state))
             {
-                return;
+                return "HardMiss";
             }
 
             if (state?.Status == TvImageRefillStatus.HardMiss)
             {
                 LogSkipHardMiss(this.logger, item.Name ?? string.Empty, item.Id, state.LastReason, null);
-                return;
+                return "HardMiss";
             }
 
             if (state?.Status == TvImageRefillStatus.CoolingDown && state.NextRetryAtUtc.HasValue && state.NextRetryAtUtc.Value > DateTimeOffset.UtcNow)
             {
                 LogSkipCooldown(this.logger, item.Name ?? string.Empty, item.Id, state.NextRetryAtUtc.Value, null);
-                return;
+                return "CooldownActive";
             }
 
             var typeOptions = this.GetTypeOptions(item);
             if (!this.baseItemManager.IsImageFetcherEnabled(item, typeOptions, MetaSharkPlugin.PluginName))
             {
                 LogSkipDisabledImageFetcher(this.logger, item.Name ?? item.Id.ToString(), null);
-                return;
+                return "ImageFetcherDisabled";
             }
 
             var missingImages = TvImageSupport.GetMissingImages(item).ToArray();
@@ -170,7 +208,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             {
                 this.retryStateStore.Remove(item.Id);
                 LogSkipNoMissingImages(this.logger, item.Name ?? string.Empty, item.Id, null);
-                return;
+                return "NoMissingImages";
             }
 
             var refreshOptions = new MetadataRefreshOptions(new DirectoryService(this.fileSystem))
@@ -194,6 +232,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             LogQueuedRefresh(this.logger, item.Name ?? string.Empty, item.Id, string.Join(",", missingImages), null);
             this.providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.Normal);
+
+            return null;
         }
 
         private bool TryHandleStructuralHardMiss(BaseItem item, string fingerprint, TvImageRefillState? currentState)

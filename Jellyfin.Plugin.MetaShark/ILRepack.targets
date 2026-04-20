@@ -4,6 +4,25 @@
     <DoILRepack Condition="'$(DoILRepack)' == ''">true</DoILRepack>
   </PropertyGroup>
 
+  <ItemGroup>
+    <MetaSharkHostSharedAssemblyNames Include="Diacritics.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Emby.Naming.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="ICU4N.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="ICU4N.Transliterator.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="J2N.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Jellyfin.Data.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Jellyfin.Extensions.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="MediaBrowser.Common.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="MediaBrowser.Controller.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="MediaBrowser.Model.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Microsoft.Extensions.Configuration.Binder.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Microsoft.Extensions.DependencyInjection.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Microsoft.Extensions.Logging.Abstractions.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Microsoft.Extensions.Logging.dll" />
+    <MetaSharkHostSharedAssemblyNames Include="Microsoft.Extensions.Options.dll" />
+  </ItemGroup>
+
   <Target Name="ILRepacker" AfterTargets="Build" Condition="'$(Configuration)'=='Release' AND '$(DoILRepack)'=='true'">
 
     <ItemGroup>
@@ -25,5 +44,13 @@
       TargetKind="Dll"
       OutputFile="$(OutputPath)$(AssemblyName).dll"
     />
+  </Target>
+
+  <Target Name="PruneHostSharedAssembliesFromBuildOutput" AfterTargets="ILRepacker" Condition="'$(Configuration)'=='Release' AND '$(DoILRepack)'=='true'">
+    <Delete Files="@(MetaSharkHostSharedAssemblyNames->'$(OutputPath)%(Identity)')" />
+  </Target>
+
+  <Target Name="PruneHostSharedAssembliesFromPublishOutput" AfterTargets="CopyFilesToPublishDirectory" Condition="'$(Configuration)'=='Release' AND '$(PublishDir)' != ''">
+    <Delete Files="@(MetaSharkHostSharedAssemblyNames->'$(PublishDir)%(Identity)')" />
   </Target>
 </Project>

@@ -23,24 +23,24 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
     using Microsoft.Extensions.Logging;
 
     /// <summary>
-    /// Task to refresh metadata for items missing provider IDs.
+    /// Task to refresh metadata for items needing refresh.
     /// </summary>
     public class RefreshMetadataTask : IScheduledTask
     {
         private static readonly Action<ILogger, Exception?> LogTaskStart =
-            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ExecuteAsync)), "[MetaShark] 开始刷新缺少 provider ID 的条目.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ExecuteAsync)), "[MetaShark] 开始刷新待重新刮削条目.");
 
         private static readonly Action<ILogger, Exception?> LogNoItems =
-            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(ExecuteAsync)), "[MetaShark] 未找到缺少 provider ID 的条目.");
+            LoggerMessage.Define(LogLevel.Information, new EventId(2, nameof(ExecuteAsync)), "[MetaShark] 未找到待重新刮削条目.");
 
         private static readonly Action<ILogger, int, Exception?> LogItemsFound =
-            LoggerMessage.Define<int>(LogLevel.Information, new EventId(3, nameof(ExecuteAsync)), "[MetaShark] 找到 {Count} 个待刷新条目.");
+            LoggerMessage.Define<int>(LogLevel.Information, new EventId(3, nameof(ExecuteAsync)), "[MetaShark] 找到 {Count} 个待重新刮削条目.");
 
         private static readonly Action<ILogger, string, Guid, Exception?> LogQueueRefresh =
             LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(4, nameof(ExecuteAsync)), "[MetaShark] 已排队刷新条目. name={Name} itemId={Id}.");
 
         private static readonly Action<ILogger, int, Exception?> LogFinished =
-            LoggerMessage.Define<int>(LogLevel.Information, new EventId(5, nameof(ExecuteAsync)), "[MetaShark] 缺少 provider ID 的条目刷新排队完成. Count={Count}.");
+            LoggerMessage.Define<int>(LogLevel.Information, new EventId(5, nameof(ExecuteAsync)), "[MetaShark] 待重新刮削条目刷新排队完成. Count={Count}.");
 
         private readonly ILogger<RefreshMetadataTask> logger;
         private readonly ILibraryManager libraryManager;
@@ -88,7 +88,7 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
             ArgumentNullException.ThrowIfNull(progress);
             LogTaskStart(this.logger, null);
 
-            var itemsToRefresh = this.GetItemsWithoutProviderIds();
+            var itemsToRefresh = this.GetItemsNeedingMetadataRefresh();
             int totalItems = itemsToRefresh.Count;
             int processedCount = 0;
 
@@ -127,7 +127,7 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
             LogFinished(this.logger, totalItems, null);
         }
 
-        private List<BaseItem> GetItemsWithoutProviderIds()
+        private List<BaseItem> GetItemsNeedingMetadataRefresh()
         {
             var query = new InternalItemsQuery
             {
