@@ -45,28 +45,37 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task SingleItemSearchMissingLifecycle_Movie_MetadataDownloadShouldQueueOneShotOverwriteBeforeClosingState()
+        public async Task SingleItemSearchMissingLifecycle_Movie_MetadataDownloadShouldStayPendingUntilPeopleCountSatisfied()
         {
             using var harness = FlowHarness<TrackingMovie>.CreateMovie();
             harness.OverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
             {
                 ItemId = harness.Item.Id,
                 ItemPath = harness.Item.Path,
-                ExpectedPeopleCount = 1,
+                ExpectedPeopleCount = 2,
             });
 
             await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
 
             Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "首轮内置单项 search-missing 的非 overwrite MetadataDownload 不应先结清 people state。 ");
             Assert.AreEqual(0, harness.StateStore.SaveCallCount, "首轮内置单项 search-missing 命中 candidate 后应直接排队 overwrite，不应先写入 state store。 ");
-            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "one-shot candidate 在首轮 MetadataDownload 后必须被消费，避免重复排队。 ");
             AssertQueuedOnceForSingleItemSearchMissingOverwrite(harness, harness.Item.Id);
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 2);
+
+            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
+
+            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "overwrite 后人数仍不足时，movie people state 仍应保持 pending。 ");
+            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "overwrite 后人数仍不足时，不应提前写入 state store。 ");
+            Assert.AreEqual(1, harness.QueueInvocations.Count, "follow-up overwrite refresh 不应重新创建 candidate 或再次排队。 ");
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 2);
+
+            harness.Item.SetSimulatedPeopleCount(2);
 
             await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
 
             AssertCurrentStatePersisted(harness);
-            Assert.AreEqual(1, harness.QueueInvocations.Count, "follow-up overwrite refresh 不应重新创建 candidate 或再次排队。 ");
-            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "follow-up overwrite refresh 完成后不应遗留 candidate。 ");
+            Assert.AreEqual(1, harness.QueueInvocations.Count, "人数满足后不应再次排队 overwrite refresh。 ");
+            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "movie people 数满足预期后，candidate 应真正消失。 ");
         }
 
         [TestMethod]
@@ -92,28 +101,37 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task SingleItemSearchMissingLifecycle_Series_MetadataDownloadShouldQueueOneShotOverwriteBeforeClosingState()
+        public async Task SingleItemSearchMissingLifecycle_Series_MetadataDownloadShouldStayPendingUntilPeopleCountSatisfied()
         {
             using var harness = FlowHarness<TrackingSeries>.CreateSeries();
             harness.OverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
             {
                 ItemId = harness.Item.Id,
                 ItemPath = harness.Item.Path,
-                ExpectedPeopleCount = 1,
+                ExpectedPeopleCount = 2,
             });
 
             await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
 
             Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "首轮内置单项 search-missing 的非 overwrite MetadataDownload 不应先结清 series people state。 ");
             Assert.AreEqual(0, harness.StateStore.SaveCallCount, "首轮命中 candidate 后应先排队 overwrite，而不是直接保存 state。 ");
-            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "series one-shot candidate 在首轮 MetadataDownload 后必须被消费。 ");
             AssertQueuedOnceForSingleItemSearchMissingOverwrite(harness, harness.Item.Id);
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 2);
+
+            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
+
+            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "overwrite 后人数仍不足时，series people state 仍应保持 pending。 ");
+            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "overwrite 后人数仍不足时，series 不应提前写入 state store。 ");
+            Assert.AreEqual(1, harness.QueueInvocations.Count, "series follow-up overwrite refresh 不应重复排队。 ");
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 2);
+
+            harness.Item.SetSimulatedPeopleCount(2);
 
             await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
 
             AssertCurrentStatePersisted(harness);
-            Assert.AreEqual(1, harness.QueueInvocations.Count, "series follow-up overwrite refresh 不应重复排队。 ");
-            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "series follow-up overwrite refresh 后不应遗留 candidate。 ");
+            Assert.AreEqual(1, harness.QueueInvocations.Count, "series 人数满足后不应再次排队 overwrite refresh。 ");
+            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "series people 数满足预期后，candidate 应真正消失。 ");
         }
 
         [TestMethod]
@@ -243,6 +261,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(invocation.Options.ReplaceAllImages);
         }
 
+        private static void AssertPendingOverwriteCandidate<TItem>(FlowHarness<TItem> harness, int expectedPeopleCount)
+            where TItem : BaseItem, ITrackingLifecycleItem
+        {
+            var candidate = harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id);
+
+            Assert.IsNotNull(candidate, "人数仍不足时应保留 pending overwrite candidate。 ");
+            Assert.AreEqual(harness.Item.Id, candidate!.ItemId);
+            Assert.AreEqual(harness.Item.Path, candidate.ItemPath);
+            Assert.AreEqual(expectedPeopleCount, candidate.ExpectedPeopleCount);
+            Assert.IsTrue(candidate.OverwriteQueued, "pending candidate 应标记为 overwrite 已排队，避免重复排队。 ");
+        }
+
         private static MetadataRefreshOptions CreateOverwriteRefreshOptions()
         {
             return new MetadataRefreshOptions(new DirectoryService(Mock.Of<IFileSystem>()))
@@ -261,6 +291,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             int UpdateToRepositoryCallCount { get; }
 
             ItemUpdateType? LastUpdateReason { get; }
+
+            void SetSimulatedPeopleCount(int count);
         }
 
         private sealed class FlowHarness<TItem> : IDisposable
@@ -405,16 +437,32 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private sealed class TrackingMovie : Movie, ITrackingLifecycleItem
         {
+            private readonly List<object> simulatedPeople = new List<object>();
+
             public int MetadataChangedCallCount { get; private set; }
 
             public int UpdateToRepositoryCallCount { get; private set; }
 
             public ItemUpdateType? LastUpdateReason { get; private set; }
 
+            public void SetSimulatedPeopleCount(int count)
+            {
+                this.simulatedPeople.Clear();
+                for (var i = 0; i < count; i++)
+                {
+                    this.simulatedPeople.Add(new object());
+                }
+            }
+
             public override ItemUpdateType OnMetadataChanged()
             {
                 this.MetadataChangedCallCount++;
                 return ItemUpdateType.MetadataEdit;
+            }
+
+            private System.Collections.IEnumerable GetPeople()
+            {
+                return this.simulatedPeople;
             }
 
             public override Task UpdateToRepositoryAsync(ItemUpdateType updateReason, CancellationToken cancellationToken)
@@ -427,16 +475,32 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private sealed class TrackingSeries : Series, ITrackingLifecycleItem
         {
+            private readonly List<object> simulatedPeople = new List<object>();
+
             public int MetadataChangedCallCount { get; private set; }
 
             public int UpdateToRepositoryCallCount { get; private set; }
 
             public ItemUpdateType? LastUpdateReason { get; private set; }
 
+            public void SetSimulatedPeopleCount(int count)
+            {
+                this.simulatedPeople.Clear();
+                for (var i = 0; i < count; i++)
+                {
+                    this.simulatedPeople.Add(new object());
+                }
+            }
+
             public override ItemUpdateType OnMetadataChanged()
             {
                 this.MetadataChangedCallCount++;
                 return ItemUpdateType.MetadataEdit;
+            }
+
+            private System.Collections.IEnumerable GetPeople()
+            {
+                return this.simulatedPeople;
             }
 
             public override Task UpdateToRepositoryAsync(ItemUpdateType updateReason, CancellationToken cancellationToken)

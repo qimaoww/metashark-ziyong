@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
     public class PeopleRefreshState
     {
-        public const string CurrentVersion = "tmdb-people-strict-zh-cn-v1";
+        public const string CurrentVersion = "tmdb-people-strict-zh-cn-v2";
 
         public Guid ItemId { get; set; }
 

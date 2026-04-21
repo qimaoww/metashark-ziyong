@@ -385,12 +385,21 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return false;
             }
 
+            if (candidate.OverwriteQueued)
+            {
+                this.overwriteRefreshCandidateStore.Save(candidate);
+                return true;
+            }
+
             try
             {
                 this.providerManager.QueueRefresh(item.Id, CreateSearchMissingOverwriteRefreshOptions(this.fileSystem), RefreshPriority.Normal);
+                candidate.OverwriteQueued = true;
+                this.overwriteRefreshCandidateStore.Save(candidate);
             }
             catch
             {
+                candidate.OverwriteQueued = false;
                 this.overwriteRefreshCandidateStore.Save(candidate);
                 throw;
             }

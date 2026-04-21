@@ -208,6 +208,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 result.QueriedById = true;
                 result.HasMetadata = true;
 
+                if (!string.IsNullOrEmpty(tmdbId))
+                {
+                    var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, cancellationToken).ConfigureAwait(false);
+                    if (acceptedPeopleCount > 0)
+                    {
+                        this.TryQueueSearchMissingMetadataOverwriteCandidate(info, acceptedPeopleCount);
+                    }
+                }
+
                 return result;
             }
 
@@ -309,15 +318,24 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 movie.AddGenre(genre);
             }
 
-            var people = await this.GetPersonsAsync(movieResult, cancellationToken).ConfigureAwait(false);
-            foreach (var person in people)
-            {
-                result.AddPerson(person);
-            }
-
-            this.TryQueueSearchMissingMetadataOverwriteCandidate(info, people.Count);
+            var acceptedPeopleCount = await this.AddTmdbPeopleAsync(movieResult, result, cancellationToken).ConfigureAwait(false);
+            this.TryQueueSearchMissingMetadataOverwriteCandidate(info, acceptedPeopleCount);
 
             return result;
+        }
+
+        private async Task<int> TryAddTmdbPeopleAsync(string tmdbId, MovieInfo info, MetadataResult<Movie> result, CancellationToken cancellationToken)
+        {
+            var movieResult = await this.TmdbApi
+                .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (movieResult == null)
+            {
+                return 0;
+            }
+
+            return await this.AddTmdbPeopleAsync(movieResult, result, cancellationToken).ConfigureAwait(false);
         }
 
         private MetadataResult<Movie>? HandleExtraType(MovieInfo info)
@@ -364,6 +382,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return;
             }
 
+            var existingCandidate = this.movieSeriesPeopleOverwriteRefreshCandidateStore.Peek(itemId);
+            if (existingCandidate?.OverwriteQueued == true)
+            {
+                return;
+            }
+
             this.movieSeriesPeopleOverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
             {
                 ItemId = itemId,
@@ -371,6 +395,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ExpectedPeopleCount = expectedPeopleCount,
             });
             this.Log("已记录单项影视人物 overwrite candidate. itemId: {0} expectedPeopleCount: {1}", itemId, expectedPeopleCount);
+        }
+
+        private async Task<int> AddTmdbPeopleAsync(TMDbLib.Objects.Movies.Movie movieResult, MetadataResult<Movie> result, CancellationToken cancellationToken)
+        {
+            var people = await this.GetPersonsAsync(movieResult, cancellationToken).ConfigureAwait(false);
+            foreach (var person in people)
+            {
+                result.AddPerson(person);
+            }
+
+            return people.Count;
         }
 
         private async Task<IReadOnlyList<PersonInfo>> GetPersonsAsync(TMDbLib.Objects.Movies.Movie item, CancellationToken cancellationToken)

@@ -81,7 +81,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 includeProviderIds: true,
                 includeOverview: true,
                 includePrimaryImage: true,
-                peopleRefreshState: "tmdb-people-strict-zh-cn-v0",
+                peopleRefreshState: "tmdb-people-strict-zh-cn-v1",
                 peopleRefreshStateStore: peopleRefreshStateStore);
 
             AssertCandidate(series, CandidateReason.MissingPeopleRefreshState, true, peopleRefreshStateStore);
@@ -232,7 +232,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 includeProviderIds: true,
                 includeOverview: true,
                 includePrimaryImage: true,
-                peopleRefreshState: "tmdb-people-strict-zh-cn-v0",
+                peopleRefreshState: "tmdb-people-strict-zh-cn-v1",
                 peopleRefreshStateStore: peopleRefreshStateStore);
             var defaultTitleEpisode = CreateItem<Episode>("第 1 集", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
             var missingPeopleSeason = CreateItem<Season>("Season Missing People State", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);

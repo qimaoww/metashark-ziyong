@@ -13,5 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         public string ItemPath { get; set; } = string.Empty;
 
         public int ExpectedPeopleCount { get; set; }
+
+        public bool OverwriteQueued { get; set; }
     }
 }

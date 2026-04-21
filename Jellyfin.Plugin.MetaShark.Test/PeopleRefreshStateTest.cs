@@ -26,7 +26,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         public void RequiresBackfill_SeriesWithExpiredState_ShouldReturnTrue()
         {
             var series = CreateItem<Series>(includeTmdb: true);
-            var state = PeopleRefreshStateTestHelper.CreateState(series, version: "tmdb-people-strict-zh-cn-v0");
+            var state = PeopleRefreshStateTestHelper.CreateState(series, version: "tmdb-people-strict-zh-cn-v1");
 
             Assert.IsTrue(PeopleRefreshState.RequiresBackfill(series, state));
             Assert.IsTrue(PeopleRefreshState.IsStale(series, state));

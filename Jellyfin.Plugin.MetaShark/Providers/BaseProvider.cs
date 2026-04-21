@@ -1032,12 +1032,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private async Task<string?> ResolveItemPersonNameCoreAsync(string? currentCreditsName, int personTmdbId, bool allowRawNameFallback, CancellationToken cancellationToken)
         {
-            var acceptedRawName = GetTrimmedNonEmptyText(currentCreditsName);
-            if (acceptedRawName != null)
-            {
-                return acceptedRawName;
-            }
-
             if (personTmdbId > 0)
             {
                 var localizedName = await this.GetPreferredZhCnPersonNameAsync(personTmdbId, cancellationToken).ConfigureAwait(false);
@@ -1047,9 +1041,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
             }
 
-            return allowRawNameFallback
-                ? string.Empty
-                : null;
+            if (allowRawNameFallback)
+            {
+                var acceptedRawName = GetTrimmedNonEmptyText(currentCreditsName);
+                if (acceptedRawName != null)
+                {
+                    return acceptedRawName;
+                }
+
+                return string.Empty;
+            }
+
+            return null;
         }
 
         private async Task<string?> GetPreferredZhCnPersonNameAsync(int personTmdbId, CancellationToken cancellationToken)

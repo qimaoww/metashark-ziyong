@@ -146,6 +146,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 TimeSpan.FromMinutes(5));
         }
 
+
+        private static void SeedTmdbSeriesSearchResults(TmdbApi tmdbApi, string name, string language, params SearchTv[] results)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"searchseries-{name}-{language}",
+                new SearchContainer<SearchTv>
+                {
+                    Results = results.ToList(),
+                },
+                TimeSpan.FromMinutes(5));
+        }
+
         private static void SeedTmdbPerson(TmdbApi tmdbApi, int tmdbId, string? name, string? language = null, string? countryCode = null)
         {
             GetTmdbMemoryCache(tmdbApi).Set(
@@ -1300,6 +1312,116 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadataByDouban_AddsTmdbOnlyPeople_WhenTmdbIdIsResolved()
+        {
+            var info = new SeriesInfo
+            {
+                Name = "豆瓣示例剧集",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, "series-douban-101" },
+                    { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_series-douban-101" },
+                },
+            };
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            SeedDoubanSubject(
+                doubanApi,
+                new DoubanSubject
+                {
+                    Sid = "series-douban-101",
+                    Name = "豆瓣示例剧集",
+                    OriginalName = "Douban Sample Series",
+                    Year = 2024,
+                    Rating = 8.1f,
+                    Genre = "剧情 / 动画",
+                    Intro = "豆瓣剧集简介",
+                    Screen = "2024-04-04",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000006.webp",
+                });
+            SeedDoubanCelebrities(
+                doubanApi,
+                "series-douban-101",
+                new[]
+                {
+                    new DoubanCelebrity
+                    {
+                        Id = "douban-series-director-2",
+                        Name = "豆瓣剧集导演",
+                        Role = "导演",
+                    },
+                    new DoubanCelebrity
+                    {
+                        Id = "douban-series-actor-2",
+                        Name = "豆瓣剧集演员",
+                        Role = "演员",
+                    },
+                });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedTmdbSeriesSearchResults(
+                tmdbApi,
+                "豆瓣示例剧集",
+                "zh-CN",
+                new SearchTv
+                {
+                    Id = 9102,
+                    Name = "豆瓣示例剧集",
+                    OriginalName = "Douban Sample Series",
+                    FirstAirDate = new DateTime(2024, 1, 1),
+                });
+            var tmdbSeries = new TvShow
+            {
+                Id = 9102,
+                Name = "TMDb 不应覆盖 Douban 主标题",
+                OriginalName = "TMDb Ignored Original Title",
+                Overview = "TMDb 不应覆盖 Douban 简介",
+                FirstAirDate = new DateTime(2024, 1, 1),
+                VoteAverage = 7.1,
+                EpisodeRunTime = new List<int>(),
+                ContentRatings = new ResultContainer<ContentRating>
+                {
+                    Results = new List<ContentRating>(),
+                },
+            };
+            SetTmdbSeriesCredits(
+                tmdbSeries,
+                new[]
+                {
+                    CreateCastCredit(3101, "TMDb Raw Actor", "角色A", 0),
+                },
+                new[]
+                {
+                    CreateCrewCredit(3201, "TMDb Raw Director", "Production", "Director"),
+                });
+            SeedTmdbSeries(tmdbApi, 9102, "zh-CN", tmdbSeries);
+            SeedTmdbPerson(tmdbApi, 3101, "剧集演员大陆名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 3201, "剧集导演大陆名", language: "zh-CN");
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            var provider = new SeriesProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("豆瓣示例剧集", result.Item.Name, "Douban 主字段不应被 TMDb people 回填覆盖。 ");
+            Assert.AreEqual("Douban Sample Series", result.Item.OriginalTitle);
+            Assert.AreEqual("豆瓣剧集简介", result.Item.Overview);
+            Assert.IsTrue(result.Item.CommunityRating > 8.0f && result.Item.CommunityRating < 8.2f, "Douban 主分支的评分不应被 TMDb people 回填改变。 ");
+            Assert.AreEqual("9102", result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.IsNotNull(result.People);
+            Assert.AreEqual(2, result.People.Count, "Douban 路径一旦解析出 tmdbId，应额外复用 TMDb people builder。 ");
+            Assert.AreEqual("剧集演员大陆名", GetPersonByTmdbId(result.People, 3101).Name);
+            Assert.AreEqual("剧集导演大陆名", GetPersonByTmdbId(result.People, 3201).Name);
+            Assert.IsTrue(result.People.All(person => person.ProviderIds != null
+                && person.ProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString())
+                && !person.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId)), "Douban 分支补回的人物仍应保持 TMDb-only provider id。 ");
+        }
+
+        [TestMethod]
         public async Task GetMetadataByTMDB_ScrapesOnlySeriesPeopleWithExactZhCnSourceNames()
         {
             var expectedAcceptedActorIds = new[] { 1001, 1002, 1003, 1004, 1005, 1011, 1012, 1013, 1014, 1015, 1016, 1017, 1018, 1019, 1020 };
@@ -1429,7 +1551,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(result.HasMetadata);
             Assert.IsNotNull(result.People);
             Assert.IsFalse(result.Item.ProviderIds?.ContainsKey("MetaSharkPeopleRefreshState") ?? false, "provider 不应在返回 metadata result 时提前写入内部 people refresh state。 ");
-            Assert.AreEqual(18, result.People.Count, "raw 非空的前 15 个演员和 crew 应按原始顺序进入结果，后续条目即使也可接受也不应挤占上限。 ");
+            Assert.AreEqual(18, result.People.Count, "前 15 个命中精确 zh-CN 源值的演员和 crew 应按原始顺序进入结果，后续条目即使也可接受也不应挤占上限。 ");
 
             var actorTmdbIdsInOrder = result.People
                 .Where(person =>
@@ -1439,7 +1561,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 })
                 .Select(GetTmdbId)
                 .ToArray();
-            CollectionAssert.AreEqual(expectedAcceptedActorIds, actorTmdbIdsInOrder, "actor 应保持原始相对顺序，并在接受后再计入上限；非空 raw 名称应直接保留，空 raw 只允许精确 zh-CN 详情/翻译进入结果。 ");
+            CollectionAssert.AreEqual(expectedAcceptedActorIds, actorTmdbIdsInOrder, "actor 应保持原始相对顺序，并在接受后再计入上限；strict path 应优先使用精确 zh-CN detail/translation，而不是 raw credits 名称。 ");
             Assert.AreEqual(expectedAcceptedActorIds.Length, actorTmdbIdsInOrder.Distinct().Count(), "accepted actor 总数不足 15 时不应补重复项。 ");
             CollectionAssert.AreEqual(new[] { 0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 }, result.People.Where(person =>
             {
@@ -1448,17 +1570,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }).Select(person => person.SortOrder).ToArray(), "accept-then-cap 不应重排或重写原始 SortOrder。 ");
             Assert.IsFalse(result.People.Any(person => string.IsNullOrWhiteSpace(person.Name)), "accepted actor 数不足上限时不应制造空位项。 ");
 
-            var actorRawAccepted = GetPersonByTmdbId(result.People, 1001);
-            Assert.AreEqual("这个演员原名", actorRawAccepted.Name, "非空 raw credit 应直接保留原名。 ");
-            Assert.AreEqual("角色A", actorRawAccepted.Role);
-            Assert.AreEqual(PersonKind.Actor, actorRawAccepted.Type);
-            Assert.AreEqual(0, actorRawAccepted.SortOrder);
-            Assert.AreEqual(tmdbApi.GetProfileUrl("/actor-raw.jpg")?.ToString(), actorRawAccepted.ImageUrl);
+            var actorExactZhCn = GetPersonByTmdbId(result.People, 1001);
+            Assert.AreEqual("这个演员大陆候选", actorExactZhCn.Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
+            Assert.AreEqual("角色A", actorExactZhCn.Role);
+            Assert.AreEqual(PersonKind.Actor, actorExactZhCn.Type);
+            Assert.AreEqual(0, actorExactZhCn.SortOrder);
+            Assert.AreEqual(tmdbApi.GetProfileUrl("/actor-raw.jpg")?.ToString(), actorExactZhCn.ImageUrl);
 
-            Assert.AreEqual("這個演員原名", GetPersonByTmdbId(result.People, 1002).Name, "非空 raw 应直接保留，不再回退到 zh-CN 详情。 ");
-            Assert.AreEqual("Actor Hans Raw", GetPersonByTmdbId(result.People, 1003).Name, "非空 raw 应直接保留，不再回退到 zh-CN 详情。 ");
-            Assert.AreEqual("这个演员详情大陆名", GetPersonByTmdbId(result.People, 1004).Name, "raw 为空时应优先使用精确 zh-CN 详情。 ");
-            Assert.AreEqual("这个演员翻译名", GetPersonByTmdbId(result.People, 1005).Name, "zh-CN 详情为空时应仅使用精确 zh-CN translation。 ");
+            Assert.AreEqual("这个演员大陆名", GetPersonByTmdbId(result.People, 1002).Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
+            Assert.AreEqual("这个演员 Hans 名", GetPersonByTmdbId(result.People, 1003).Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
+            Assert.AreEqual("这个演员详情大陆名", GetPersonByTmdbId(result.People, 1004).Name, "精确 zh-CN detail 可用时应直接采用。 ");
+            Assert.AreEqual("这个演员翻译名", GetPersonByTmdbId(result.People, 1005).Name, "精确 zh-CN detail 为空时应仅使用精确 zh-CN translation。 ");
             Assert.IsFalse(result.People.Any(person => person.ProviderIds != null
                 && person.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var providerId)
                 && expectedAcceptedActorIds.All(acceptedId => !string.Equals(providerId, acceptedId.ToString(), StringComparison.Ordinal))
@@ -1466,30 +1588,30 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 && tmdbId >= 1006
                 && tmdbId <= 1010), "raw 为空且 zh-CN 详情/翻译都为空时才应拒绝，不能因为繁体/Hans/通用 zh 有值就保留。 ");
 
-            Assert.AreEqual("Late Actor Raw 11", GetPersonByTmdbId(result.People, 1011).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("Late 演員 Raw 12", GetPersonByTmdbId(result.People, 1012).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("Late Actor Latin 13", GetPersonByTmdbId(result.People, 1013).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("Late 演員 Raw 14", GetPersonByTmdbId(result.People, 1014).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("Late Actor Raw 15", GetPersonByTmdbId(result.People, 1015).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("Late Actor Raw 16", GetPersonByTmdbId(result.People, 1016).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("Late Actor Raw 17", GetPersonByTmdbId(result.People, 1017).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("Late Actor Raw 18", GetPersonByTmdbId(result.People, 1018).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("Late Actor Raw 19", GetPersonByTmdbId(result.People, 1019).Name, "非空 raw 应直接保留。 ");
-            Assert.AreEqual("这个演员尾部原名", GetPersonByTmdbId(result.People, 1020).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("这个演员尾部大陆名 11", GetPersonByTmdbId(result.People, 1011).Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它。 ");
+            Assert.AreEqual("安德斯·托马斯·詹森", GetPersonByTmdbId(result.People, 1012).Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它。 ");
+            Assert.AreEqual("Latin Actor 13", GetPersonByTmdbId(result.People, 1013).Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它。 ");
+            Assert.AreEqual("这个演员尾部大陆名 14", GetPersonByTmdbId(result.People, 1014).Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它。 ");
+            Assert.AreEqual("这個演員尾部原名 15", GetPersonByTmdbId(result.People, 1015).Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它。 ");
+            Assert.AreEqual("Late Actor Raw 16 Detail", GetPersonByTmdbId(result.People, 1016).Name, "strict actor path 命中精确 zh-CN detail 时不应回落到 raw。 ");
+            Assert.AreEqual("Late Actor Raw 17 Detail", GetPersonByTmdbId(result.People, 1017).Name, "strict actor path 命中精确 zh-CN detail 时不应回落到 raw。 ");
+            Assert.AreEqual("Late Actor Raw 18 Detail", GetPersonByTmdbId(result.People, 1018).Name, "strict actor path 命中精确 zh-CN detail 时不应回落到 raw。 ");
+            Assert.AreEqual("Late Actor Raw 19 Detail", GetPersonByTmdbId(result.People, 1019).Name, "strict actor path 命中精确 zh-CN detail 时不应回落到 raw。 ");
+            Assert.AreEqual("这个演员尾部原名 20", GetPersonByTmdbId(result.People, 1020).Name, "strict actor path 命中精确 zh-CN detail 时应优先返回它。 ");
 
             var director = GetPersonByTmdbId(result.People, 2001);
-            Assert.AreEqual("這個導演原名", director.Name, "非空 raw director 名称应原样保留。 ");
+            Assert.AreEqual("这个导演大陆名", director.Name, "strict crew path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
             Assert.AreEqual("Director", director.Role);
             Assert.AreEqual(PersonKind.Director, director.Type);
             Assert.AreEqual(tmdbApi.GetPosterUrl("/director.jpg")?.ToString(), director.ImageUrl);
 
             var producer = GetPersonByTmdbId(result.People, 2002);
-            Assert.AreEqual("Producer Raw", producer.Name, "非空 raw crew 名称应直接保留，不再优先使用 zh-Hans。 ");
+            Assert.AreEqual("這個製片人繁體名", producer.Name, "strict crew path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
             Assert.AreEqual(PersonKind.Producer, producer.Type);
             Assert.AreEqual("Producer", producer.Role);
 
             var writer = GetPersonByTmdbId(result.People, 2003);
-            Assert.AreEqual("Writer Raw", writer.Name, "非空 raw crew 名称应直接保留。 ");
+            Assert.AreEqual("这个编剧翻译名", writer.Name, "strict crew path 在精确 zh-CN detail 为空时应仅允许精确 zh-CN translation 作为兜底。 ");
             Assert.AreEqual(PersonKind.Actor, writer.Type, "writer 当前仍沿用既有 PersonKind 映射，不应在本任务里改动。 ");
             Assert.AreEqual("Screenplay", writer.Role);
 

@@ -221,6 +221,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 result.QueriedById = true;
                 result.HasMetadata = true;
 
+                if (!string.IsNullOrEmpty(tmdbId))
+                {
+                    var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, cancellationToken).ConfigureAwait(false);
+                    if (acceptedPeopleCount > 0)
+                    {
+                        this.TryQueueSearchMissingMetadataOverwriteCandidate(info, acceptedPeopleCount);
+                    }
+                }
+
                 return result;
             }
 
@@ -330,17 +339,42 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ResultLanguage = info.MetadataLanguage ?? tvShow.OriginalLanguage,
             };
 
+            var acceptedPeopleCount = await this.AddTmdbPeopleAsync(tvShow, result, cancellationToken).ConfigureAwait(false);
+            this.TryQueueSearchMissingMetadataOverwriteCandidate(info, acceptedPeopleCount);
+
+            result.QueriedById = true;
+            result.HasMetadata = true;
+            return result;
+        }
+
+        private async Task<int> TryAddTmdbPeopleAsync(string tmdbId, ItemLookupInfo info, MetadataResult<Series> result, CancellationToken cancellationToken)
+        {
+            if (!int.TryParse(tmdbId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbNumericId))
+            {
+                return 0;
+            }
+
+            var tvShow = await this.TmdbApi
+                .GetSeriesAsync(tmdbNumericId, info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (tvShow == null)
+            {
+                return 0;
+            }
+
+            return await this.AddTmdbPeopleAsync(tvShow, result, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<int> AddTmdbPeopleAsync(TvShow tvShow, MetadataResult<Series> result, CancellationToken cancellationToken)
+        {
             var people = await this.GetPersonsAsync(tvShow, cancellationToken).ConfigureAwait(false);
             foreach (var person in people)
             {
                 result.AddPerson(person);
             }
 
-            this.TryQueueSearchMissingMetadataOverwriteCandidate(info, people.Count);
-
-            result.QueriedById = true;
-            result.HasMetadata = true;
-            return result;
+            return people.Count;
         }
 
         private async Task<string?> FindTmdbId(string name, string imdb, int? year, ItemLookupInfo info, CancellationToken cancellationToken)
@@ -394,6 +428,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var itemId = series?.Id ?? Guid.Empty;
             var httpContext = this.HttpContextAccessor.HttpContext;
             if (itemId == Guid.Empty && !TryResolveItemIdFromRequestPath(httpContext, out itemId))
+            {
+                return;
+            }
+
+            var existingCandidate = this.movieSeriesPeopleOverwriteRefreshCandidateStore.Peek(itemId);
+            if (existingCandidate?.OverwriteQueued == true)
             {
                 return;
             }

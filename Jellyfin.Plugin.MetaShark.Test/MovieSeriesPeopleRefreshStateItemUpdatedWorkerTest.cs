@@ -146,7 +146,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task TryApplyAsync_MetadataDownloadWithSparsePeopleCandidate_ShouldQueueOverwriteWithoutSavingState()
+        public async Task TryApplyAsync_MetadataDownloadWithSparsePeopleCandidate_ShouldQueueOverwriteAndKeepPendingCandidate()
         {
             var stateStore = new TestPeopleRefreshStateStore();
             var providerManagerStub = new Mock<IProviderManager>();
@@ -178,22 +178,65 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(queued[0].Options.ReplaceAllMetadata);
             Assert.AreEqual(0, stateStore.SaveCallCount);
             Assert.IsNull(stateStore.GetState(movie.Id));
-            Assert.IsNull(candidateStore.Peek(movie.Id));
+            var pendingCandidate = candidateStore.Peek(movie.Id);
+            Assert.IsNotNull(pendingCandidate);
+            Assert.AreEqual(2, pendingCandidate!.ExpectedPeopleCount);
+            Assert.IsTrue(pendingCandidate.OverwriteQueued);
         }
 
         [TestMethod]
-        public async Task TryApplyAsync_MetadataDownloadWithSatisfiedPeopleCandidate_ShouldNotQueueOverwriteAndShouldPersistState()
+        public async Task TryApplyAsync_MetadataDownloadWithAlreadyQueuedSparsePeopleCandidate_ShouldNotRequeueAndShouldStayPending()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var providerManagerStub = new Mock<IProviderManager>();
+            var candidateStore = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var queued = new List<(Guid ItemId, MetadataRefreshOptions Options, RefreshPriority Priority)>();
+            providerManagerStub
+                .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, options, priority) => queued.Add((itemId, options, priority)));
+            var service = CreatePostProcessService(stateStore, providerManagerStub.Object, candidateStore);
+            var movie = CreateMovie(includeTmdb: true);
+            candidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = movie.Id,
+                ItemPath = movie.Path,
+                ExpectedPeopleCount = 2,
+                OverwriteQueued = true,
+            });
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = movie,
+                    UpdateReason = ItemUpdateType.MetadataDownload,
+                },
+                MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, queued.Count);
+            Assert.AreEqual(0, stateStore.SaveCallCount);
+            Assert.IsNull(stateStore.GetState(movie.Id));
+            var pendingCandidate = candidateStore.Peek(movie.Id);
+            Assert.IsNotNull(pendingCandidate);
+            Assert.AreEqual(2, pendingCandidate!.ExpectedPeopleCount);
+            Assert.IsTrue(pendingCandidate.OverwriteQueued);
+        }
+
+        [TestMethod]
+        public async Task TryApplyAsync_MetadataDownloadWithSatisfiedQueuedPeopleCandidate_ShouldNotQueueOverwriteAndShouldPersistState()
         {
             var stateStore = new TestPeopleRefreshStateStore();
             var providerManagerStub = new Mock<IProviderManager>();
             var candidateStore = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
             var service = CreatePostProcessService(stateStore, providerManagerStub.Object, candidateStore);
             var series = CreateSeries(includeTmdb: true);
+            series.SetSimulatedPeopleCount(2);
             candidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
             {
                 ItemId = series.Id,
                 ItemPath = series.Path,
-                ExpectedPeopleCount = 0,
+                ExpectedPeopleCount = 2,
+                OverwriteQueued = true,
             });
 
             await service.TryApplyAsync(
@@ -214,12 +257,48 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task TryApplyAsync_MetadataDownloadWithQueueFailure_ShouldRestoreUnqueuedCandidate()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var providerManagerStub = new Mock<IProviderManager>();
+            var candidateStore = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            providerManagerStub
+                .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                .Throws(new InvalidOperationException("queue failed"));
+            var service = CreatePostProcessService(stateStore, providerManagerStub.Object, candidateStore);
+            var movie = CreateMovie(includeTmdb: true);
+            candidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = movie.Id,
+                ItemPath = movie.Path,
+                ExpectedPeopleCount = 2,
+            });
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(async () =>
+                await service.TryApplyAsync(
+                    new ItemChangeEventArgs
+                    {
+                        Item = movie,
+                        UpdateReason = ItemUpdateType.MetadataDownload,
+                    },
+                    MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                    CancellationToken.None).ConfigureAwait(false)).ConfigureAwait(false);
+
+            Assert.AreEqual(0, stateStore.SaveCallCount);
+            Assert.IsNull(stateStore.GetState(movie.Id));
+            var restoredCandidate = candidateStore.Peek(movie.Id);
+            Assert.IsNotNull(restoredCandidate);
+            Assert.AreEqual(2, restoredCandidate!.ExpectedPeopleCount);
+            Assert.IsFalse(restoredCandidate.OverwriteQueued, "排队失败时 candidate 不应误标记成已排队。 ");
+        }
+
+        [TestMethod]
         public async Task TryApplyAsync_CurrentStateWithLegacyProviderIdResidue_ShouldRemoveResidueAndPersistMetadataEditWithoutSavingStoreAgain()
         {
             var stateStore = new TestPeopleRefreshStateStore();
             var service = CreatePostProcessService(stateStore);
             var series = CreateSeries(includeTmdb: true);
-            AddLegacyPeopleRefreshStateProviderId(series, "tmdb-people-strict-zh-cn-v0");
+            AddLegacyPeopleRefreshStateProviderId(series, "tmdb-people-strict-zh-cn-v1");
             PeopleRefreshStateTestHelper.SaveState(stateStore, series, PeopleRefreshState.CurrentVersion);
             var originalSaveCallCount = stateStore.SaveCallCount;
 
@@ -443,16 +522,32 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private sealed class TrackingMovie : Movie
         {
+            private readonly List<object> simulatedPeople = new List<object>();
+
             public int MetadataChangedCallCount { get; private set; }
 
             public int UpdateToRepositoryCallCount { get; private set; }
 
             public ItemUpdateType? LastUpdateReason { get; private set; }
 
+            public void SetSimulatedPeopleCount(int count)
+            {
+                this.simulatedPeople.Clear();
+                for (var i = 0; i < count; i++)
+                {
+                    this.simulatedPeople.Add(new object());
+                }
+            }
+
             public override ItemUpdateType OnMetadataChanged()
             {
                 this.MetadataChangedCallCount++;
                 return ItemUpdateType.MetadataEdit;
+            }
+
+            private System.Collections.IEnumerable GetPeople()
+            {
+                return this.simulatedPeople;
             }
 
             public override Task UpdateToRepositoryAsync(ItemUpdateType updateReason, CancellationToken cancellationToken)
@@ -465,16 +560,32 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private sealed class TrackingSeries : Series
         {
+            private readonly List<object> simulatedPeople = new List<object>();
+
             public int MetadataChangedCallCount { get; private set; }
 
             public int UpdateToRepositoryCallCount { get; private set; }
 
             public ItemUpdateType? LastUpdateReason { get; private set; }
 
+            public void SetSimulatedPeopleCount(int count)
+            {
+                this.simulatedPeople.Clear();
+                for (var i = 0; i < count; i++)
+                {
+                    this.simulatedPeople.Add(new object());
+                }
+            }
+
             public override ItemUpdateType OnMetadataChanged()
             {
                 this.MetadataChangedCallCount++;
                 return ItemUpdateType.MetadataEdit;
+            }
+
+            private System.Collections.IEnumerable GetPeople()
+            {
+                return this.simulatedPeople;
             }
 
             public override Task UpdateToRepositoryAsync(ItemUpdateType updateReason, CancellationToken cancellationToken)
