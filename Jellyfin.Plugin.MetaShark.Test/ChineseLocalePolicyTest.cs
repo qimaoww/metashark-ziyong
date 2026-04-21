@@ -5,12 +5,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
     [TestClass]
     public class ChineseLocalePolicyTest
     {
-        [TestMethod]
-        public void ShouldCanonicalizeMixedCaseZhCn()
+        [DataTestMethod]
+        [DataRow("ZH-cn", "zh-CN")]
+        [DataRow(" zh-hant ", "zh-Hant")]
+        [DataRow("zh-hk", "zh-HK")]
+        public void ShouldCanonicalizeChineseLanguageTags(string language, string expected)
         {
-            var result = ChineseLocalePolicy.CanonicalizeLanguage("ZH-cn");
+            var result = ChineseLocalePolicy.CanonicalizeLanguage(language);
 
-            Assert.AreEqual("zh-CN", result);
+            Assert.AreEqual(expected, result);
         }
 
         [DataTestMethod]
@@ -28,7 +31,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         [DataTestMethod]
         [DataRow("zh-CN", ChineseScriptBucket.Hans)]
+        [DataRow("zh-Hans", ChineseScriptBucket.Hans)]
         [DataRow("zh-TW", ChineseScriptBucket.Hant)]
+        [DataRow("zh-HK", ChineseScriptBucket.Hant)]
+        [DataRow("zh-MO", ChineseScriptBucket.Hant)]
+        [DataRow("zh-Hant", ChineseScriptBucket.Hant)]
         [DataRow("zh", ChineseScriptBucket.Unknown)]
         public void ShouldMapChineseLanguageTagsToExpectedScriptBuckets(string language, ChineseScriptBucket expected)
         {
@@ -75,6 +82,105 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = ChineseLocalePolicy.IsTextAllowedForStrictZhCn("皇后回宫");
 
             Assert.IsTrue(result);
+        }
+
+        [TestMethod]
+        public void ShouldPreferExactZhCnPeopleLocalization()
+        {
+            var result = ChineseLocalePolicy.TryGetPreferredPeopleLocalization(
+                new[]
+                {
+                    CreateLocalizedValue("zh", "通用中文名"),
+                    CreateLocalizedValue("zh-Hant", "繁體中文名"),
+                    CreateLocalizedValue("zh-CN", "中国大陆名"),
+                },
+                localizedValue => localizedValue.Language,
+                localizedValue => localizedValue.Value,
+                "Fallback Name",
+                out var value,
+                out var sourceLanguage);
+
+            Assert.IsTrue(result);
+            Assert.AreEqual("中国大陆名", value);
+            Assert.AreEqual("zh-CN", sourceLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldIgnoreNonExactZhCnPeopleLocalization()
+        {
+            var result = ChineseLocalePolicy.TryGetPreferredPeopleLocalization(
+                new[]
+                {
+                    CreateLocalizedValue("zh", "通用中文名"),
+                    CreateLocalizedValue("zh-Hant", "繁體中文名"),
+                    CreateLocalizedValue("zh-Hans", "简体中文名"),
+                },
+                localizedValue => localizedValue.Language,
+                localizedValue => localizedValue.Value,
+                "Fallback Name",
+                out var value,
+                out var sourceLanguage);
+
+            Assert.IsFalse(result);
+            Assert.IsNull(value);
+            Assert.IsNull(sourceLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldNotUseExplicitFallbackWhenExactZhCnPeopleLocalizationIsBlank()
+        {
+            var result = ChineseLocalePolicy.TryGetPreferredPeopleLocalization(
+                new[]
+                {
+                    CreateLocalizedValue("zh-CN", "   "),
+                    CreateLocalizedValue("zh-CN", null),
+                    CreateLocalizedValue("zh", "可忽略的通用中文名"),
+                },
+                localizedValue => localizedValue.Language,
+                localizedValue => localizedValue.Value,
+                "Fallback Name",
+                out var value,
+                out var sourceLanguage);
+
+            Assert.IsFalse(result);
+            Assert.IsNull(value);
+            Assert.IsNull(sourceLanguage);
+        }
+
+        [TestMethod]
+        public void ShouldRejectBlankFallbackWhenNoUsablePeopleLocalizationExists()
+        {
+            var result = ChineseLocalePolicy.TryGetPreferredPeopleLocalization(
+                new[]
+                {
+                    CreateLocalizedValue("zh-CN", "   "),
+                    CreateLocalizedValue("zh", null),
+                },
+                localizedValue => localizedValue.Language,
+                localizedValue => localizedValue.Value,
+                "  ",
+                out var value,
+                out var sourceLanguage);
+
+            Assert.IsFalse(result);
+            Assert.IsNull(value);
+            Assert.IsNull(sourceLanguage);
+        }
+
+        private static LocalizedValue CreateLocalizedValue(string? language, string? value)
+        {
+            return new LocalizedValue
+            {
+                Language = language,
+                Value = value,
+            };
+        }
+
+        private sealed class LocalizedValue
+        {
+            public string? Language { get; init; }
+
+            public string? Value { get; init; }
         }
     }
 }

@@ -438,6 +438,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
         }
 
+        protected async Task<string> ResolveItemPersonNameAsync(string? currentCreditsName, int personTmdbId, CancellationToken cancellationToken)
+        {
+            return (await this.ResolveItemPersonNameCoreAsync(currentCreditsName, personTmdbId, allowRawNameFallback: true, cancellationToken).ConfigureAwait(false)) ?? string.Empty;
+        }
+
+        protected Task<string?> ResolveSimplifiedChineseOnlyItemPersonNameAsync(string? currentCreditsName, int personTmdbId, CancellationToken cancellationToken)
+        {
+            return this.ResolveItemPersonNameCoreAsync(currentCreditsName, personTmdbId, allowRawNameFallback: false, cancellationToken);
+        }
+
         protected DefaultScraperSemantic ResolveMetadataSemantic(ItemLookupInfo info)
         {
             ArgumentNullException.ThrowIfNull(info);
@@ -926,6 +936,37 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return this.RegSeasonNameSuffix.Replace(name, string.Empty);
         }
 
+        private static string? GetTrimmedNonEmptyText(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            return value.Trim();
+        }
+
+        private static bool IsMatchingPeopleTranslationLanguage(Translation translation, string requestedLanguage)
+        {
+            var translationLanguage = BuildTranslationLanguageTag(translation);
+            return !string.IsNullOrWhiteSpace(translationLanguage)
+                && string.Equals(translationLanguage, requestedLanguage, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string? BuildTranslationLanguageTag(Translation translation)
+        {
+            var language = GetTrimmedNonEmptyText(translation.Iso_639_1);
+            var locale = GetTrimmedNonEmptyText(translation.Iso_3166_1);
+            if (language == null)
+            {
+                return null;
+            }
+
+            return locale == null
+                ? ChineseLocalePolicy.CanonicalizeLanguage(language)
+                : ChineseLocalePolicy.CanonicalizeLanguage($"{language}-{locale}");
+        }
+
         private static string GetImageLanguageParam(string preferredLanguage, string? originalLanguage = null)
         {
             var languageCodeMap = new Dictionary<string, string>()
@@ -987,6 +1028,60 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             var encodedUrl = HttpUtility.UrlEncode(url.ToString());
             return new Uri($"{baseUrl.TrimEnd('/')}/plugin/metashark/proxy/image?url={encodedUrl}", UriKind.Absolute);
+        }
+
+        private async Task<string?> ResolveItemPersonNameCoreAsync(string? currentCreditsName, int personTmdbId, bool allowRawNameFallback, CancellationToken cancellationToken)
+        {
+            var acceptedRawName = GetTrimmedNonEmptyText(currentCreditsName);
+            if (acceptedRawName != null)
+            {
+                return acceptedRawName;
+            }
+
+            if (personTmdbId > 0)
+            {
+                var localizedName = await this.GetPreferredZhCnPersonNameAsync(personTmdbId, cancellationToken).ConfigureAwait(false);
+                if (localizedName != null)
+                {
+                    return localizedName;
+                }
+            }
+
+            return allowRawNameFallback
+                ? string.Empty
+                : null;
+        }
+
+        private async Task<string?> GetPreferredZhCnPersonNameAsync(int personTmdbId, CancellationToken cancellationToken)
+        {
+            var person = await this.TmdbApi.GetPersonAsync(personTmdbId, "zh-CN", null, cancellationToken).ConfigureAwait(false);
+            var localizedName = GetTrimmedNonEmptyText(person?.Name);
+            if (localizedName != null)
+            {
+                return localizedName;
+            }
+
+            var translations = await this.TmdbApi.GetPersonTranslationsAsync(personTmdbId, cancellationToken).ConfigureAwait(false);
+            if (translations?.Translations == null)
+            {
+                return null;
+            }
+
+            foreach (var translation in translations.Translations)
+            {
+                if (!IsMatchingPeopleTranslationLanguage(translation, "zh-CN"))
+                {
+                    continue;
+                }
+
+                var translatedName = GetTrimmedNonEmptyText(translation.Data?.Name);
+                if (translatedName != null)
+                {
+                    return translatedName;
+                }
+            }
+
+            return null;
         }
 
         private string GetBaseUrl()

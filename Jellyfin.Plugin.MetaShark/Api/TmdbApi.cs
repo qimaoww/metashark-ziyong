@@ -876,17 +876,25 @@ namespace Jellyfin.Plugin.MetaShark.Api
         /// Gets a person eg. cast or crew member from the TMDb API based on its TMDb id.
         /// </summary>
         /// <param name="personTmdbId">The person's TMDb id.</param>
+        /// <param name="language">The person's language.</param>
+        /// <param name="countryCode">The country code, ISO 3166-1.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>The TMDb person information or null if not found.</returns>
-        public async Task<Person?> GetPersonAsync(int personTmdbId, CancellationToken cancellationToken)
+        public async Task<Person?> GetPersonAsync(int personTmdbId, string language, string? countryCode, CancellationToken cancellationToken)
         {
             if (!IsEnable())
             {
                 return null;
             }
 
-            var key = $"person-{personTmdbId.ToString(CultureInfo.InvariantCulture)}";
+            var normalizedLanguage = NormalizeLanguage(language, countryCode);
+            var key = GetPersonCacheKey(personTmdbId, language, countryCode);
             if (this.memoryCache.TryGetValue(key, out Person? person))
+            {
+                return person;
+            }
+
+            if (this.TryRestoreLegacyNeutralPersonCache(personTmdbId, normalizedLanguage, key, out person))
             {
                 return person;
             }
@@ -897,8 +905,9 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
                 person = await this.tmDbClient.GetPersonAsync(
                     personTmdbId,
-                    PersonMethods.TvCredits | PersonMethods.MovieCredits | PersonMethods.Images | PersonMethods.ExternalIds,
-                    cancellationToken).ConfigureAwait(false);
+                    language: string.IsNullOrWhiteSpace(normalizedLanguage) ? null : normalizedLanguage,
+                    extraMethods: PersonMethods.TvCredits | PersonMethods.MovieCredits | PersonMethods.Images | PersonMethods.ExternalIds,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 if (person != null)
                 {
@@ -915,6 +924,61 @@ namespace Jellyfin.Plugin.MetaShark.Api
             catch (HttpRequestException ex)
             {
                 this.logTmdbError(this.logger, nameof(this.GetPersonAsync), ex);
+                return null;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Gets a person eg. cast or crew member from the TMDb API based on its TMDb id.
+        /// </summary>
+        /// <param name="personTmdbId">The person's TMDb id.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The TMDb person information or null if not found.</returns>
+        public Task<Person?> GetPersonAsync(int personTmdbId, CancellationToken cancellationToken)
+        {
+            return this.GetPersonAsync(personTmdbId, string.Empty, null, cancellationToken);
+        }
+
+        /// <summary>
+        /// Gets person translations from the TMDb API based on its TMDb id.
+        /// </summary>
+        /// <param name="personTmdbId">The person's TMDb id.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The TMDb person translations or null if not found.</returns>
+        public async Task<TranslationsContainer?> GetPersonTranslationsAsync(int personTmdbId, CancellationToken cancellationToken)
+        {
+            if (!IsEnable())
+            {
+                return null;
+            }
+
+            var key = GetPersonTranslationsCacheKey(personTmdbId);
+            if (this.memoryCache.TryGetValue(key, out TranslationsContainer? translations))
+            {
+                return translations;
+            }
+
+            try
+            {
+                await this.EnsureClientConfigAsync().ConfigureAwait(false);
+
+                translations = await this.tmDbClient.GePersonTranslationsAsync(personTmdbId, cancellationToken).ConfigureAwait(false);
+                this.memoryCache.Set(key, translations, TimeSpan.FromHours(CacheDurationInHours));
+
+                return translations;
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetPersonTranslationsAsync), ex);
+                return null;
+            }
+            catch (HttpRequestException ex)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetPersonTranslationsAsync), ex);
                 return null;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1304,6 +1368,62 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
         }
 
+        private static string NormalizeLanguage(string language, string? countryCode)
+        {
+            var normalizedLanguage = NormalizeLanguage(language);
+            if (string.IsNullOrEmpty(normalizedLanguage))
+            {
+                return normalizedLanguage;
+            }
+
+            if (string.Equals(normalizedLanguage, "es-419", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(countryCode))
+            {
+                normalizedLanguage = string.Equals(countryCode, "AR", StringComparison.OrdinalIgnoreCase)
+                    ? "es-AR"
+                    : "es-MX";
+            }
+
+            var parts = normalizedLanguage.Split('-', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 1
+                && normalizedLanguage.Length == 2
+                && !string.IsNullOrWhiteSpace(countryCode)
+                && countryCode.Trim().Length == 2)
+            {
+                normalizedLanguage = normalizedLanguage + "-" + countryCode.Trim().ToUpperInvariant();
+                parts = normalizedLanguage.Split('-', StringSplitOptions.RemoveEmptyEntries);
+            }
+
+            if (parts.Length == 2 && string.Equals(parts[1], "CH", StringComparison.OrdinalIgnoreCase))
+            {
+                return parts[0];
+            }
+
+            if (parts.Length == 2 && parts[1].Length == 2)
+            {
+                return parts[0] + "-" + parts[1].ToUpperInvariant();
+            }
+
+            return normalizedLanguage;
+        }
+
+        private static string GetPersonCacheKey(int personTmdbId, string language, string? countryCode)
+        {
+            var normalizedLanguage = NormalizeLanguage(language, countryCode);
+            var languageKey = string.IsNullOrWhiteSpace(normalizedLanguage) ? "neutral" : normalizedLanguage;
+            return $"person-{personTmdbId.ToString(CultureInfo.InvariantCulture)}-{languageKey}";
+        }
+
+        private static string GetLegacyNeutralPersonCacheKey(int personTmdbId)
+        {
+            return $"person-{personTmdbId.ToString(CultureInfo.InvariantCulture)}";
+        }
+
+        private static string GetPersonTranslationsCacheKey(int personTmdbId)
+        {
+            return $"person-translations-{personTmdbId.ToString(CultureInfo.InvariantCulture)}";
+        }
+
         private static bool IsStrictZhCnEpisodeTranslation(Translation translation)
         {
             return string.Equals(translation.Iso_639_1, "zh", StringComparison.OrdinalIgnoreCase)
@@ -1451,6 +1571,25 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private Task EnsureClientConfigAsync()
         {
             return !this.tmDbClient.HasConfig ? this.tmDbClient.GetConfigAsync() : Task.CompletedTask;
+        }
+
+        private bool TryRestoreLegacyNeutralPersonCache(int personTmdbId, string normalizedLanguage, string currentKey, out Person? person)
+        {
+            person = null;
+            if (!string.IsNullOrWhiteSpace(normalizedLanguage))
+            {
+                return false;
+            }
+
+            var legacyKey = GetLegacyNeutralPersonCacheKey(personTmdbId);
+            if (!this.memoryCache.TryGetValue(legacyKey, out Person? legacyPerson) || legacyPerson == null)
+            {
+                return false;
+            }
+
+            this.memoryCache.Set(currentKey, legacyPerson, TimeSpan.FromHours(CacheDurationInHours));
+            person = legacyPerson;
+            return true;
         }
 
         private async Task<TvEpisode?> EnsureEpisodeStillImagesAsync(TvEpisode? episode, int tvShowId, int seasonNumber, int episodeNumber, string language, string imageLanguages, CancellationToken cancellationToken)

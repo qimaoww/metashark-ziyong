@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -48,6 +49,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void ResolveMissingMetadataCandidateReason_ShouldKeepOverviewBeforePeopleRefreshState()
+        {
+            var series = CreateItem<Series>("Series Missing Overview", includeProviderIds: true, includeOverview: false, includePrimaryImage: true);
+
+            AssertCandidate(series, CandidateReason.MissingOverview, true);
+        }
+
+        [TestMethod]
         public void ResolveMissingMetadataCandidateReason_ShouldMatchDefaultEpisodeTitleOnlyForEpisode()
         {
             var episode = CreateItem<Episode>("第 1 集", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
@@ -56,11 +65,64 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void ResolveMissingMetadataCandidateReason_ShouldMatchMissingPeopleRefreshStateForMovieWithoutState()
+        {
+            var movie = CreateItem<Movie>("Movie Missing People State", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+
+            AssertCandidate(movie, CandidateReason.MissingPeopleRefreshState, true);
+        }
+
+        [TestMethod]
+        public void ResolveMissingMetadataCandidateReason_ShouldMatchMissingPeopleRefreshStateForSeriesWithStaleState()
+        {
+            var peopleRefreshStateStore = new TestPeopleRefreshStateStore();
+            var series = CreateItem<Series>(
+                "Series Stale People State",
+                includeProviderIds: true,
+                includeOverview: true,
+                includePrimaryImage: true,
+                peopleRefreshState: "tmdb-people-strict-zh-cn-v0",
+                peopleRefreshStateStore: peopleRefreshStateStore);
+
+            AssertCandidate(series, CandidateReason.MissingPeopleRefreshState, true, peopleRefreshStateStore);
+        }
+
+        [TestMethod]
         public void ResolveMissingMetadataCandidateReason_ShouldSkipCompleteSeriesEvenWhenNameLooksLikeDefaultEpisodeTitle()
         {
-            var series = CreateItem<Series>("第 1 集", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+            var peopleRefreshStateStore = new TestPeopleRefreshStateStore();
+            var series = CreateItem<Series>(
+                "第 1 集",
+                includeProviderIds: true,
+                includeOverview: true,
+                includePrimaryImage: true,
+                peopleRefreshState: PeopleRefreshState.CurrentVersion,
+                peopleRefreshStateStore: peopleRefreshStateStore);
 
-            AssertCandidate(series, CandidateReason.CompleteMetadata, false);
+            AssertCandidate(series, CandidateReason.CompleteMetadata, false, peopleRefreshStateStore);
+        }
+
+        [TestMethod]
+        public void ResolveMissingMetadataCandidateReason_ShouldSkipMissingPeopleRefreshStateForNonMovieOrSeries()
+        {
+            var season = CreateItem<Season>("Season Current Metadata", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+
+            AssertCandidate(season, CandidateReason.CompleteMetadata, false);
+        }
+
+        [TestMethod]
+        public void ResolveMissingMetadataCandidateReason_ShouldSkipMissingPeopleRefreshStateWhenStateIsCurrent()
+        {
+            var peopleRefreshStateStore = new TestPeopleRefreshStateStore();
+            var movie = CreateItem<Movie>(
+                "Movie Current People State",
+                includeProviderIds: true,
+                includeOverview: true,
+                includePrimaryImage: true,
+                peopleRefreshState: PeopleRefreshState.CurrentVersion,
+                peopleRefreshStateStore: peopleRefreshStateStore);
+
+            AssertCandidate(movie, CandidateReason.CompleteMetadata, false, peopleRefreshStateStore);
         }
 
         [TestMethod]
@@ -115,7 +177,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public async Task RunFullLibrarySearchAsync_WhenCandidatesAreEmpty_ShouldReport100AndSkipQueueing()
         {
-            var completeMovie = CreateItem<Movie>("Movie Complete", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+            var peopleRefreshStateStore = new TestPeopleRefreshStateStore();
+            var completeMovie = CreateItem<Movie>(
+                "Movie Complete",
+                includeProviderIds: true,
+                includeOverview: true,
+                includePrimaryImage: true,
+                peopleRefreshState: PeopleRefreshState.CurrentVersion,
+                peopleRefreshStateStore: peopleRefreshStateStore);
             var completeSeason = CreateItem<Season>("Season Complete", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
             var unsupportedPerson = CreateItem<Person>("Person Non Candidate", includeProviderIds: false, includeOverview: false, includePrimaryImage: false);
             var progress = new ProgressRecorder();
@@ -137,7 +206,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     delayInvocations.Add(new DelayInvocation { Delay = delay, CancellationToken = token });
                     return Task.CompletedTask;
                 },
-                logger: loggerStub.Object);
+                logger: loggerStub.Object,
+                peopleRefreshStateStore: peopleRefreshStateStore);
 
             await service.RunFullLibrarySearchAsync(progress, CancellationToken.None).ConfigureAwait(false);
 
@@ -153,9 +223,26 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public async Task RunFullLibrarySearchAsync_WhenCandidatesExist_ShouldQueueOnlyCandidatesWithFixedRefreshOptionsAndDelay()
         {
+            var peopleRefreshStateStore = new TestPeopleRefreshStateStore();
             var missingProviderMovie = CreateItem<Movie>("Movie Missing Provider", includeProviderIds: false, includeOverview: true, includePrimaryImage: true);
+            var missingPeopleMovie = CreateItem<Movie>("Movie Missing People State", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
             var missingOverviewSeries = CreateItem<Series>("Series Missing Overview", includeProviderIds: true, includeOverview: false, includePrimaryImage: true);
+            var stalePeopleSeries = CreateItem<Series>(
+                "Series Stale People State",
+                includeProviderIds: true,
+                includeOverview: true,
+                includePrimaryImage: true,
+                peopleRefreshState: "tmdb-people-strict-zh-cn-v0",
+                peopleRefreshStateStore: peopleRefreshStateStore);
             var defaultTitleEpisode = CreateItem<Episode>("第 1 集", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+            var missingPeopleSeason = CreateItem<Season>("Season Missing People State", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+            var currentPeopleMovie = CreateItem<Movie>(
+                "Movie Current People State",
+                includeProviderIds: true,
+                includeOverview: true,
+                includePrimaryImage: true,
+                peopleRefreshState: PeopleRefreshState.CurrentVersion,
+                peopleRefreshStateStore: peopleRefreshStateStore);
             var completeBoxSet = CreateItem<BoxSet>("Collection Complete", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
             var unsupportedPerson = CreateItem<Person>("Actor A", includeProviderIds: false, includeOverview: false, includePrimaryImage: false);
             var progress = new ProgressRecorder();
@@ -169,9 +256,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Returns(new List<BaseItem>
                 {
                     missingProviderMovie,
+                    missingPeopleMovie,
                     unsupportedPerson,
                     missingOverviewSeries,
+                    stalePeopleSeries,
                     defaultTitleEpisode,
+                    missingPeopleSeason,
+                    currentPeopleMovie,
                     completeBoxSet,
                 });
 
@@ -197,26 +288,27 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     delayInvocations.Add(new DelayInvocation { Delay = delay, CancellationToken = token });
                     return Task.CompletedTask;
                 },
-                logger: loggerStub.Object);
+                logger: loggerStub.Object,
+                peopleRefreshStateStore: peopleRefreshStateStore);
 
             await service.RunFullLibrarySearchAsync(progress, cancellationTokenSource.Token).ConfigureAwait(false);
 
-            Assert.AreEqual(3, progress.Values.Count);
+            Assert.AreEqual(5, progress.Values.Count);
             Assert.IsTrue(progress.Values.SequenceEqual(progress.Values.OrderBy(x => x)), "Progress should be monotonic increasing.");
             Assert.AreEqual(100d, progress.Values[progress.Values.Count - 1], 0.000001d);
 
             CollectionAssert.AreEqual(
-                new[] { missingProviderMovie.Id, missingOverviewSeries.Id, defaultTitleEpisode.Id },
+                new[] { missingProviderMovie.Id, missingPeopleMovie.Id, missingOverviewSeries.Id, stalePeopleSeries.Id, defaultTitleEpisode.Id },
                 queueInvocations.Select(x => x.ItemId).ToArray());
 
-            Assert.AreEqual(3, delayInvocations.Count);
+            Assert.AreEqual(5, delayInvocations.Count);
             Assert.IsTrue(delayInvocations.All(x => x.Delay == TimeSpan.FromSeconds(5)));
             Assert.IsTrue(delayInvocations.All(x => x.CancellationToken.Equals(cancellationTokenSource.Token)));
 
             foreach (var invocation in queueInvocations)
             {
                 Assert.AreEqual(RefreshPriority.Normal, invocation.Priority);
-                AssertFixedRefreshOptions(invocation.Options);
+                AssertRefreshOptions(invocation.Options, invocation.ItemId == missingPeopleMovie.Id || invocation.ItemId == stalePeopleSeries.Id);
             }
 
             LogAssert.AssertLoggedOnce(loggerStub, LogLevel.Information, expectException: false, originalFormatContains: "[MetaShark] 开始全库搜索缺失元数据条目", messageContains: ["[MetaShark] 开始全库搜索缺失元数据条目"]);
@@ -239,6 +331,19 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 expectException: false,
                 stateContains: new Dictionary<string, object?>
                 {
+                    ["ItemId"] = missingPeopleMovie.Id,
+                    ["ItemName"] = "Movie Missing People State",
+                    ["Reason"] = CandidateReason.MissingPeopleRefreshState.ToString(),
+                    ["DelaySeconds"] = 5,
+                },
+                originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
+                messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingPeopleRefreshState"]);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
                     ["ItemId"] = missingOverviewSeries.Id,
                     ["ItemName"] = "Series Missing Overview",
                     ["Reason"] = CandidateReason.MissingOverview.ToString(),
@@ -246,6 +351,19 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 },
                 originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
                 messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingOverview"]);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = stalePeopleSeries.Id,
+                    ["ItemName"] = "Series Stale People State",
+                    ["Reason"] = CandidateReason.MissingPeopleRefreshState.ToString(),
+                    ["DelaySeconds"] = 5,
+                },
+                originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
+                messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingPeopleRefreshState"]);
             LogAssert.AssertLoggedOnce(
                 loggerStub,
                 LogLevel.Debug,
@@ -389,13 +507,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             IProviderManager? providerManager = null,
             IFileSystem? fileSystem = null,
             Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
-            ILogger<MissingMetadataSearchService>? logger = null)
+            ILogger<MissingMetadataSearchService>? logger = null,
+            IPeopleRefreshStateStore? peopleRefreshStateStore = null)
         {
             return new MissingMetadataSearchService(
                 logger ?? Mock.Of<ILogger<MissingMetadataSearchService>>(),
                 libraryManager,
                 providerManager ?? Mock.Of<IProviderManager>(),
                 fileSystem ?? Mock.Of<IFileSystem>(),
+                peopleRefreshStateStore ?? new TestPeopleRefreshStateStore(),
                 delayAsync ?? ((delay, cancellationToken) => Task.Delay(delay, cancellationToken)));
         }
 
@@ -404,7 +524,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Guid? id = null,
             bool includeProviderIds = true,
             bool includeOverview = true,
-            bool includePrimaryImage = true)
+            bool includePrimaryImage = true,
+            string? peopleRefreshState = null,
+            IPeopleRefreshStateStore? peopleRefreshStateStore = null)
             where T : BaseItem, new()
         {
             var item = new T
@@ -428,24 +550,31 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 item.SetImagePath(ImageType.Primary, $"https://example.com/{typeof(T).Name.ToLowerInvariant()}-primary.jpg");
             }
 
+            if (!string.IsNullOrWhiteSpace(peopleRefreshState))
+            {
+                ArgumentNullException.ThrowIfNull(peopleRefreshStateStore);
+                PeopleRefreshStateTestHelper.SaveState(peopleRefreshStateStore, item, peopleRefreshState);
+            }
+
             return item;
         }
 
-        private static void AssertCandidate(BaseItem item, CandidateReason expectedReason, bool expectedCandidate)
+        private static void AssertCandidate(BaseItem item, CandidateReason expectedReason, bool expectedCandidate, IPeopleRefreshStateStore? peopleRefreshStateStore = null)
         {
-            var reason = MissingMetadataSearchService.ResolveMissingMetadataCandidateReason(item);
-            var isCandidate = MissingMetadataSearchService.IsMissingMetadataSearchCandidate(item);
+            var peopleRefreshState = peopleRefreshStateStore?.GetState(item.Id);
+            var reason = MissingMetadataSearchService.ResolveMissingMetadataCandidateReason(item, peopleRefreshState);
+            var isCandidate = MissingMetadataSearchService.IsMissingMetadataSearchCandidate(item, peopleRefreshState);
 
             Assert.AreEqual(expectedReason, reason);
             Assert.AreEqual(expectedCandidate, isCandidate);
         }
 
-        private static void AssertFixedRefreshOptions(MetadataRefreshOptions options)
+        private static void AssertRefreshOptions(MetadataRefreshOptions options, bool expectedReplaceAllMetadata)
         {
             Assert.IsNotNull(options, "QueueRefresh should receive a MetadataRefreshOptions instance.");
             Assert.AreEqual(MetadataRefreshMode.FullRefresh, options.MetadataRefreshMode);
             Assert.AreEqual(MetadataRefreshMode.FullRefresh, options.ImageRefreshMode);
-            Assert.IsFalse(options.ReplaceAllMetadata);
+            Assert.AreEqual(expectedReplaceAllMetadata, options.ReplaceAllMetadata);
             Assert.IsFalse(options.ReplaceAllImages);
         }
 

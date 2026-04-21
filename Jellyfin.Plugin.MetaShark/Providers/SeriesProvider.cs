@@ -15,6 +15,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
+    using Jellyfin.Plugin.MetaShark.Workers;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
@@ -29,9 +30,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
     public class SeriesProvider : BaseProvider, IRemoteMetadataProvider<Series, SeriesInfo>
     {
-        public SeriesProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi)
+        private readonly IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore;
+
+        public SeriesProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<SeriesProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
+            this.movieSeriesPeopleOverwriteRefreshCandidateStore = movieSeriesPeopleOverwriteRefreshCandidateStore ?? InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared;
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -167,12 +171,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     return result;
                 }
 
-                subject.Celebrities.Clear();
-                foreach (var celebrity in await this.DoubanApi.GetCelebritiesBySidAsync(sid, cancellationToken).ConfigureAwait(false))
-                {
-                    subject.Celebrities.Add(celebrity);
-                }
-
                 var seriesName = this.RemoveSeasonSuffix(subject.Name);
                 var item = new Series
                 {
@@ -222,14 +220,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 result.Item = item;
                 result.QueriedById = true;
                 result.HasMetadata = true;
-                subject.LimitDirectorCelebrities.Take(Configuration.PluginConfiguration.MAXCASTMEMBERS).ToList().ForEach(c => result.AddPerson(new PersonInfo
-                {
-                    Name = c.Name,
-                    Type = c.RoleType == PersonType.Director ? PersonKind.Director : PersonKind.Actor,
-                    Role = c.Role,
-                    ImageUrl = GetLocalProxyImageUrl(new Uri(c.Img, UriKind.Absolute)).ToString(),
-                    ProviderIds = new Dictionary<string, string> { { DoubanProviderId, c.Id } },
-                }));
 
                 return result;
             }
@@ -241,6 +231,22 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             this.Log("剧集匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
             return result;
+        }
+
+        private static bool TryResolveItemIdFromRequestPath(HttpContext? httpContext, out Guid itemId)
+        {
+            itemId = Guid.Empty;
+
+            var path = httpContext?.Request.Path.Value;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            return segments.Length >= 2
+                && string.Equals(segments[0], "Items", StringComparison.OrdinalIgnoreCase)
+                && Guid.TryParse(segments[1], out itemId);
         }
 
         private static string FormatProviderIdForLog(string? providerId)
@@ -324,10 +330,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ResultLanguage = info.MetadataLanguage ?? tvShow.OriginalLanguage,
             };
 
-            foreach (var person in this.GetPersons(tvShow))
+            var people = await this.GetPersonsAsync(tvShow, cancellationToken).ConfigureAwait(false);
+            foreach (var person in people)
             {
                 result.AddPerson(person);
             }
+
+            this.TryQueueSearchMissingMetadataOverwriteCandidate(info, people.Count);
 
             result.QueriedById = true;
             result.HasMetadata = true;
@@ -365,6 +374,37 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return null;
+        }
+
+        private void TryQueueSearchMissingMetadataOverwriteCandidate(ItemLookupInfo info, int expectedPeopleCount)
+        {
+            if (this.movieSeriesPeopleOverwriteRefreshCandidateStore == null)
+            {
+                return;
+            }
+
+            if (this.ResolveMetadataSemantic(info) != DefaultScraperSemantic.UserRefresh)
+            {
+                return;
+            }
+
+            var series = !string.IsNullOrWhiteSpace(info.Path)
+                ? this.LibraryManager.FindByPath(info.Path, true) as Series
+                : null;
+            var itemId = series?.Id ?? Guid.Empty;
+            var httpContext = this.HttpContextAccessor.HttpContext;
+            if (itemId == Guid.Empty && !TryResolveItemIdFromRequestPath(httpContext, out itemId))
+            {
+                return;
+            }
+
+            this.movieSeriesPeopleOverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = itemId,
+                ItemPath = series?.Path ?? info.Path ?? string.Empty,
+                ExpectedPeopleCount = expectedPeopleCount,
+            });
+            this.Log("已记录单项影视人物 overwrite candidate. itemId: {0} expectedPeopleCount: {1}", itemId, expectedPeopleCount);
         }
 
         private string? GetTmdbOfficialRatingByData(TvShow? tvShow, string preferredCountryCode)
@@ -512,16 +552,31 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
         }
 
-        private IEnumerable<PersonInfo> GetPersons(TvShow seriesResult)
+        private async Task<IReadOnlyList<PersonInfo>> GetPersonsAsync(TvShow seriesResult, CancellationToken cancellationToken)
         {
+            var persons = new List<PersonInfo>();
+
             // 演员
             if (seriesResult.Credits?.Cast != null)
             {
-                foreach (var actor in seriesResult.Credits.Cast.OrderBy(a => a.Order).Take(Configuration.PluginConfiguration.MAXCASTMEMBERS))
+                var acceptedActorCount = 0;
+
+                foreach (var actor in seriesResult.Credits.Cast.OrderBy(a => a.Order))
                 {
+                    if (acceptedActorCount >= Configuration.PluginConfiguration.MAXCASTMEMBERS)
+                    {
+                        break;
+                    }
+
+                    var localizedName = await this.ResolveSimplifiedChineseOnlyItemPersonNameAsync(actor.Name, actor.Id, cancellationToken).ConfigureAwait(false);
+                    if (localizedName == null)
+                    {
+                        continue;
+                    }
+
                     var personInfo = new PersonInfo
                     {
-                        Name = actor.Name.Trim(),
+                        Name = localizedName,
                         Role = actor.Character,
                         Type = PersonKind.Actor,
                         SortOrder = actor.Order,
@@ -537,7 +592,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         personInfo.SetProviderId(MetadataProvider.Tmdb, actor.Id.ToString(CultureInfo.InvariantCulture));
                     }
 
-                    yield return personInfo;
+                    persons.Add(personInfo);
+                    acceptedActorCount++;
                 }
             }
 
@@ -562,9 +618,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         continue;
                     }
 
+                    var localizedName = await this.ResolveSimplifiedChineseOnlyItemPersonNameAsync(person.Name, person.Id, cancellationToken).ConfigureAwait(false);
+                    if (localizedName == null)
+                    {
+                        continue;
+                    }
+
                     var personInfo = new PersonInfo
                     {
-                        Name = person.Name.Trim(),
+                        Name = localizedName,
                         Role = person.Job,
                         Type = type == PersonType.Director ? PersonKind.Director : (type == PersonType.Producer ? PersonKind.Producer : PersonKind.Actor),
                     };
@@ -579,9 +641,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         personInfo.SetProviderId(MetadataProvider.Tmdb, person.Id.ToString(CultureInfo.InvariantCulture));
                     }
 
-                    yield return personInfo;
+                    persons.Add(personInfo);
                 }
             }
+
+            return persons;
         }
     }
 }

@@ -9,6 +9,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
@@ -28,6 +29,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         MissingOverview = 4,
         MissingPrimaryImage = 5,
         DefaultEpisodeTitle = 6,
+        MissingPeopleRefreshState = 7,
     }
 
     public sealed class MissingMetadataSearchService : IMissingMetadataSearchService
@@ -57,6 +59,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         private readonly ILogger<MissingMetadataSearchService> logger;
         private readonly ILibraryManager libraryManager;
+        private readonly IPeopleRefreshStateStore peopleRefreshStateStore;
         private readonly IProviderManager providerManager;
         private readonly IFileSystem fileSystem;
         private readonly Func<TimeSpan, CancellationToken, Task> delayAsync;
@@ -66,8 +69,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             ILogger<MissingMetadataSearchService> logger,
             ILibraryManager libraryManager,
             IProviderManager providerManager,
-            IFileSystem fileSystem)
-            : this(logger, libraryManager, providerManager, fileSystem, (delay, cancellationToken) => Task.Delay(delay, cancellationToken))
+            IFileSystem fileSystem,
+            IPeopleRefreshStateStore peopleRefreshStateStore)
+            : this(logger, libraryManager, providerManager, fileSystem, peopleRefreshStateStore, (delay, cancellationToken) => Task.Delay(delay, cancellationToken))
         {
         }
 
@@ -76,16 +80,19 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             ILibraryManager libraryManager,
             IProviderManager providerManager,
             IFileSystem fileSystem,
+            IPeopleRefreshStateStore peopleRefreshStateStore,
             Func<TimeSpan, CancellationToken, Task> delayAsync)
         {
             ArgumentNullException.ThrowIfNull(logger);
             ArgumentNullException.ThrowIfNull(libraryManager);
             ArgumentNullException.ThrowIfNull(providerManager);
             ArgumentNullException.ThrowIfNull(fileSystem);
+            ArgumentNullException.ThrowIfNull(peopleRefreshStateStore);
             ArgumentNullException.ThrowIfNull(delayAsync);
 
             this.logger = logger;
             this.libraryManager = libraryManager;
+            this.peopleRefreshStateStore = peopleRefreshStateStore;
             this.providerManager = providerManager;
             this.fileSystem = fileSystem;
             this.delayAsync = delayAsync;
@@ -120,9 +127,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                     cancellationToken.ThrowIfCancellationRequested();
 
                     var candidate = candidates[processedCount];
-                    var reason = ResolveMissingMetadataCandidateReason(candidate).ToString();
-                    this.providerManager.QueueRefresh(candidate.Id, this.CreateRefreshOptions(), RefreshPriority.Normal);
-                    LogQueuedRefresh(this.logger, candidate.Id, candidate.Name ?? string.Empty, reason, (int)QueueRefreshDelay.TotalSeconds, null);
+                    var reason = ResolveMissingMetadataCandidateReason(candidate, this.peopleRefreshStateStore.GetState(candidate.Id));
+                    this.providerManager.QueueRefresh(candidate.Id, this.CreateRefreshOptions(reason == MissingMetadataCandidateReason.MissingPeopleRefreshState), RefreshPriority.Normal);
+                    LogQueuedRefresh(this.logger, candidate.Id, candidate.Name ?? string.Empty, reason.ToString(), (int)QueueRefreshDelay.TotalSeconds, null);
                     progress.Report((processedCount + 1) * 100.0 / candidates.Count);
 
                     await this.delayAsync(QueueRefreshDelay, cancellationToken).ConfigureAwait(false);
@@ -139,15 +146,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return item is Movie or Series or Season or Episode or BoxSet;
         }
 
-        internal static bool IsMissingMetadataSearchCandidate(BaseItem? item)
+        internal static bool IsMissingMetadataSearchCandidate(BaseItem? item, PeopleRefreshState? peopleRefreshState = null)
         {
-            return ResolveMissingMetadataCandidateReason(item) is MissingMetadataCandidateReason.MissingProviderIds
+            return ResolveMissingMetadataCandidateReason(item, peopleRefreshState) is MissingMetadataCandidateReason.MissingProviderIds
                 or MissingMetadataCandidateReason.MissingOverview
                 or MissingMetadataCandidateReason.MissingPrimaryImage
-                or MissingMetadataCandidateReason.DefaultEpisodeTitle;
+                or MissingMetadataCandidateReason.DefaultEpisodeTitle
+                or MissingMetadataCandidateReason.MissingPeopleRefreshState;
         }
 
-        internal static MissingMetadataCandidateReason ResolveMissingMetadataCandidateReason(BaseItem? item)
+        internal static MissingMetadataCandidateReason ResolveMissingMetadataCandidateReason(BaseItem? item, PeopleRefreshState? peopleRefreshState = null)
         {
             if (item == null || item.Id == Guid.Empty)
             {
@@ -179,6 +187,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return MissingMetadataCandidateReason.DefaultEpisodeTitle;
             }
 
+            if (PeopleRefreshState.RequiresBackfill(item, peopleRefreshState))
+            {
+                return MissingMetadataCandidateReason.MissingPeopleRefreshState;
+            }
+
             return MissingMetadataCandidateReason.CompleteMetadata;
         }
 
@@ -193,13 +206,13 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             };
         }
 
-        private MetadataRefreshOptions CreateRefreshOptions()
+        private MetadataRefreshOptions CreateRefreshOptions(bool replaceAllMetadata)
         {
             return new MetadataRefreshOptions(new DirectoryService(this.fileSystem))
             {
                 MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
                 ImageRefreshMode = MetadataRefreshMode.FullRefresh,
-                ReplaceAllMetadata = false,
+                ReplaceAllMetadata = replaceAllMetadata,
                 ReplaceAllImages = false,
             };
         }
@@ -207,7 +220,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private List<BaseItem> GetMissingMetadataCandidates()
         {
             var items = this.libraryManager.GetItemList(CreateFullLibraryQuery());
-            return items.FindAll(IsMissingMetadataSearchCandidate);
+            return items.FindAll(item => IsMissingMetadataSearchCandidate(item, this.peopleRefreshStateStore.GetState(item.Id)));
         }
     }
 }

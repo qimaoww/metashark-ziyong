@@ -27,6 +27,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     /// </summary>
     public class PersonProvider : BaseProvider, IRemoteMetadataProvider<Person, PersonLookupInfo>
     {
+        private static readonly (string Language, string? CountryCode)[] SimplifiedChineseBiographyPriority = new[]
+        {
+            ("zh", "CN"),
+            ("zh-Hans", null),
+            ("zh", null),
+        };
+
         public PersonProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi)
             : base(httpClientFactory, loggerFactory.CreateLogger<PersonProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
@@ -168,10 +175,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 {
                     // Name = info.Name.Trim(),   // 名称需保持和info.Name一致，不然会导致关联不到影片，自动被删除
                     HomePageUrl = person.Homepage,
-                    Overview = person.Biography,
                     PremiereDate = person.Birthday?.ToUniversalTime(),
                     EndDate = person.Deathday?.ToUniversalTime(),
                 };
+
+                var overview = await this.GetPreferredSimplifiedChineseBiographyAsync(personTmdbId, cancellationToken).ConfigureAwait(false);
+                if (overview != null)
+                {
+                    item.Overview = overview;
+                }
 
                 if (!string.IsNullOrWhiteSpace(person.PlaceOfBirth))
                 {
@@ -191,6 +203,34 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return result;
+        }
+
+        private static string? TryAcceptSimplifiedChineseBiography(string? biography)
+        {
+            if (string.IsNullOrWhiteSpace(biography))
+            {
+                return null;
+            }
+
+            var trimmedBiography = biography.Trim();
+            return ChineseLocalePolicy.IsTextAllowedForStrictZhCn(trimmedBiography)
+                ? trimmedBiography
+                : null;
+        }
+
+        private async Task<string?> GetPreferredSimplifiedChineseBiographyAsync(int personTmdbId, CancellationToken cancellationToken)
+        {
+            foreach (var localization in SimplifiedChineseBiographyPriority)
+            {
+                var person = await this.TmdbApi.GetPersonAsync(personTmdbId, localization.Language, localization.CountryCode, cancellationToken).ConfigureAwait(false);
+                var biography = TryAcceptSimplifiedChineseBiography(person?.Biography);
+                if (biography != null)
+                {
+                    return biography;
+                }
+            }
+
+            return null;
         }
     }
 }

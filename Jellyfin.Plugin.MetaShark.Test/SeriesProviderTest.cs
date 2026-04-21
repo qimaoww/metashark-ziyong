@@ -4,8 +4,10 @@ using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
 using Microsoft.Extensions.Caching.Memory;
@@ -13,6 +15,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -25,7 +28,9 @@ using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Providers;
 using MediaBrowser.Model.Serialization;
 using TMDbLib.Objects.General;
+using TmdbPerson = TMDbLib.Objects.People.Person;
 using TMDbLib.Objects.Search;
+using TmdbTranslationData = TMDbLib.Objects.General.TranslationData;
 using TMDbLib.Objects.TvShows;
 
 namespace Jellyfin.Plugin.MetaShark.Test
@@ -82,6 +87,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         BaseUrl = "http://image.tmdb.org/t/p/",
                         SecureBaseUrl = "https://image.tmdb.org/t/p/",
                         PosterSizes = new List<string> { "w500" },
+                        BackdropSizes = new List<string> { "w780" },
+                        LogoSizes = new List<string> { "w500" },
+                        ProfileSizes = new List<string> { "w500" },
+                        StillSizes = new List<string> { "w300" },
                     },
                 },
             });
@@ -109,8 +118,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private static void SeedTmdbSeries(TmdbApi tmdbApi, int tmdbId, string language, string name)
         {
-            GetTmdbMemoryCache(tmdbApi).Set(
-                $"series-{tmdbId}-{language}-{language}",
+            SeedTmdbSeries(
+                tmdbApi,
+                tmdbId,
+                language,
                 new TvShow
                 {
                     Id = tmdbId,
@@ -124,8 +135,168 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     {
                         Results = new List<ContentRating>(),
                     },
+                });
+        }
+
+        private static void SeedTmdbSeries(TmdbApi tmdbApi, int tmdbId, string language, TvShow series)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"series-{tmdbId}-{language}-{language}",
+                series,
+                TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedTmdbPerson(TmdbApi tmdbApi, int tmdbId, string? name, string? language = null, string? countryCode = null)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                GetTmdbPersonCacheKey(tmdbId, language ?? string.Empty, countryCode),
+                new TmdbPerson
+                {
+                    Id = tmdbId,
+                    Name = name,
+                    Biography = "TMDb seeded biography",
                 },
                 TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedTmdbPersonTranslations(TmdbApi tmdbApi, int tmdbId, params Translation[] translations)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                GetTmdbPersonTranslationsCacheKey(tmdbId),
+                new TranslationsContainer
+                {
+                    Id = tmdbId,
+                    Translations = translations.ToList(),
+                },
+                TimeSpan.FromMinutes(5));
+        }
+
+        private static Translation CreatePersonTranslation(string language, string? locale, string? translatedName)
+        {
+            return new Translation
+            {
+                Iso_639_1 = language,
+                Iso_3166_1 = locale,
+                Data = new TmdbTranslationData
+                {
+                    Name = translatedName,
+                },
+            };
+        }
+
+        private static void SetTmdbSeriesCredits(
+            TvShow series,
+            IEnumerable<Dictionary<string, object?>> castEntries,
+            IEnumerable<Dictionary<string, object?>> crewEntries)
+        {
+            var creditsProperty = typeof(TvShow).GetProperty("Credits");
+            Assert.IsNotNull(creditsProperty, "TMDb tv Credits 属性未定义");
+
+            var credits = Activator.CreateInstance(creditsProperty!.PropertyType);
+            Assert.IsNotNull(credits, "无法创建 TMDb tv Credits 实例");
+
+            SetTmdbCreditList(credits!, "Cast", castEntries);
+            SetTmdbCreditList(credits!, "Crew", crewEntries);
+            creditsProperty.SetValue(series, credits);
+        }
+
+        private static void SetTmdbCreditList(object credits, string propertyName, IEnumerable<Dictionary<string, object?>> entries)
+        {
+            var listProperty = credits.GetType().GetProperty(propertyName);
+            Assert.IsNotNull(listProperty, $"TMDb Credits.{propertyName} 属性未定义");
+
+            var itemType = listProperty!.PropertyType.GetGenericArguments().Single();
+            var listType = typeof(List<>).MakeGenericType(itemType);
+            var list = Activator.CreateInstance(listType) as IList;
+            Assert.IsNotNull(list, $"无法创建 TMDb Credits.{propertyName} 列表实例");
+
+            foreach (var entry in entries)
+            {
+                var item = Activator.CreateInstance(itemType);
+                Assert.IsNotNull(item, $"无法创建 TMDb Credits.{propertyName} 条目实例");
+
+                foreach (var pair in entry)
+                {
+                    var property = itemType.GetProperty(pair.Key);
+                    Assert.IsNotNull(property, $"TMDb credit 条目缺少属性 {pair.Key}");
+                    property!.SetValue(item, pair.Value);
+                }
+
+                list!.Add(item);
+            }
+
+            listProperty.SetValue(credits, list);
+        }
+
+        private static Dictionary<string, object?> CreateCastCredit(int id, string name, string character, int order, string? profilePath = null)
+        {
+            var entry = new Dictionary<string, object?>
+            {
+                ["Id"] = id,
+                ["Name"] = name,
+                ["Character"] = character,
+                ["Order"] = order,
+            };
+
+            if (!string.IsNullOrWhiteSpace(profilePath))
+            {
+                entry["ProfilePath"] = profilePath;
+            }
+
+            return entry;
+        }
+
+        private static Dictionary<string, object?> CreateCrewCredit(int id, string name, string department, string job, string? profilePath = null)
+        {
+            var entry = new Dictionary<string, object?>
+            {
+                ["Id"] = id,
+                ["Name"] = name,
+                ["Department"] = department,
+                ["Job"] = job,
+            };
+
+            if (!string.IsNullOrWhiteSpace(profilePath))
+            {
+                entry["ProfilePath"] = profilePath;
+            }
+
+            return entry;
+        }
+
+        private static string GetTmdbPersonCacheKey(int tmdbId, string language, string? countryCode)
+        {
+            var cacheKeyMethod = typeof(TmdbApi).GetMethod("GetPersonCacheKey", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(cacheKeyMethod, "TmdbApi.GetPersonCacheKey 未定义");
+
+            var cacheKey = cacheKeyMethod!.Invoke(null, new object?[] { tmdbId, language, countryCode }) as string;
+            Assert.IsFalse(string.IsNullOrEmpty(cacheKey), "TmdbApi.GetPersonCacheKey 返回了无效缓存键");
+            return cacheKey!;
+        }
+
+        private static string GetTmdbPersonTranslationsCacheKey(int tmdbId)
+        {
+            var cacheKeyMethod = typeof(TmdbApi).GetMethod("GetPersonTranslationsCacheKey", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(cacheKeyMethod, "TmdbApi.GetPersonTranslationsCacheKey 未定义");
+
+            var cacheKey = cacheKeyMethod!.Invoke(null, new object?[] { tmdbId }) as string;
+            Assert.IsFalse(string.IsNullOrEmpty(cacheKey), "TmdbApi.GetPersonTranslationsCacheKey 返回了无效缓存键");
+            return cacheKey!;
+        }
+
+        private static PersonInfo GetPersonByTmdbId(IEnumerable<PersonInfo> people, int tmdbId)
+        {
+            return people.Single(person => person.ProviderIds != null
+                && person.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var providerId)
+                && string.Equals(providerId, tmdbId.ToString(), StringComparison.Ordinal));
+        }
+
+        private static int GetTmdbId(PersonInfo person)
+        {
+            Assert.IsNotNull(person.ProviderIds, "人物缺少 provider ids。 ");
+            Assert.IsTrue(person.ProviderIds!.TryGetValue(MetadataProvider.Tmdb.ToString(), out var providerId), "人物缺少 TMDb provider id。 ");
+            Assert.IsTrue(int.TryParse(providerId, out var tmdbId), $"人物 TMDb provider id 无法解析为整数: {providerId}");
+            return tmdbId;
         }
 
         private static void SeedDoubanSubject(DoubanApi doubanApi, DoubanSubject subject)
@@ -133,6 +304,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var cache = GetDoubanMemoryCache(doubanApi);
             cache.Set($"movie_{subject.Sid}", subject, TimeSpan.FromMinutes(5));
             cache.Set($"celebrities_{subject.Sid}", new List<DoubanCelebrity>(), TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedDoubanCelebrities(DoubanApi doubanApi, string sid, IEnumerable<DoubanCelebrity> celebrities)
+        {
+            var cache = GetDoubanMemoryCache(doubanApi);
+            cache.Set($"celebrities_{sid}", celebrities.ToList(), TimeSpan.FromMinutes(5));
         }
 
         private static IHttpContextAccessor CreateManualMatchContextAccessor(string itemId = "1")
@@ -385,6 +562,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
             var doubanApi = DoubanApiTestHelper.CreateBlockedDoubanApi(loggerFactory);
             var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 45247, "zh", "花牌情缘");
             var omdbApi = new OmdbApi(loggerFactory);
             var imdbApi = new ImdbApi(loggerFactory);
 
@@ -1049,6 +1227,347 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 plugin.Configuration.EnableTmdb = originalEnableTmdb;
                 plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
             }
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByDouban_AllowsEmptyItemLevelPeople_WhenTmdbIdIsUnavailable()
+        {
+            var info = new SeriesInfo
+            {
+                Name = "豆瓣示例剧集",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, "series-douban-100" },
+                    { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_series-douban-100" },
+                },
+            };
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            SeedDoubanSubject(
+                doubanApi,
+                new DoubanSubject
+                {
+                    Sid = "series-douban-100",
+                    Name = "豆瓣示例剧集",
+                    OriginalName = "Douban Sample Series",
+                    Year = 0,
+                    Rating = 8.1f,
+                    Genre = "剧情 / 动画",
+                    Intro = "豆瓣剧集简介",
+                    Screen = "2024-04-04",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000003.webp",
+                });
+            SeedDoubanCelebrities(
+                doubanApi,
+                "series-douban-100",
+                new[]
+                {
+                    new DoubanCelebrity
+                    {
+                        Id = "douban-series-director-1",
+                        Name = "豆瓣剧集导演",
+                        Role = "导演",
+                        Img = "https://img9.doubanio.com/view/celebrity/raw/public/p0000000004.webp",
+                    },
+                    new DoubanCelebrity
+                    {
+                        Id = "douban-series-actor-1",
+                        Name = "豆瓣剧集演员",
+                        Role = "演员",
+                        Img = "https://img9.doubanio.com/view/celebrity/raw/public/p0000000005.webp",
+                    },
+                });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            var provider = new SeriesProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("豆瓣示例剧集", result.Item.Name);
+            Assert.AreEqual("Douban Sample Series", result.Item.OriginalTitle);
+            Assert.AreEqual("豆瓣剧集简介", result.Item.Overview);
+            Assert.IsTrue(result.Item.CommunityRating > 8.0f && result.Item.CommunityRating < 8.2f, "Douban 路径仍应保留评分等非 people 元数据。 ");
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.IsTrue(result.People == null || result.People.Count == 0, "拿不到 tmdbId 时，series item-level people 允许为空，但不应再把 Douban celebrities 写进去。 ");
+            Assert.IsFalse(result.People?.Any(person => person.ProviderIds != null
+                && person.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId)) ?? false, "Douban 元数据路径不应再写入带 Douban provider id 的 series item-level people。 ");
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByTMDB_ScrapesOnlySeriesPeopleWithExactZhCnSourceNames()
+        {
+            var expectedAcceptedActorIds = new[] { 1001, 1002, 1003, 1004, 1005, 1011, 1012, 1013, 1014, 1015, 1016, 1017, 1018, 1019, 1020 };
+            var info = new SeriesInfo
+            {
+                Name = "示例剧集",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { MetaSharkPlugin.ProviderId, "Tmdb_9101" },
+                    { MetadataProvider.Tmdb.ToString(), "9101" },
+                },
+            };
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbPosterConfig(tmdbApi);
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            var seededSeries = new TvShow
+            {
+                Id = 9101,
+                Name = "示例剧集",
+                OriginalName = "Sample Series",
+                Overview = "TMDb seeded series overview",
+                FirstAirDate = new DateTime(2024, 1, 1),
+                VoteAverage = 8.4,
+                EpisodeRunTime = new List<int>(),
+                ContentRatings = new ResultContainer<ContentRating>
+                {
+                    Results = new List<ContentRating>(),
+                },
+            };
+            var castEntries = new List<Dictionary<string, object?>>
+            {
+                CreateCastCredit(1001, "这个演员原名", "角色A", 0, "/actor-raw.jpg"),
+                CreateCastCredit(1002, "這個演員原名", "角色B", 1, "/actor-zh-cn.jpg"),
+                CreateCastCredit(1003, "Actor Hans Raw", "角色C", 2, "/actor-zh-hans.jpg"),
+                CreateCastCredit(1004, "", "角色D", 3),
+                CreateCastCredit(1005, "", "角色E", 4),
+            };
+
+            for (var tmdbId = 1006; tmdbId <= 1010; tmdbId++)
+            {
+                castEntries.Add(CreateCastCredit(tmdbId, string.Empty, $"角色{tmdbId}", tmdbId - 1, $"/actor-rejected-{tmdbId}.jpg"));
+            }
+
+            castEntries.Add(CreateCastCredit(1011, "Late Actor Raw 11", "角色K", 10, "/actor-accepted-11.jpg"));
+            castEntries.Add(CreateCastCredit(1012, "Late 演員 Raw 12", "角色L", 11, "/actor-accepted-12.jpg"));
+            castEntries.Add(CreateCastCredit(1013, "Late Actor Latin 13", "角色M", 12, "/actor-accepted-13.jpg"));
+            castEntries.Add(CreateCastCredit(1014, "Late 演員 Raw 14", "角色N", 13, "/actor-accepted-14.jpg"));
+            castEntries.Add(CreateCastCredit(1015, "Late Actor Raw 15", "角色O", 14, "/actor-accepted-15.jpg"));
+            castEntries.Add(CreateCastCredit(1016, "Late Actor Raw 16", "角色P", 15, "/actor-accepted-16.jpg"));
+            castEntries.Add(CreateCastCredit(1017, "Late Actor Raw 17", "角色Q", 16, "/actor-accepted-17.jpg"));
+            castEntries.Add(CreateCastCredit(1018, "Late Actor Raw 18", "角色R", 17));
+            castEntries.Add(CreateCastCredit(1019, "Late Actor Raw 19", "角色S", 18, "/actor-accepted-19.jpg"));
+            castEntries.Add(CreateCastCredit(1020, "这个演员尾部原名", "角色T", 19, "/actor-accepted-20.jpg"));
+
+            SetTmdbSeriesCredits(
+                seededSeries,
+                castEntries,
+                new[]
+                {
+                    CreateCrewCredit(2001, "這個導演原名", "Production", "Director", "/director.jpg"),
+                    CreateCrewCredit(2002, "Producer Raw", "Production", "Producer", "/producer.jpg"),
+                    CreateCrewCredit(2003, "Writer Raw", "Writing", "Screenplay", "/writer.jpg"),
+                    CreateCrewCredit(2004, string.Empty, "Production", "Director", "/fallback-director.jpg"),
+                    CreateCrewCredit(2999, "Ignored Crew", "Art", "Art Direction"),
+                });
+            SeedTmdbSeries(tmdbApi, 9101, "zh-CN", seededSeries);
+
+            SeedTmdbPerson(tmdbApi, 1001, "这个演员大陆候选", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1002, "这个演员大陆名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1003, "这个演员 Hans 名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1004, "这个演员详情大陆名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1004, "這個演員繁體名", language: "zh-Hans");
+            SeedTmdbPerson(tmdbApi, 1004, "这个演员通用名", language: "zh");
+            SeedTmdbPersonTranslations(tmdbApi, 1004, CreatePersonTranslation("zh", "CN", "这个演员详情翻译名"));
+            SeedTmdbPerson(tmdbApi, 1005, string.Empty, language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1005, "這個演員繁體名", language: "zh-Hans");
+            SeedTmdbPerson(tmdbApi, 1005, "这个演员通用名", language: "zh");
+            SeedTmdbPersonTranslations(tmdbApi, 1005, CreatePersonTranslation("zh", "CN", "这个演员翻译名"));
+
+            for (var tmdbId = 1006; tmdbId <= 1010; tmdbId++)
+            {
+                SeedTmdbPerson(tmdbApi, tmdbId, string.Empty, language: "zh-CN");
+                SeedTmdbPerson(tmdbApi, tmdbId, $"這個演員{tmdbId}繁體名", language: "zh-Hans");
+                SeedTmdbPerson(tmdbApi, tmdbId, $"Actor {tmdbId} Zh", language: "zh");
+                SeedTmdbPersonTranslations(tmdbApi, tmdbId, CreatePersonTranslation("zh", "TW", $"這個翻譯演員{tmdbId}"));
+            }
+
+            SeedTmdbPerson(tmdbApi, 1011, "这个演员尾部大陆名 11", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1012, "安德斯·托马斯·詹森", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1013, "Latin Actor 13", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1014, "这个演员尾部大陆名 14", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1015, "这個演員尾部原名 15", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1016, "Late Actor Raw 16 Detail", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1017, "Late Actor Raw 17 Detail", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1018, "Late Actor Raw 18 Detail", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1019, "Late Actor Raw 19 Detail", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1020, "这个演员尾部原名 20", language: "zh-CN");
+            SeedTmdbPersonTranslations(tmdbApi, 1016, CreatePersonTranslation("zh", "CN", "这个演员尾部翻译名 16"));
+            SeedTmdbPersonTranslations(tmdbApi, 1017, CreatePersonTranslation("zh", "CN", "这个演员尾部翻译名 17"));
+            SeedTmdbPersonTranslations(tmdbApi, 1018, CreatePersonTranslation("zh", "CN", "这个演员尾部翻译名 18"));
+            SeedTmdbPersonTranslations(tmdbApi, 1019, CreatePersonTranslation("zh", "CN", "这个演员尾部翻译名 19"));
+            SeedTmdbPersonTranslations(tmdbApi, 1020, CreatePersonTranslation("zh", "CN", "这个演员尾部翻译名 20"));
+
+            SeedTmdbPerson(tmdbApi, 2001, "这个导演大陆名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 2002, "這個製片人繁體名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 2002, "这个制片人Hans名", language: "zh-Hans");
+            SeedTmdbPerson(tmdbApi, 2003, string.Empty, language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 2003, " ", language: "zh-Hans");
+            SeedTmdbPerson(tmdbApi, 2003, " ", language: "zh");
+            SeedTmdbPersonTranslations(tmdbApi, 2003, CreatePersonTranslation("zh", "CN", "这个编剧翻译名"));
+            SeedTmdbPerson(tmdbApi, 2004, string.Empty, language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 2004, "這個導演繁體名", language: "zh-Hans");
+            SeedTmdbPerson(tmdbApi, 2004, "這個導演繁體名", language: "zh");
+            SeedTmdbPersonTranslations(tmdbApi, 2004, CreatePersonTranslation("zh", "CN", string.Empty), CreatePersonTranslation("zh", "TW", "這個翻譯導演"));
+
+            var provider = new SeriesProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsNotNull(result.People);
+            Assert.IsFalse(result.Item.ProviderIds?.ContainsKey("MetaSharkPeopleRefreshState") ?? false, "provider 不应在返回 metadata result 时提前写入内部 people refresh state。 ");
+            Assert.AreEqual(18, result.People.Count, "raw 非空的前 15 个演员和 crew 应按原始顺序进入结果，后续条目即使也可接受也不应挤占上限。 ");
+
+            var actorTmdbIdsInOrder = result.People
+                .Where(person =>
+                {
+                    var tmdbId = GetTmdbId(person);
+                    return tmdbId >= 1001 && tmdbId <= 1020;
+                })
+                .Select(GetTmdbId)
+                .ToArray();
+            CollectionAssert.AreEqual(expectedAcceptedActorIds, actorTmdbIdsInOrder, "actor 应保持原始相对顺序，并在接受后再计入上限；非空 raw 名称应直接保留，空 raw 只允许精确 zh-CN 详情/翻译进入结果。 ");
+            Assert.AreEqual(expectedAcceptedActorIds.Length, actorTmdbIdsInOrder.Distinct().Count(), "accepted actor 总数不足 15 时不应补重复项。 ");
+            CollectionAssert.AreEqual(new[] { 0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 }, result.People.Where(person =>
+            {
+                var tmdbId = GetTmdbId(person);
+                return tmdbId >= 1001 && tmdbId <= 1020;
+            }).Select(person => person.SortOrder).ToArray(), "accept-then-cap 不应重排或重写原始 SortOrder。 ");
+            Assert.IsFalse(result.People.Any(person => string.IsNullOrWhiteSpace(person.Name)), "accepted actor 数不足上限时不应制造空位项。 ");
+
+            var actorRawAccepted = GetPersonByTmdbId(result.People, 1001);
+            Assert.AreEqual("这个演员原名", actorRawAccepted.Name, "非空 raw credit 应直接保留原名。 ");
+            Assert.AreEqual("角色A", actorRawAccepted.Role);
+            Assert.AreEqual(PersonKind.Actor, actorRawAccepted.Type);
+            Assert.AreEqual(0, actorRawAccepted.SortOrder);
+            Assert.AreEqual(tmdbApi.GetProfileUrl("/actor-raw.jpg")?.ToString(), actorRawAccepted.ImageUrl);
+
+            Assert.AreEqual("這個演員原名", GetPersonByTmdbId(result.People, 1002).Name, "非空 raw 应直接保留，不再回退到 zh-CN 详情。 ");
+            Assert.AreEqual("Actor Hans Raw", GetPersonByTmdbId(result.People, 1003).Name, "非空 raw 应直接保留，不再回退到 zh-CN 详情。 ");
+            Assert.AreEqual("这个演员详情大陆名", GetPersonByTmdbId(result.People, 1004).Name, "raw 为空时应优先使用精确 zh-CN 详情。 ");
+            Assert.AreEqual("这个演员翻译名", GetPersonByTmdbId(result.People, 1005).Name, "zh-CN 详情为空时应仅使用精确 zh-CN translation。 ");
+            Assert.IsFalse(result.People.Any(person => person.ProviderIds != null
+                && person.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var providerId)
+                && expectedAcceptedActorIds.All(acceptedId => !string.Equals(providerId, acceptedId.ToString(), StringComparison.Ordinal))
+                && int.TryParse(providerId, out var tmdbId)
+                && tmdbId >= 1006
+                && tmdbId <= 1010), "raw 为空且 zh-CN 详情/翻译都为空时才应拒绝，不能因为繁体/Hans/通用 zh 有值就保留。 ");
+
+            Assert.AreEqual("Late Actor Raw 11", GetPersonByTmdbId(result.People, 1011).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("Late 演員 Raw 12", GetPersonByTmdbId(result.People, 1012).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("Late Actor Latin 13", GetPersonByTmdbId(result.People, 1013).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("Late 演員 Raw 14", GetPersonByTmdbId(result.People, 1014).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("Late Actor Raw 15", GetPersonByTmdbId(result.People, 1015).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("Late Actor Raw 16", GetPersonByTmdbId(result.People, 1016).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("Late Actor Raw 17", GetPersonByTmdbId(result.People, 1017).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("Late Actor Raw 18", GetPersonByTmdbId(result.People, 1018).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("Late Actor Raw 19", GetPersonByTmdbId(result.People, 1019).Name, "非空 raw 应直接保留。 ");
+            Assert.AreEqual("这个演员尾部原名", GetPersonByTmdbId(result.People, 1020).Name, "非空 raw 应直接保留。 ");
+
+            var director = GetPersonByTmdbId(result.People, 2001);
+            Assert.AreEqual("這個導演原名", director.Name, "非空 raw director 名称应原样保留。 ");
+            Assert.AreEqual("Director", director.Role);
+            Assert.AreEqual(PersonKind.Director, director.Type);
+            Assert.AreEqual(tmdbApi.GetPosterUrl("/director.jpg")?.ToString(), director.ImageUrl);
+
+            var producer = GetPersonByTmdbId(result.People, 2002);
+            Assert.AreEqual("Producer Raw", producer.Name, "非空 raw crew 名称应直接保留，不再优先使用 zh-Hans。 ");
+            Assert.AreEqual(PersonKind.Producer, producer.Type);
+            Assert.AreEqual("Producer", producer.Role);
+
+            var writer = GetPersonByTmdbId(result.People, 2003);
+            Assert.AreEqual("Writer Raw", writer.Name, "非空 raw crew 名称应直接保留。 ");
+            Assert.AreEqual(PersonKind.Actor, writer.Type, "writer 当前仍沿用既有 PersonKind 映射，不应在本任务里改动。 ");
+            Assert.AreEqual("Screenplay", writer.Role);
+
+            Assert.IsFalse(result.People.Any(person => person.ProviderIds != null
+                && person.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var providerId)
+                && string.Equals(providerId, "2004", StringComparison.Ordinal)), "crew 在 raw 为空且 zh-CN 详情/翻译都为空时也不应回退到其他语言。 ");
+            Assert.IsFalse(result.People.Any(person => person.ProviderIds != null
+                && person.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var providerId)
+                && string.Equals(providerId, "2999", StringComparison.Ordinal)), "不应改变 crew 过滤规则。 ");
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByTMDB_WithBlankRawAndBlankZhCnFallback_StillStampsCurrentPeopleRefreshState()
+        {
+            var info = new SeriesInfo
+            {
+                Name = "空人物剧集",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { MetaSharkPlugin.ProviderId, "Tmdb_9202" },
+                    { MetadataProvider.Tmdb.ToString(), "9202" },
+                },
+            };
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbPosterConfig(tmdbApi);
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            var seededSeries = new TvShow
+            {
+                Id = 9202,
+                Name = "空人物剧集",
+                OriginalName = "No Accepted People Series",
+                Overview = "TMDb seeded series overview",
+                FirstAirDate = new DateTime(2024, 2, 2),
+                VoteAverage = 7.9,
+                EpisodeRunTime = new List<int>(),
+                ContentRatings = new ResultContainer<ContentRating>
+                {
+                    Results = new List<ContentRating>(),
+                },
+            };
+
+            SetTmdbSeriesCredits(
+                seededSeries,
+                new[]
+                {
+                    CreateCastCredit(1101, string.Empty, "角色A", 0, "/actor-rejected.jpg"),
+                },
+                new[]
+                {
+                    CreateCrewCredit(2101, string.Empty, "Writing", "Screenplay", "/writer-rejected.jpg"),
+                    CreateCrewCredit(2199, "Ignored Crew", "Art", "Art Direction"),
+                });
+            SeedTmdbSeries(tmdbApi, 9202, "zh-CN", seededSeries);
+
+            SeedTmdbPerson(tmdbApi, 1101, string.Empty, language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1101, "Actor Hans", language: "zh-Hans");
+            SeedTmdbPerson(tmdbApi, 1101, "Actor Zh", language: "zh");
+            SeedTmdbPersonTranslations(tmdbApi, 1101, CreatePersonTranslation("zh", "CN", string.Empty), CreatePersonTranslation("zh", "TW", "這個翻譯演員"));
+
+            SeedTmdbPerson(tmdbApi, 2101, string.Empty, language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 2101, "Writer Hans", language: "zh-Hans");
+            SeedTmdbPerson(tmdbApi, 2101, "Writer Zh", language: "zh");
+            SeedTmdbPersonTranslations(tmdbApi, 2101, CreatePersonTranslation("zh", "CN", string.Empty), CreatePersonTranslation("zh", "TW", "這個翻譯編劇"));
+
+            var provider = new SeriesProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsTrue(result.People == null || result.People.Count == 0, "raw 为空且精确 zh-CN 详情/翻译也为空时应拒绝，即使其他变体有值。 ");
+            Assert.IsFalse(result.Item.ProviderIds?.ContainsKey("MetaSharkPeopleRefreshState") ?? false, "即使没有任何 accepted people，provider 也不应把内部 state 写回 provider ids。 ");
         }
 
         [TestMethod]

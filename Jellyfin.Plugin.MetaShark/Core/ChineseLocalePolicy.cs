@@ -223,6 +223,40 @@ namespace Jellyfin.Plugin.MetaShark.Core
             return ChineseScriptBucket.Unknown;
         }
 
+        public static bool TryGetPreferredPeopleLocalization<T>(IEnumerable<T>? localizedValues, Func<T, string?> languageSelector, Func<T, string?> valueSelector, string? explicitFallback, out string? value, out string? sourceLanguage)
+        {
+            ArgumentNullException.ThrowIfNull(languageSelector);
+            ArgumentNullException.ThrowIfNull(valueSelector);
+
+            value = null;
+            sourceLanguage = null;
+
+            if (localizedValues != null)
+            {
+                foreach (var localizedValue in localizedValues)
+                {
+                    var candidateLanguage = CanonicalizeLanguage(languageSelector(localizedValue));
+                    if (!string.Equals(candidateLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var candidateValue = GetTrimmedNonEmptyValue(valueSelector(localizedValue));
+                    if (candidateValue == null)
+                    {
+                        continue;
+                    }
+
+                    value = candidateValue;
+                    sourceLanguage = candidateLanguage;
+                    return true;
+                }
+            }
+
+            _ = explicitFallback;
+            return false;
+        }
+
         public static bool IsTextAllowedForStrictZhCn(string? text)
         {
             if (string.IsNullOrWhiteSpace(text) || !text.HasChinese())
@@ -252,6 +286,11 @@ namespace Jellyfin.Plugin.MetaShark.Core
             }
 
             return hasHansEvidence && !hasHantEvidence;
+        }
+
+        private static string? GetTrimmedNonEmptyValue(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         }
     }
 }
