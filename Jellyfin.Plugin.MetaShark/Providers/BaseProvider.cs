@@ -465,7 +465,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 #pragma warning disable SA1204
         protected static bool SupportsSearchMissingMetadataOverwriteCandidate(DefaultScraperSemantic semantic)
         {
-            return semantic is DefaultScraperSemantic.UserRefresh or DefaultScraperSemantic.ManualMatch;
+            return semantic == DefaultScraperSemantic.ManualMatch;
         }
 
         protected static TmdbAuthoritativePeopleSnapshot? CreateTmdbAuthoritativePeopleSnapshot(string itemType, string? tmdbId, IEnumerable<PersonInfo>? people)
