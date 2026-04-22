@@ -242,6 +242,56 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 && Guid.TryParse(segments[1], out itemId);
         }
 
+        private static bool IsExplicitRefreshRequestWithoutReplaceAllMetadata(HttpContext? httpContext, Guid expectedItemId)
+        {
+            if (httpContext == null
+                || expectedItemId == Guid.Empty
+                || !HttpMethods.IsPost(httpContext.Request.Method))
+            {
+                return false;
+            }
+
+            var path = httpContext.Request.Path.Value;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length < 3
+                || !string.Equals(segments[0], "Items", StringComparison.OrdinalIgnoreCase)
+                || !Guid.TryParse(segments[1], out var requestItemId)
+                || requestItemId != expectedItemId
+                || !string.Equals(segments[2], "Refresh", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (httpContext.Request.Query.TryGetValue("ReplaceAllMetadata", out var replaceAllMetadataValues)
+                && bool.TryParse(replaceAllMetadataValues.ToString(), out var replaceAllMetadata)
+                && replaceAllMetadata)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool ShouldRearmQueuedOverwriteCandidate(DefaultScraperSemantic semantic, HttpContext? httpContext, Guid expectedItemId)
+        {
+            if (semantic == DefaultScraperSemantic.ManualMatch)
+            {
+                return true;
+            }
+
+            if (semantic != DefaultScraperSemantic.UserRefresh)
+            {
+                return false;
+            }
+
+            return httpContext == null || IsExplicitRefreshRequestWithoutReplaceAllMetadata(httpContext, expectedItemId);
+        }
+
         private async Task<MetadataResult<Movie>> GetMetadataByTmdb(string tmdbId, MovieInfo info, CancellationToken cancellationToken)
         {
             this.Log("通过 TMDb 获取电影元数据. tmdbId: \"{0}\"", tmdbId);
@@ -388,7 +438,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var existingCandidate = this.movieSeriesPeopleOverwriteRefreshCandidateStore.Peek(itemId);
-            if (existingCandidate?.OverwriteQueued == true)
+            if (existingCandidate?.OverwriteQueued == true
+                && !ShouldRearmQueuedOverwriteCandidate(semantic, httpContext, itemId))
             {
                 return;
             }

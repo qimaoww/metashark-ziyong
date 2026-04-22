@@ -351,7 +351,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
             var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
             var info = CreateMovieInfo();
-            info.IsAutomated = false;
+            info.IsAutomated = true;
             var currentMovie = new Movie
             {
                 Id = Guid.NewGuid(),
@@ -388,6 +388,147 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(currentMovie.Path, candidate.ItemPath);
         }
 
+        [TestMethod]
+        public async Task GetMetadata_ShouldRearmQueuedCandidate_WhenExplicitRefreshRequestWithoutReplaceAllMetadata()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateMovieInfo();
+            info.IsAutomated = false;
+            var currentMovie = new Movie
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            store.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = currentMovie.Id,
+                ItemPath = currentMovie.Path,
+                ExpectedPeopleCount = 17,
+                OverwriteQueued = true,
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, false))
+                .Returns(currentMovie);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: false) },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            var candidate = store.Peek(currentMovie.Id);
+            Assert.IsNotNull(candidate, "显式用户 refresh 且 ReplaceAllMetadata=false 时，应允许重新武装已锁死的 queued candidate。 ");
+            Assert.AreEqual(result.People?.Count ?? 0, candidate!.ExpectedPeopleCount, "重新武装后的 candidate 应反映本次 provider 实际产出的 people 数。 ");
+            Assert.IsFalse(candidate.OverwriteQueued, "显式用户 refresh 重新武装时，应把 queued candidate 还原成未排队状态，交给 post-process 再次决定是否 queue。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldKeepQueuedCandidate_WhenExplicitRefreshRequestUsesReplaceAllMetadata()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateMovieInfo();
+            info.IsAutomated = false;
+            var currentMovie = new Movie
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            store.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = currentMovie.Id,
+                ItemPath = currentMovie.Path,
+                ExpectedPeopleCount = 17,
+                OverwriteQueued = true,
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, false))
+                .Returns(currentMovie);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: true) },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            var candidate = store.Peek(currentMovie.Id);
+            Assert.IsNotNull(candidate, "ReplaceAllMetadata=true 的 overwrite refresh 不应打破现有 queued candidate 幂等性。 ");
+            Assert.AreEqual(17, candidate!.ExpectedPeopleCount, "overwrite refresh 不应被新的未排队 candidate 覆盖。 ");
+            Assert.IsTrue(candidate.OverwriteQueued, "ReplaceAllMetadata=true 时，queued candidate 仍应保持已排队状态。 ");
+            Assert.AreEqual(currentMovie.Path, candidate.ItemPath);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldRearmQueuedCandidate_WhenUserRefreshRunsWithoutHttpContext()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateMovieInfo();
+            info.IsAutomated = false;
+            var currentMovie = new Movie
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            store.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = currentMovie.Id,
+                ItemPath = currentMovie.Path,
+                ExpectedPeopleCount = 17,
+                OverwriteQueued = true,
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, false))
+                .Returns(currentMovie);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = null },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            var candidate = store.Peek(currentMovie.Id);
+            Assert.IsNotNull(candidate, "Jellyfin 后台执行手动电影 refresh 时，即使没有 HttpContext，也应允许重新武装已锁死的 queued candidate。 ");
+            Assert.AreEqual(result.People?.Count ?? 0, candidate!.ExpectedPeopleCount, "无 HttpContext 的手动 refresh 重新武装后，也应反映本次 provider 实际产出的 people 数。 ");
+            Assert.IsFalse(candidate.OverwriteQueued, "无 HttpContext 的手动 refresh 重新武装时，应把 queued candidate 还原成未排队状态。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
+        }
+
         private static MovieProvider CreateProvider(
             ILibraryManager libraryManager,
             IHttpContextAccessor httpContextAccessor,
@@ -422,11 +563,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
-        private static DefaultHttpContext CreateRefreshRequestContext(Guid itemId)
+        private static DefaultHttpContext CreateRefreshRequestContext(Guid itemId, bool? replaceAllMetadata = null)
         {
             var context = new DefaultHttpContext();
             context.Request.Method = HttpMethods.Post;
             context.Request.Path = $"/Items/{itemId:N}/Refresh";
+            if (replaceAllMetadata.HasValue)
+            {
+                context.Request.QueryString = new QueryString($"?ReplaceAllMetadata={replaceAllMetadata.Value.ToString().ToLowerInvariant()}");
+            }
 
             return context;
         }
