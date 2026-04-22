@@ -41,7 +41,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private static readonly string PluginConfigurationsPath = Path.Combine(PluginTestRootPath, "configurations");
 
         [TestMethod]
-        public async Task GetMetadata_ShouldSaveCandidate_WhenInfoRepresentsUserRefresh()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenInfoRepresentsUserRefresh()
         {
             EnsurePluginInstance();
 
@@ -72,17 +72,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
-            var candidate = store.Peek(currentSeries.Id);
-            Assert.IsNotNull(candidate, "手动单项剧集 refresh 命中 TMDb provider 时，应保存一次性 overwrite candidate。 ");
-            Assert.AreEqual(currentSeries.Id, candidate!.ItemId);
-            Assert.AreEqual(info.Path, candidate.ItemPath);
-            Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount, "candidate 应记录 series provider 实际产出的期望 people 数。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", result.People);
+            Assert.IsNull(store.Peek(currentSeries.Id), "UserRefresh 不应保存 overwrite candidate。 ");
         }
 
 
         [TestMethod]
-        public async Task GetMetadata_ShouldSaveAcceptedPeopleCount_WhenDoubanMetadataResolvesTmdbPeopleDuringUserRefresh()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenDoubanMetadataResolvesTmdbPeopleDuringUserRefresh()
         {
             EnsurePluginInstance();
 
@@ -183,16 +178,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
-            Assert.AreEqual(1, result.People?.Count ?? 0, "candidate 计数应基于实际接受的剧集演员，而不是混入的 crew。 ");
-            var candidate = store.Peek(currentSeries.Id);
-            Assert.IsNotNull(candidate, "Douban 元数据分支在 user refresh 下补回 TMDb people 时，也应保存一次性 overwrite candidate。 ");
-            Assert.AreEqual(1, candidate!.ExpectedPeopleCount);
-            Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount, "candidate 应记录 Douban 分支最终实际接受的 TMDb people 数。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", result.People);
+            Assert.AreEqual(1, result.People?.Count ?? 0, "UserRefresh 下 candidate 计数仍应基于实际接受的剧集演员，而不是混入的 crew。 ");
+            Assert.IsNull(store.Peek(currentSeries.Id), "UserRefresh 不应保存 overwrite candidate。 ");
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldUseAggregateCastCount_WhenSeriesAggregateCreditsDifferFromCredits()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenSeriesAggregateCreditsDifferFromCredits()
         {
             EnsurePluginInstance();
 
@@ -263,10 +254,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(result.Item);
             Assert.AreEqual(3, result.People?.Count ?? 0, "当 aggregate cast 与 credits 不一致时，应按 aggregate cast 计数。 ");
             CollectionAssert.AreEqual(new[] { 5101, 5102, 5103 }, result.People!.Select(GetTmdbId).ToArray());
-            var candidate = store.Peek(currentSeries.Id);
-            Assert.IsNotNull(candidate);
-            Assert.AreEqual(3, candidate!.ExpectedPeopleCount, "overwrite candidate 应记录 aggregate cast 的最终演员数。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", result.People);
+            Assert.IsNull(store.Peek(currentSeries.Id), "UserRefresh 不应保存 aggregate cast candidate。 ");
         }
 
         [TestMethod]
@@ -301,11 +289,46 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
-            Assert.IsNull(store.Peek(currentSeries.Id), "自动刷新不应为单项 one-shot overwrite 保存 candidate。 ");
+            Assert.IsNull(store.Peek(currentSeries.Id), "AutomatedRefresh 不应保存 overwrite candidate。 ");
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldSaveCandidate_ForManualMatchRequest()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenRequestIsExplicitSearchMissingRefresh()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 456, "zh-CN", "示例剧集");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateSeriesInfo();
+            info.IsAutomated = false;
+            var currentSeries = new Series
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, true))
+                .Returns(currentSeries);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentSeries.Id, replaceAllMetadata: false, metadataRefreshMode: "FullRefresh") },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsNull(store.Peek(currentSeries.Id), "SearchMissing/FullRefresh 不应保存 overwrite candidate。 ");
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldSaveCandidate_WhenRequestIsManualMatch()
         {
             EnsurePluginInstance();
 
@@ -337,7 +360,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             var candidate = store.Peek(currentSeries.Id);
-            Assert.IsNotNull(candidate, "手动匹配 /Items/RemoteSearch/Apply 命中 TMDb provider 时，也应创建单项 overwrite candidate。 ");
+            Assert.IsNotNull(candidate, "ManualMatch /Items/RemoteSearch/Apply 命中 TMDb provider 时，应创建单项 overwrite candidate。 ");
             Assert.AreEqual(currentSeries.Id, candidate!.ItemId);
             Assert.AreEqual(info.Path, candidate.ItemPath);
             Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount);
@@ -345,7 +368,56 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldSaveEmptyAuthoritativeCandidate_WhenTmdbPeopleIsEmptyButCurrentSeriesStillHasPeople()
+        public async Task GetMetadata_ShouldRearmQueuedCandidate_WhenRequestIsManualMatch()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 456, "zh-CN", "示例剧集");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateSeriesInfo();
+            info.IsAutomated = false;
+            var currentSeries = new Series
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            store.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = currentSeries.Id,
+                ItemPath = currentSeries.Path,
+                ExpectedPeopleCount = 17,
+                OverwriteQueued = true,
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, true))
+                .Returns(currentSeries);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                CreateManualMatchContextAccessor(),
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            var candidate = store.Peek(currentSeries.Id);
+            Assert.IsNotNull(candidate, "ManualMatch 命中已有 queued candidate 时，应重新武装并更新该 candidate。 ");
+            Assert.AreEqual(currentSeries.Id, candidate!.ItemId);
+            Assert.AreEqual(info.Path, candidate.ItemPath);
+            Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount);
+            Assert.IsFalse(candidate.OverwriteQueued, "ManualMatch 应把 queued candidate 重新武装为未排队状态。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", result.People);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenTmdbPeopleIsEmptyButCurrentSeriesStillHasPeople()
         {
             EnsurePluginInstance();
 
@@ -383,13 +455,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             Assert.AreEqual(0, result.People?.Count ?? 0, "测试前提：TMDb authoritative 应为空。 ");
-            var candidate = store.Peek(currentSeries.Id);
-            Assert.IsNotNull(candidate, "TMDb authoritative 为空但当前剧集仍有旧 people 时，也应保存待清理 candidate。 ");
-            Assert.AreEqual(currentSeries.Id, candidate!.ItemId);
-            Assert.AreEqual(info.Path, candidate.ItemPath);
-            Assert.AreEqual(0, candidate.ExpectedPeopleCount, "空 authoritative candidate 仍应保留 0 的期望人数，兼容当前消费方。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", Array.Empty<PersonInfo>());
-            Assert.IsFalse(CurrentItemAuthoritativePeopleChecker.IsAuthoritativeEmpty(currentSeries, candidate.AuthoritativePeopleSnapshot), "当前条目仍残留旧人物时，空 authoritative 快照不应被误判成 authoritative empty。 ");
+            Assert.IsNull(store.Peek(currentSeries.Id), "UserRefresh 不应保存空 authoritative candidate。 ");
         }
 
         [TestMethod]
@@ -440,7 +506,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldRearmQueuedCandidate_WhenExplicitRefreshRequestWithoutReplaceAllMetadata()
+        public async Task GetMetadata_ShouldKeepQueuedCandidate_WhenExplicitRefreshRequestWithoutReplaceAllMetadata()
         {
             EnsurePluginInstance();
 
@@ -480,10 +546,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             var candidate = store.Peek(currentSeries.Id);
-            Assert.IsNotNull(candidate, "显式用户 refresh 且 ReplaceAllMetadata=false 时，应允许重新武装已锁死的 queued candidate。 ");
-            Assert.AreEqual(result.People?.Count ?? 0, candidate!.ExpectedPeopleCount, "重新武装后的 candidate 应反映本次 provider 实际产出的 people 数。 ");
-            Assert.IsFalse(candidate.OverwriteQueued, "显式用户 refresh 重新武装时，应把 queued candidate 还原成未排队状态，交给 post-process 再次决定是否 queue。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", result.People);
+            Assert.IsNotNull(candidate, "UserRefresh 不应改写已排队的 queued candidate。 ");
+            Assert.AreEqual(17, candidate!.ExpectedPeopleCount, "UserRefresh 不应覆盖已有 candidate 的 expected people 数。 ");
+            Assert.IsTrue(candidate.OverwriteQueued, "UserRefresh 下 queued candidate 应保持已排队状态。 ");
+            Assert.IsNull(candidate.AuthoritativePeopleSnapshot, "UserRefresh 不应重写 queued candidate 的 authoritative 快照。 ");
         }
 
         [TestMethod]
@@ -578,12 +644,19 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
-        private static DefaultHttpContext CreateRefreshRequestContext(Guid itemId, bool replaceAllMetadata)
+        private static DefaultHttpContext CreateRefreshRequestContext(Guid itemId, bool replaceAllMetadata, string? metadataRefreshMode = null)
         {
             var context = new DefaultHttpContext();
             context.Request.Method = HttpMethods.Post;
             context.Request.Path = $"/Items/{itemId:N}/Refresh";
-            context.Request.QueryString = new QueryString($"?ReplaceAllMetadata={replaceAllMetadata.ToString().ToLowerInvariant()}");
+            var queryString = $"?replaceAllMetadata={replaceAllMetadata.ToString().ToLowerInvariant()}";
+
+            if (!string.IsNullOrWhiteSpace(metadataRefreshMode))
+            {
+                queryString += $"&metadataRefreshMode={metadataRefreshMode}";
+            }
+
+            context.Request.QueryString = new QueryString(queryString);
             return context;
         }
 

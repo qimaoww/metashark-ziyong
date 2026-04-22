@@ -290,6 +290,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return true;
         }
 
+        private static bool ShouldRearmQueuedOverwriteCandidate(DefaultScraperSemantic semantic, HttpContext? httpContext, Guid expectedItemId)
+        {
+            if (semantic == DefaultScraperSemantic.ManualMatch)
+            {
+                return true;
+            }
+
+            if (semantic != DefaultScraperSemantic.UserRefresh)
+            {
+                return false;
+            }
+
+            return httpContext == null || IsExplicitRefreshRequestWithoutReplaceAllMetadata(httpContext, expectedItemId);
+        }
+
         private static string FormatProviderIdForLog(string? providerId)
         {
             if (providerId == null)
@@ -449,6 +464,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return;
             }
 
+            var httpContext = this.HttpContextAccessor.HttpContext;
             var semantic = this.ResolveMetadataSemantic(info);
             if (!SupportsSearchMissingMetadataOverwriteCandidate(semantic))
             {
@@ -466,7 +482,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var itemId = series?.Id ?? Guid.Empty;
-            var httpContext = this.HttpContextAccessor.HttpContext;
             if (itemId == Guid.Empty && !TryResolveItemIdFromRequestPath(httpContext, out itemId))
             {
                 return;
@@ -474,7 +489,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var existingCandidate = this.movieSeriesPeopleOverwriteRefreshCandidateStore.Peek(itemId);
             if (existingCandidate?.OverwriteQueued == true
-                && !IsExplicitRefreshRequestWithoutReplaceAllMetadata(httpContext, itemId))
+                && !ShouldRearmQueuedOverwriteCandidate(semantic, httpContext, itemId))
             {
                 return;
             }
