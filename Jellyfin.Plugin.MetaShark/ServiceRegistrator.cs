@@ -31,6 +31,7 @@ namespace Jellyfin.Plugin.MetaShark
 
             serviceCollection.AddHostedService<BoxSetManager>();
             serviceCollection.AddHostedService<TvMissingImageRefillItemUpdatedWorker>();
+            serviceCollection.AddHostedService<PersonMissingImageRefillItemUpdatedWorker>();
             serviceCollection.AddHostedService<EpisodeTitleBackfillItemUpdatedWorker>();
             serviceCollection.AddHostedService<EpisodeTitleBackfillDeferredRetryWorker>();
             serviceCollection.AddHostedService<MovieSeriesPeopleRefreshStateItemUpdatedWorker>();
@@ -42,6 +43,12 @@ namespace Jellyfin.Plugin.MetaShark
                     Path.Combine(dataFolderPath, "tv-image-refill-state.json"),
                     ctx.GetRequiredService<ILoggerFactory>());
             });
+            serviceCollection.AddSingleton<IPersonImageRefillStateStore>((ctx) =>
+            {
+                return new FilePersonImageRefillStateStore(
+                    Path.Combine(dataFolderPath, "person-image-refill-state.json"),
+                    ctx.GetRequiredService<ILoggerFactory>());
+            });
             serviceCollection.AddSingleton<IPeopleRefreshStateStore>((ctx) =>
             {
                 return new FilePeopleRefreshStateStore(
@@ -50,6 +57,7 @@ namespace Jellyfin.Plugin.MetaShark
             });
             serviceCollection.AddSingleton<ITvImageRefillOutcomeReporter, TvImageRefillOutcomeReporter>();
             serviceCollection.AddSingleton<ITvMissingImageRefillService, TvMissingImageRefillService>();
+            serviceCollection.AddSingleton<IPersonMissingImageRefillService, PersonMissingImageRefillService>();
             serviceCollection.AddSingleton<IMissingMetadataSearchService, MissingMetadataSearchService>();
             serviceCollection.AddSingleton<IMovieSeriesPeopleOverwriteRefreshCandidateStore>((_) => InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared);
             serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore, InMemoryEpisodeTitleBackfillCandidateStore>();

@@ -20,6 +20,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Jellyfin.Plugin.MetaShark.Configuration;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
+    using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
@@ -458,6 +459,29 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return info.IsAutomated ? DefaultScraperSemantic.AutomaticRefresh : DefaultScraperSemantic.UserRefresh;
+        }
+
+        protected bool SupportsSearchMissingMetadataOverwriteCandidate(DefaultScraperSemantic semantic)
+        {
+            return semantic is DefaultScraperSemantic.UserRefresh or DefaultScraperSemantic.ManualMatch;
+        }
+
+        protected TmdbAuthoritativePeopleSnapshot? CreateTmdbAuthoritativePeopleSnapshot(string itemType, string? tmdbId, IEnumerable<PersonInfo>? people)
+        {
+            if (string.IsNullOrWhiteSpace(tmdbId))
+            {
+                return null;
+            }
+
+            return TmdbAuthoritativePeopleSnapshot.Create(itemType, tmdbId, people ?? Array.Empty<PersonInfo>());
+        }
+
+        protected bool RequiresSearchMissingMetadataOverwriteCandidate(BaseItem? currentItem, TmdbAuthoritativePeopleSnapshot authoritativePeopleSnapshot)
+        {
+            ArgumentNullException.ThrowIfNull(authoritativePeopleSnapshot);
+
+            return !authoritativePeopleSnapshot.IsAuthoritativeEmpty
+                || !CurrentItemAuthoritativePeopleChecker.IsAuthoritativeEmpty(currentItem, authoritativePeopleSnapshot);
         }
 
         protected DefaultScraperSemantic ResolveImageSemantic()

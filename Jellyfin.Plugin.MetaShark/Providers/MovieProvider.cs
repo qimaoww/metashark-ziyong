@@ -211,10 +211,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 if (!string.IsNullOrEmpty(tmdbId))
                 {
                     var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, cancellationToken).ConfigureAwait(false);
-                    if (acceptedPeopleCount > 0)
-                    {
-                        this.TryQueueSearchMissingMetadataOverwriteCandidate(info, acceptedPeopleCount);
-                    }
+                    this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
                 }
 
                 return result;
@@ -319,7 +316,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var acceptedPeopleCount = await this.AddTmdbPeopleAsync(movieResult, result, cancellationToken).ConfigureAwait(false);
-            this.TryQueueSearchMissingMetadataOverwriteCandidate(info, acceptedPeopleCount);
+            this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
 
             return result;
         }
@@ -360,14 +357,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return null;
         }
 
-        private void TryQueueSearchMissingMetadataOverwriteCandidate(MovieInfo info, int expectedPeopleCount)
+        private void TryQueueSearchMissingMetadataOverwriteCandidate(MovieInfo info, string tmdbId, IEnumerable<PersonInfo>? authoritativePeople, int expectedPeopleCount)
         {
             if (this.movieSeriesPeopleOverwriteRefreshCandidateStore == null)
             {
                 return;
             }
 
-            if (this.ResolveMetadataSemantic(info) != DefaultScraperSemantic.UserRefresh)
+            var semantic = this.ResolveMetadataSemantic(info);
+            if (!this.SupportsSearchMissingMetadataOverwriteCandidate(semantic))
             {
                 return;
             }
@@ -375,6 +373,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var movie = !string.IsNullOrWhiteSpace(info.Path)
                 ? this.LibraryManager.FindByPath(info.Path, false) as Movie
                 : null;
+            var authoritativePeopleSnapshot = this.CreateTmdbAuthoritativePeopleSnapshot(nameof(Movie), tmdbId, authoritativePeople);
+            if (authoritativePeopleSnapshot == null
+                || !this.RequiresSearchMissingMetadataOverwriteCandidate(movie, authoritativePeopleSnapshot))
+            {
+                return;
+            }
+
             var itemId = movie?.Id ?? Guid.Empty;
             var httpContext = this.HttpContextAccessor.HttpContext;
             if (itemId == Guid.Empty && !TryResolveItemIdFromRequestPath(httpContext, out itemId))
@@ -393,8 +398,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ItemId = itemId,
                 ItemPath = movie?.Path ?? info.Path ?? string.Empty,
                 ExpectedPeopleCount = expectedPeopleCount,
+                AuthoritativePeopleSnapshot = authoritativePeopleSnapshot,
             });
-            this.Log("已记录单项影视人物 overwrite candidate. itemId: {0} expectedPeopleCount: {1}", itemId, expectedPeopleCount);
+            this.Log(
+                "已记录单项影视人物 overwrite candidate. itemId: {0} semantic: {1} expectedPeopleCount: {2} authoritativePeopleCount: {3}",
+                itemId,
+                semantic,
+                expectedPeopleCount,
+                authoritativePeopleSnapshot.People.Count);
         }
 
         private async Task<int> AddTmdbPeopleAsync(TMDbLib.Objects.Movies.Movie movieResult, MetadataResult<Movie> result, CancellationToken cancellationToken)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
@@ -45,37 +46,34 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task SingleItemSearchMissingLifecycle_Movie_MetadataDownloadShouldStayPendingUntilPeopleCountSatisfied()
+        public async Task SingleItemSearchMissingLifecycle_Movie_MetadataDownloadShouldQueueOverwriteWhenSameCountWrongSourceUntilAuthoritative()
         {
             using var harness = FlowHarness<TrackingMovie>.CreateMovie();
+            var authoritativePeople = CreateAuthoritativePeopleSet();
+            var authoritativeSnapshot = CreateAuthoritativePeopleSnapshot(harness.Item, authoritativePeople);
+            harness.Item.SetSimulatedPeople(CreateNonAuthoritativePeopleWithSameCount());
             harness.OverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
             {
                 ItemId = harness.Item.Id,
                 ItemPath = harness.Item.Path,
-                ExpectedPeopleCount = 2,
+                ExpectedPeopleCount = authoritativePeople.Count,
+                AuthoritativePeopleSnapshot = authoritativeSnapshot,
             });
 
             await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
 
-            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "首轮内置单项 search-missing 的非 overwrite MetadataDownload 不应先结清 people state。 ");
-            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "首轮内置单项 search-missing 命中 candidate 后应直接排队 overwrite，不应先写入 state store。 ");
+            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "same-count 但来源错误时，首轮 MetadataDownload 不应误结清 people state。 ");
+            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "same-count 但非 authoritative 时，应先排队 overwrite，而不是提前写入 state store。 ");
             AssertQueuedOnceForSingleItemSearchMissingOverwrite(harness, harness.Item.Id);
-            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 2);
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: authoritativePeople.Count, expectedAuthoritativePeopleSnapshot: authoritativeSnapshot);
+
+            harness.Item.SetSimulatedPeople(authoritativePeople);
 
             await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
 
-            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "overwrite 后人数仍不足时，movie people state 仍应保持 pending。 ");
-            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "overwrite 后人数仍不足时，不应提前写入 state store。 ");
-            Assert.AreEqual(1, harness.QueueInvocations.Count, "follow-up overwrite refresh 不应重新创建 candidate 或再次排队。 ");
-            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 2);
-
-            harness.Item.SetSimulatedPeopleCount(2);
-
-            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
-
-            AssertCurrentStatePersisted(harness);
-            Assert.AreEqual(1, harness.QueueInvocations.Count, "人数满足后不应再次排队 overwrite refresh。 ");
-            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "movie people 数满足预期后，candidate 应真正消失。 ");
+            AssertCurrentStatePersisted(harness, expectedAuthoritativePeopleSnapshot: authoritativeSnapshot);
+            Assert.AreEqual(1, harness.QueueInvocations.Count, "第二轮 authoritative 后不应再次排队 overwrite refresh。 ");
+            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "movie 条目 authoritative 后，candidate 应真正消失。 ");
         }
 
         [TestMethod]
@@ -101,55 +99,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task SingleItemSearchMissingLifecycle_Series_MetadataDownloadShouldStayPendingUntilPeopleCountSatisfied()
+        public async Task SingleItemSearchMissingLifecycle_Series_MetadataDownloadShouldStayPendingUntilAuthoritativeEmptyClearsResidue()
         {
             using var harness = FlowHarness<TrackingSeries>.CreateSeries();
-            harness.OverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
-            {
-                ItemId = harness.Item.Id,
-                ItemPath = harness.Item.Path,
-                ExpectedPeopleCount = 2,
-            });
-
-            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
-
-            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "首轮内置单项 search-missing 的非 overwrite MetadataDownload 不应先结清 series people state。 ");
-            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "首轮命中 candidate 后应先排队 overwrite，而不是直接保存 state。 ");
-            AssertQueuedOnceForSingleItemSearchMissingOverwrite(harness, harness.Item.Id);
-            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 2);
-
-            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
-
-            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "overwrite 后人数仍不足时，series people state 仍应保持 pending。 ");
-            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "overwrite 后人数仍不足时，series 不应提前写入 state store。 ");
-            Assert.AreEqual(1, harness.QueueInvocations.Count, "series follow-up overwrite refresh 不应重复排队。 ");
-            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 2);
-
-            harness.Item.SetSimulatedPeopleCount(2);
-
-            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
-
-            AssertCurrentStatePersisted(harness);
-            Assert.AreEqual(1, harness.QueueInvocations.Count, "series 人数满足后不应再次排队 overwrite refresh。 ");
-            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "series people 数满足预期后，candidate 应真正消失。 ");
-        }
-
-        [TestMethod]
-        public async Task SingleItemSearchMissingLifecycle_Movie_MetadataDownloadShouldCloseStateWithoutOverwriteWhenCurrentPeopleCountMeetsExpected()
-        {
-            using var harness = FlowHarness<TrackingMovie>.CreateMovie();
+            var authoritativeSnapshot = CreateAuthoritativePeopleSnapshot(harness.Item, Array.Empty<PersonInfo>());
+            harness.Item.SetSimulatedPeople(CreateLegacyResiduePeople());
             harness.OverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
             {
                 ItemId = harness.Item.Id,
                 ItemPath = harness.Item.Path,
                 ExpectedPeopleCount = 0,
+                AuthoritativePeopleSnapshot = authoritativeSnapshot,
             });
 
             await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
 
-            AssertCurrentStatePersisted(harness);
-            Assert.AreEqual(0, harness.QueueInvocations.Count, "当前 people 数已达到 provider 期望值时，不应再排 follow-up overwrite refresh。 ");
-            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "即使不排 overwrite，candidate 也应只消费一次，避免重复命中。 ");
+            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "authoritative empty 但当前仍有旧人物时，series people state 应保持 pending。 ");
+            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "authoritative empty 遇到残留旧人物时，应继续排队 overwrite，而不是直接保存 state。 ");
+            AssertQueuedOnceForSingleItemSearchMissingOverwrite(harness, harness.Item.Id);
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: 0, expectedAuthoritativePeopleSnapshot: authoritativeSnapshot);
+
+            harness.Item.SetSimulatedPeople(Array.Empty<PersonInfo>());
+
+            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
+
+            AssertCurrentStatePersisted(harness, expectedAuthoritativePeopleSnapshot: authoritativeSnapshot);
+            Assert.AreEqual(1, harness.QueueInvocations.Count, "series authoritative empty 成立后不应再次排队 overwrite refresh。 ");
+            Assert.IsNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "series 条目 authoritative empty 后，candidate 应真正消失。 ");
         }
 
         [TestMethod]
@@ -213,7 +189,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(expectedCandidate, isCandidate);
         }
 
-        private static void AssertCurrentStatePersisted<TItem>(FlowHarness<TItem> harness, int expectedMetadataChangedCallCount = 0, int expectedUpdateToRepositoryCallCount = 0, ItemUpdateType? expectedLastUpdateReason = null)
+        private static void AssertCurrentStatePersisted<TItem>(FlowHarness<TItem> harness, int expectedMetadataChangedCallCount = 0, int expectedUpdateToRepositoryCallCount = 0, ItemUpdateType? expectedLastUpdateReason = null, TmdbAuthoritativePeopleSnapshot? expectedAuthoritativePeopleSnapshot = null)
             where TItem : BaseItem, ITrackingLifecycleItem
         {
             var item = harness.Item;
@@ -228,6 +204,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(expectedMetadataChangedCallCount, item.MetadataChangedCallCount, "metadata changed 调用次数与预期不一致。 ");
             Assert.AreEqual(expectedUpdateToRepositoryCallCount, item.UpdateToRepositoryCallCount, "repository 写回次数与预期不一致。 ");
             Assert.AreEqual(expectedLastUpdateReason, item.LastUpdateReason);
+            Assert.IsNotNull(state.AuthoritativePeopleSnapshot, "结清后的 state 不应再是无 authoritative snapshot 的 current state。 ");
+            if (expectedAuthoritativePeopleSnapshot != null)
+            {
+                Assert.IsTrue(state.AuthoritativePeopleSnapshot!.SetEquals(expectedAuthoritativePeopleSnapshot), "结清后的 authoritative snapshot 应与 candidate 一致。 ");
+            }
+            else
+            {
+                Assert.IsTrue(TmdbAuthoritativePeopleSnapshot.TryCreateFromCurrentItem(item, out var currentSnapshot));
+                Assert.IsNotNull(currentSnapshot, "结清后的当前条目应可生成 authoritative snapshot。 ");
+                Assert.IsTrue(state.AuthoritativePeopleSnapshot!.SetEquals(currentSnapshot), "normal settlement path 结清后的 snapshot 应与当前条目指纹一致。 ");
+            }
+
             Assert.IsFalse(item.ProviderIds?.ContainsKey("MetaSharkPeopleRefreshState") ?? false);
         }
 
@@ -261,7 +249,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(invocation.Options.ReplaceAllImages);
         }
 
-        private static void AssertPendingOverwriteCandidate<TItem>(FlowHarness<TItem> harness, int expectedPeopleCount)
+        private static void AssertPendingOverwriteCandidate<TItem>(FlowHarness<TItem> harness, int expectedPeopleCount, TmdbAuthoritativePeopleSnapshot? expectedAuthoritativePeopleSnapshot = null)
             where TItem : BaseItem, ITrackingLifecycleItem
         {
             var candidate = harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id);
@@ -270,6 +258,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(harness.Item.Id, candidate!.ItemId);
             Assert.AreEqual(harness.Item.Path, candidate.ItemPath);
             Assert.AreEqual(expectedPeopleCount, candidate.ExpectedPeopleCount);
+            if (expectedAuthoritativePeopleSnapshot != null)
+            {
+                Assert.IsNotNull(candidate.AuthoritativePeopleSnapshot, "pending candidate 应保留 authoritative people snapshot。 ");
+                Assert.IsTrue(candidate.AuthoritativePeopleSnapshot!.SetEquals(expectedAuthoritativePeopleSnapshot), "pending candidate 的 authoritative snapshot 应与 provider 结果一致。 ");
+            }
+
             Assert.IsTrue(candidate.OverwriteQueued, "pending candidate 应标记为 overwrite 已排队，避免重复排队。 ");
         }
 
@@ -284,6 +278,61 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
+        private static IReadOnlyList<PersonInfo> CreateAuthoritativePeopleSet()
+        {
+            return new[]
+            {
+                CreatePerson("1001", "Actor", "角色A", "TMDb Actor A"),
+                CreatePerson("2001", "Director", "Director", "TMDb Director A"),
+            };
+        }
+
+        private static IReadOnlyList<PersonInfo> CreateNonAuthoritativePeopleWithSameCount()
+        {
+            return new[]
+            {
+                CreatePerson(tmdbPersonId: null, "Actor", "角色A", "旧演员A"),
+                CreatePerson(tmdbPersonId: null, "Director", "Director", "旧导演A"),
+            };
+        }
+
+        private static IReadOnlyList<PersonInfo> CreateLegacyResiduePeople()
+        {
+            return new[]
+            {
+                CreatePerson(tmdbPersonId: null, "Actor", "角色A", "旧演员A"),
+            };
+        }
+
+        private static TmdbAuthoritativePeopleSnapshot CreateAuthoritativePeopleSnapshot(BaseItem item, IEnumerable<PersonInfo> people)
+        {
+            return TmdbAuthoritativePeopleSnapshot.Create(
+                item is Movie ? nameof(Movie) : nameof(Series),
+                item.GetProviderId(MetadataProvider.Tmdb) ?? throw new InvalidOperationException("测试前提：item 必须带有 TMDb provider id。 "),
+                people);
+        }
+
+        private static PersonInfo CreatePerson(string? tmdbPersonId, string personTypeName, string role, string name)
+        {
+            var person = new PersonInfo
+            {
+                Name = name,
+                Role = role,
+            };
+
+            var typeProperty = typeof(PersonInfo).GetProperty("Type", BindingFlags.Instance | BindingFlags.Public);
+            Assert.IsNotNull(typeProperty, "PersonInfo.Type 未定义。 ");
+            Assert.IsTrue(typeProperty!.PropertyType.IsEnum, "PersonInfo.Type 应为枚举类型。 ");
+            typeProperty.SetValue(person, Enum.Parse(typeProperty.PropertyType, personTypeName, ignoreCase: false));
+
+            if (!string.IsNullOrWhiteSpace(tmdbPersonId))
+            {
+                person.SetProviderId(MetadataProvider.Tmdb, tmdbPersonId);
+            }
+
+            return person;
+        }
+
         private interface ITrackingLifecycleItem
         {
             int MetadataChangedCallCount { get; }
@@ -291,6 +340,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             int UpdateToRepositoryCallCount { get; }
 
             ItemUpdateType? LastUpdateReason { get; }
+
+            void SetSimulatedPeople(IEnumerable<PersonInfo> people);
 
             void SetSimulatedPeopleCount(int count);
         }
@@ -445,12 +496,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             public ItemUpdateType? LastUpdateReason { get; private set; }
 
+            public void SetSimulatedPeople(IEnumerable<PersonInfo> people)
+            {
+                this.simulatedPeople.Clear();
+                foreach (var person in people)
+                {
+                    this.simulatedPeople.Add(person);
+                }
+            }
+
             public void SetSimulatedPeopleCount(int count)
             {
                 this.simulatedPeople.Clear();
                 for (var i = 0; i < count; i++)
                 {
-                    this.simulatedPeople.Add(new object());
+                    this.simulatedPeople.Add(MovieSeriesPeopleRefreshLifecycleTest.CreatePerson((1000 + i).ToString(), i == 0 ? "Actor" : "Director", i == 0 ? "角色A" : "Director", $"Simulated Person {i}"));
                 }
             }
 
@@ -483,12 +543,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             public ItemUpdateType? LastUpdateReason { get; private set; }
 
+            public void SetSimulatedPeople(IEnumerable<PersonInfo> people)
+            {
+                this.simulatedPeople.Clear();
+                foreach (var person in people)
+                {
+                    this.simulatedPeople.Add(person);
+                }
+            }
+
             public void SetSimulatedPeopleCount(int count)
             {
                 this.simulatedPeople.Clear();
                 for (var i = 0; i < count; i++)
                 {
-                    this.simulatedPeople.Add(new object());
+                    this.simulatedPeople.Add(MovieSeriesPeopleRefreshLifecycleTest.CreatePerson((2000 + i).ToString(), i == 0 ? "Actor" : "Director", i == 0 ? "角色A" : "Director", $"Simulated Series Person {i}"));
                 }
             }
 

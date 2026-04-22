@@ -22,7 +22,14 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
         public string Version { get; set; } = string.Empty;
 
+        public TmdbAuthoritativePeopleSnapshot? AuthoritativePeopleSnapshot { get; set; }
+
         public DateTimeOffset UpdatedAtUtc { get; set; }
+
+        public static CurrentItemAuthoritativePeopleStatus GetCurrentAuthoritativePeopleStatus(BaseItem? item, PeopleRefreshState? state)
+        {
+            return CurrentItemAuthoritativePeopleChecker.Check(item, state);
+        }
 
         public static bool RequiresBackfill(BaseItem? item, PeopleRefreshState? state)
         {
@@ -36,11 +43,13 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return false;
             }
 
-            return state != null
-                && state.ItemId == itemId
-                && string.Equals(state.ItemType, itemType, StringComparison.Ordinal)
-                && string.Equals(state.TmdbId, tmdbId, StringComparison.Ordinal)
-                && string.Equals(state.Version, CurrentVersion, StringComparison.Ordinal);
+            if (state == null || !HasMatchingIdentity(state, itemId, itemType, tmdbId))
+            {
+                return false;
+            }
+
+            return state.AuthoritativePeopleSnapshot != null
+                && CurrentItemAuthoritativePeopleChecker.IsAuthoritative(item, state);
         }
 
         public static bool IsMissing(BaseItem? item, PeopleRefreshState? state)
@@ -72,12 +81,47 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 ItemType = itemType,
                 TmdbId = tmdbId,
                 Version = CurrentVersion,
+                AuthoritativePeopleSnapshot = null,
                 UpdatedAtUtc = DateTimeOffset.UtcNow,
             };
             return true;
         }
 
-        private static bool TryGetIdentity(BaseItem? item, out Guid itemId, out string itemType, out string tmdbId)
+        public static bool TryCreateCurrent(BaseItem? item, TmdbAuthoritativePeopleSnapshot? authoritativePeopleSnapshot, out PeopleRefreshState? state)
+        {
+            if (authoritativePeopleSnapshot == null)
+            {
+                state = null;
+                return false;
+            }
+
+            if (!TryGetIdentity(item, out var itemId, out var itemType, out var tmdbId))
+            {
+                state = null;
+                return false;
+            }
+
+            if (authoritativePeopleSnapshot != null
+                && (!string.Equals(authoritativePeopleSnapshot.ItemType, itemType, StringComparison.Ordinal)
+                    || !string.Equals(authoritativePeopleSnapshot.TmdbId, tmdbId, StringComparison.Ordinal)))
+            {
+                state = null;
+                return false;
+            }
+
+            state = new PeopleRefreshState
+            {
+                ItemId = itemId,
+                ItemType = itemType,
+                TmdbId = tmdbId,
+                Version = CurrentVersion,
+                AuthoritativePeopleSnapshot = authoritativePeopleSnapshot?.Clone(),
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            };
+            return true;
+        }
+
+        internal static bool TryGetIdentity(BaseItem? item, out Guid itemId, out string itemType, out string tmdbId)
         {
             itemId = item?.Id ?? Guid.Empty;
             itemType = string.Empty;
@@ -102,6 +146,14 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
             itemType = item is Movie ? nameof(Movie) : nameof(Series);
             return true;
+        }
+
+        private static bool HasMatchingIdentity(PeopleRefreshState? state, Guid itemId, string itemType, string tmdbId)
+        {
+            return state != null
+                && state.ItemId == itemId
+                && string.Equals(state.ItemType, itemType, StringComparison.Ordinal)
+                && string.Equals(state.TmdbId, tmdbId, StringComparison.Ordinal);
         }
     }
 }

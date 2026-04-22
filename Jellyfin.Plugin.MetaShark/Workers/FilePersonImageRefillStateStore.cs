@@ -1,4 +1,4 @@
-// <copyright file="FilePeopleRefreshStateStore.cs" company="PlaceholderCompany">
+// <copyright file="FilePersonImageRefillStateStore.cs" company="PlaceholderCompany">
 // Copyright (c) PlaceholderCompany. All rights reserved.
 // </copyright>
 
@@ -8,10 +8,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Collections.Generic;
     using System.IO;
     using System.Text.Json;
-    using Jellyfin.Plugin.MetaShark.Core;
+    using Jellyfin.Plugin.MetaShark.Model;
     using Microsoft.Extensions.Logging;
 
-    public sealed class FilePeopleRefreshStateStore : IPeopleRefreshStateStore
+    public sealed class FilePersonImageRefillStateStore : IPersonImageRefillStateStore
     {
         private static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions
         {
@@ -19,25 +19,25 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         };
 
         private static readonly Action<ILogger, string, Exception?> LogStateLoadFailed =
-            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "[MetaShark] 人物刷新状态加载失败，已重置状态. path={Path}.");
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "[MetaShark] 人物缺图回填状态加载失败，已重置状态. path={Path}.");
 
         private readonly object syncRoot = new object();
-        private readonly ILogger<FilePeopleRefreshStateStore> logger;
+        private readonly ILogger<FilePersonImageRefillStateStore> logger;
         private readonly string stateFilePath;
-        private Dictionary<Guid, PeopleRefreshState>? states;
+        private Dictionary<Guid, PersonImageRefillState>? states;
 
-        public FilePeopleRefreshStateStore(string stateFilePath, ILoggerFactory loggerFactory)
+        public FilePersonImageRefillStateStore(string stateFilePath, ILoggerFactory loggerFactory)
         {
             ArgumentNullException.ThrowIfNull(loggerFactory);
             ArgumentException.ThrowIfNullOrWhiteSpace(stateFilePath);
 
             this.stateFilePath = stateFilePath;
-            this.logger = loggerFactory.CreateLogger<FilePeopleRefreshStateStore>();
+            this.logger = loggerFactory.CreateLogger<FilePersonImageRefillStateStore>();
         }
 
-        public PeopleRefreshState? GetState(Guid itemId)
+        public PersonImageRefillState? GetState(Guid personId)
         {
-            if (itemId == Guid.Empty)
+            if (personId == Guid.Empty)
             {
                 return null;
             }
@@ -45,17 +45,17 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             lock (this.syncRoot)
             {
                 this.EnsureLoaded();
-                return this.states != null && this.states.TryGetValue(itemId, out var state)
+                return this.states != null && this.states.TryGetValue(personId, out var state)
                     ? Clone(state)
                     : null;
             }
         }
 
-        public void Save(PeopleRefreshState state)
+        public void Save(PersonImageRefillState state)
         {
             ArgumentNullException.ThrowIfNull(state);
 
-            if (state.ItemId == Guid.Empty)
+            if (state.PersonId == Guid.Empty)
             {
                 return;
             }
@@ -63,14 +63,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             lock (this.syncRoot)
             {
                 this.EnsureLoaded();
-                this.states![state.ItemId] = Clone(state);
+                this.states![state.PersonId] = Clone(state);
                 this.Persist();
             }
         }
 
-        public void Remove(Guid itemId)
+        public void Remove(Guid personId)
         {
-            if (itemId == Guid.Empty)
+            if (personId == Guid.Empty)
             {
                 return;
             }
@@ -78,22 +78,23 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             lock (this.syncRoot)
             {
                 this.EnsureLoaded();
-                if (this.states!.Remove(itemId))
+                if (this.states!.Remove(personId))
                 {
                     this.Persist();
                 }
             }
         }
 
-        private static PeopleRefreshState Clone(PeopleRefreshState state)
+        private static PersonImageRefillState Clone(PersonImageRefillState state)
         {
-            return new PeopleRefreshState
+            return new PersonImageRefillState
             {
-                ItemId = state.ItemId,
-                ItemType = state.ItemType,
-                TmdbId = state.TmdbId,
-                Version = state.Version,
-                AuthoritativePeopleSnapshot = state.AuthoritativePeopleSnapshot?.Clone(),
+                PersonId = state.PersonId,
+                Fingerprint = state.Fingerprint,
+                Status = state.Status,
+                AttemptCount = state.AttemptCount,
+                LastReason = state.LastReason,
+                NextRetryAtUtc = state.NextRetryAtUtc,
                 UpdatedAtUtc = state.UpdatedAtUtc,
             };
         }
@@ -113,32 +114,32 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             if (!File.Exists(this.stateFilePath))
             {
-                this.states = new Dictionary<Guid, PeopleRefreshState>();
+                this.states = new Dictionary<Guid, PersonImageRefillState>();
                 return;
             }
 
             try
             {
                 var json = File.ReadAllText(this.stateFilePath);
-                this.states = JsonSerializer.Deserialize<Dictionary<Guid, PeopleRefreshState>>(json, SerializerOptions)
-                    ?? new Dictionary<Guid, PeopleRefreshState>();
+                this.states = JsonSerializer.Deserialize<Dictionary<Guid, PersonImageRefillState>>(json, SerializerOptions)
+                    ?? new Dictionary<Guid, PersonImageRefillState>();
             }
             catch (IOException ex)
             {
                 LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, PeopleRefreshState>();
+                this.states = new Dictionary<Guid, PersonImageRefillState>();
                 this.Persist();
             }
             catch (UnauthorizedAccessException ex)
             {
                 LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, PeopleRefreshState>();
+                this.states = new Dictionary<Guid, PersonImageRefillState>();
                 this.Persist();
             }
             catch (JsonException ex)
             {
                 LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, PeopleRefreshState>();
+                this.states = new Dictionary<Guid, PersonImageRefillState>();
                 this.Persist();
             }
         }

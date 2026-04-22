@@ -76,6 +76,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 ItemId = candidate.ItemId,
                 ItemPath = candidate.ItemPath,
                 ExpectedPeopleCount = candidate.ExpectedPeopleCount,
+                AuthoritativePeopleSnapshot = candidate.AuthoritativePeopleSnapshot?.Clone(),
                 OverwriteQueued = candidate.OverwriteQueued,
             };
         }

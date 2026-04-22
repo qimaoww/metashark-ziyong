@@ -5,6 +5,7 @@
 namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
+    using Jellyfin.Plugin.MetaShark.Core;
 
     public sealed class MovieSeriesPeopleOverwriteRefreshCandidate
     {
@@ -13,6 +14,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         public string ItemPath { get; set; } = string.Empty;
 
         public int ExpectedPeopleCount { get; set; }
+
+        public TmdbAuthoritativePeopleSnapshot? AuthoritativePeopleSnapshot { get; set; }
 
         public bool OverwriteQueued { get; set; }
     }

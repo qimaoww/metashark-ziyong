@@ -14,7 +14,6 @@ using Moq;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -27,7 +26,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
         public async Task TryApplyAsync_MetadataDownloadMovie_ShouldSaveCurrentStateToStoreWithoutTouchingItemMetadata()
         {
             var stateStore = new TestPeopleRefreshStateStore();
-            var service = CreatePostProcessService(stateStore);
+            var loggerStub = CreateEnabledPostProcessLogger();
+            var service = CreatePostProcessService(stateStore: stateStore, logger: loggerStub.Object);
             var movie = CreateMovie(includeTmdb: true);
 
             await service.TryApplyAsync(
@@ -51,6 +51,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(0, movie.UpdateToRepositoryCallCount);
             Assert.IsNull(movie.LastUpdateReason);
             Assert.IsFalse(movie.ProviderIds?.ContainsKey("MetaSharkPeopleRefreshState") ?? false);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ItemId"] = movie.Id,
+                    ["Trigger"] = MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                    ["ItemPath"] = movie.Path,
+                    ["UpdateReason"] = ItemUpdateType.MetadataDownload,
+                    ["StateVersion"] = PeopleRefreshState.CurrentVersion,
+                },
+                originalFormatContains: "[MetaShark] 已结清影视人物刷新状态",
+                messageContains: ["[MetaShark] 已结清影视人物刷新状态", $"itemId={movie.Id}", "trigger=ItemUpdated"]);
         }
 
         [TestMethod]
@@ -76,10 +90,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task TryApplyAsync_UnsupportedType_ShouldSkipWithoutPersisting()
+        public async Task TryApplyAsync_UnsupportedEpisode_ShouldSkipWithoutPersistingWithoutInformationNoise()
         {
             var stateStore = new TestPeopleRefreshStateStore();
-            var service = CreatePostProcessService(stateStore);
+            var loggerStub = CreateEnabledPostProcessLogger();
+            var service = CreatePostProcessService(stateStore: stateStore, logger: loggerStub.Object);
             var episode = CreateEpisode(includeTmdb: true);
 
             await service.TryApplyAsync(
@@ -95,6 +110,61 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(0, episode.UpdateToRepositoryCallCount);
             Assert.AreEqual(0, stateStore.SaveCallCount);
             Assert.IsNull(stateStore.GetState(episode.Id));
+            AssertNoInformationLogNoise(loggerStub, "Episode unsupported item");
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Reason"] = "UnsupportedItemType",
+                    ["Trigger"] = MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                    ["ItemId"] = episode.Id,
+                    ["ItemPath"] = episode.Path,
+                    ["UpdateReason"] = ItemUpdateType.MetadataImport,
+                    ["Detail"] = nameof(TrackingEpisode),
+                },
+                originalFormatContains: "[MetaShark] 跳过影视人物刷新状态结清",
+                messageContains: ["reason=UnsupportedItemType", $"itemId={episode.Id}"]);
+        }
+
+        [TestMethod]
+        public async Task TryApplyAsync_UnsupportedSeason_ShouldSkipWithoutPersistingWithoutInformationNoise()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var loggerStub = CreateEnabledPostProcessLogger();
+            var service = CreatePostProcessService(stateStore: stateStore, logger: loggerStub.Object);
+            var season = CreateSeason(includeTmdb: true);
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = season,
+                    UpdateReason = ItemUpdateType.MetadataImport,
+                },
+                MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, season.MetadataChangedCallCount);
+            Assert.AreEqual(0, season.UpdateToRepositoryCallCount);
+            Assert.AreEqual(0, stateStore.SaveCallCount);
+            Assert.IsNull(stateStore.GetState(season.Id));
+            AssertNoInformationLogNoise(loggerStub, "Season unsupported item");
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Debug,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Reason"] = "UnsupportedItemType",
+                    ["Trigger"] = MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                    ["ItemId"] = season.Id,
+                    ["ItemPath"] = season.Path,
+                    ["UpdateReason"] = ItemUpdateType.MetadataImport,
+                    ["Detail"] = nameof(TrackingSeason),
+                },
+                originalFormatContains: "[MetaShark] 跳过影视人物刷新状态结清",
+                messageContains: ["reason=UnsupportedItemType", $"itemId={season.Id}"]);
         }
 
         [TestMethod]
@@ -230,12 +300,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var candidateStore = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
             var service = CreatePostProcessService(stateStore, providerManagerStub.Object, candidateStore);
             var series = CreateSeries(includeTmdb: true);
-            series.SetSimulatedPeopleCount(2);
             candidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
             {
                 ItemId = series.Id,
                 ItemPath = series.Path,
-                ExpectedPeopleCount = 2,
+                ExpectedPeopleCount = 0,
+                AuthoritativePeopleSnapshot = TmdbAuthoritativePeopleSnapshot.Create(nameof(Series), "123456", Array.Empty<PersonInfo>()),
                 OverwriteQueued = true,
             });
 
@@ -457,14 +527,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 messageContains: ["[MetaShark] 影视人物刷新状态后处理失败", "trigger=ItemUpdated", $"itemId={series.Id}", $"itemPath={series.Path}"]);
         }
 
-        private static MovieSeriesPeopleRefreshStatePostProcessService CreatePostProcessService(IPeopleRefreshStateStore? stateStore = null, IProviderManager? providerManager = null, IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore = null)
+        private static MovieSeriesPeopleRefreshStatePostProcessService CreatePostProcessService(IPeopleRefreshStateStore? stateStore = null, IProviderManager? providerManager = null, IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore = null, ILogger<MovieSeriesPeopleRefreshStatePostProcessService>? logger = null)
         {
             return new MovieSeriesPeopleRefreshStatePostProcessService(
-                new Mock<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>>().Object,
+                logger ?? new Mock<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>>().Object,
                 stateStore ?? new TestPeopleRefreshStateStore(),
                 providerManager,
                 overwriteRefreshCandidateStore,
                 new Mock<IFileSystem>().Object);
+        }
+
+        private static Mock<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>> CreateEnabledPostProcessLogger()
+        {
+            var loggerStub = new Mock<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            return loggerStub;
         }
 
         private static TrackingMovie CreateMovie(bool includeTmdb)
@@ -504,6 +581,36 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             ConfigureProviderIds(episode, includeTmdb);
             return episode;
+        }
+
+        private static TrackingSeason CreateSeason(bool includeTmdb)
+        {
+            var season = new TrackingSeason
+            {
+                Id = Guid.NewGuid(),
+                Name = "Season 1",
+                Path = "/library/tv/series-a/Season 01",
+            };
+
+            ConfigureProviderIds(season, includeTmdb);
+            return season;
+        }
+
+        private static void AssertNoInformationLogNoise(Mock<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>> loggerStub, string scenario)
+        {
+            var infoLogCount = 0;
+            foreach (var invocation in loggerStub.Invocations)
+            {
+                if (string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal)
+                    && invocation.Arguments.Count == 5
+                    && invocation.Arguments[0] is LogLevel level
+                    && level == LogLevel.Information)
+                {
+                    infoLogCount++;
+                }
+            }
+
+            Assert.AreEqual(0, infoLogCount, $"{scenario} 不应产生 Info 级别日志噪声。 ");
         }
 
         private static void ConfigureProviderIds(MediaBrowser.Controller.Entities.BaseItem item, bool includeTmdb)
@@ -597,6 +704,25 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         private sealed class TrackingEpisode : Episode
+        {
+            public int MetadataChangedCallCount { get; private set; }
+
+            public int UpdateToRepositoryCallCount { get; private set; }
+
+            public override ItemUpdateType OnMetadataChanged()
+            {
+                this.MetadataChangedCallCount++;
+                return ItemUpdateType.MetadataEdit;
+            }
+
+            public override Task UpdateToRepositoryAsync(ItemUpdateType updateReason, CancellationToken cancellationToken)
+            {
+                this.UpdateToRepositoryCallCount++;
+                return Task.CompletedTask;
+            }
+        }
+
+        private sealed class TrackingSeason : Season
         {
             public int MetadataChangedCallCount { get; private set; }
 

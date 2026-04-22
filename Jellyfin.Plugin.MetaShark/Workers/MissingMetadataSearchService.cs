@@ -187,7 +187,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return MissingMetadataCandidateReason.DefaultEpisodeTitle;
             }
 
-            if (PeopleRefreshState.RequiresBackfill(item, peopleRefreshState))
+            if (PeopleRefreshState.IsInScope(item)
+                && !PeopleRefreshState.HasCurrentState(item, peopleRefreshState))
             {
                 return MissingMetadataCandidateReason.MissingPeopleRefreshState;
             }

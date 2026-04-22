@@ -2,14 +2,17 @@ using System.Reflection;
 using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
+using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Providers;
 using MediaBrowser.Model.Serialization;
@@ -72,6 +75,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(currentMovie.Id, candidate!.ItemId);
             Assert.AreEqual(info.Path, candidate.ItemPath);
             Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount, "candidate 应记录 provider 实际产出的期望 people 数。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
         }
 
         [TestMethod]
@@ -175,6 +179,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(currentMovie.Id, candidate!.ItemId);
             Assert.AreEqual(info.Path, candidate.ItemPath);
             Assert.AreEqual(result.People.Count, candidate.ExpectedPeopleCount, "candidate 应记录 Douban 主分支实际接受的 TMDb people 数，而不是原始 credits 数。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
         }
 
         [TestMethod]
@@ -213,7 +218,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldNotSaveCandidate_ForManualMatchRequest()
+        public async Task GetMetadata_ShouldSaveCandidate_ForManualMatchRequest()
         {
             EnsurePluginInstance();
 
@@ -244,7 +249,60 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
-            Assert.IsNull(store.Peek(currentMovie.Id), "手动匹配 /Items/RemoteSearch/Apply 不应创建单项 overwrite candidate。 ");
+            var candidate = store.Peek(currentMovie.Id);
+            Assert.IsNotNull(candidate, "手动匹配 /Items/RemoteSearch/Apply 命中 TMDb provider 时，也应创建单项 overwrite candidate。 ");
+            Assert.AreEqual(currentMovie.Id, candidate!.ItemId);
+            Assert.AreEqual(info.Path, candidate.ItemPath);
+            Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount);
+            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldSaveEmptyAuthoritativeCandidate_WhenTmdbPeopleIsEmptyButCurrentMovieStillHasPeople()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateMovieInfo();
+            info.IsAutomated = false;
+            var currentMovie = new AuthoritativeTrackingMovie
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+            currentMovie.SetProviderId(MetadataProvider.Tmdb, "123");
+            currentMovie.SetSimulatedPeople(new[]
+            {
+                CreateCurrentPerson("旧演员甲", "角色甲", PersonKind.Actor),
+                CreateCurrentPerson("旧导演甲", "Director", PersonKind.Director),
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, false))
+                .Returns(currentMovie);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = null },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual(0, result.People?.Count ?? 0, "测试前提：TMDb authoritative 应为空。 ");
+            var candidate = store.Peek(currentMovie.Id);
+            Assert.IsNotNull(candidate, "TMDb authoritative 为空但当前电影仍有旧 people 时，也应保存待清理 candidate。 ");
+            Assert.AreEqual(currentMovie.Id, candidate!.ItemId);
+            Assert.AreEqual(info.Path, candidate.ItemPath);
+            Assert.AreEqual(0, candidate.ExpectedPeopleCount, "空 authoritative candidate 仍应保留 0 的期望人数，兼容当前消费方。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", Array.Empty<PersonInfo>());
+            Assert.IsFalse(CurrentItemAuthoritativePeopleChecker.IsAuthoritativeEmpty(currentMovie, candidate.AuthoritativePeopleSnapshot), "当前条目仍残留旧人物时，空 authoritative 快照不应被误判成 authoritative empty。 ");
         }
 
         [TestMethod]
@@ -280,6 +338,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(currentMovieId, candidate!.ItemId);
             Assert.AreEqual(info.Path, candidate.ItemPath);
             Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount, "路径回退命中时也应保留 provider 实际产出的期望 people 数。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
         }
 
         [TestMethod]
@@ -381,6 +440,26 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return new HttpContextAccessor
             {
                 HttpContext = context,
+            };
+        }
+
+        private static void AssertAuthoritativeSnapshot(MovieSeriesPeopleOverwriteRefreshCandidate candidate, string itemType, string tmdbId, IEnumerable<PersonInfo>? people)
+        {
+            Assert.IsNotNull(candidate.AuthoritativePeopleSnapshot, "candidate 应携带 authoritative people 快照。 ");
+            Assert.AreEqual(itemType, candidate.AuthoritativePeopleSnapshot!.ItemType);
+            Assert.AreEqual(tmdbId, candidate.AuthoritativePeopleSnapshot.TmdbId);
+            Assert.IsTrue(
+                candidate.AuthoritativePeopleSnapshot.SetEquals(TmdbAuthoritativePeopleSnapshot.Create(itemType, tmdbId, people ?? Array.Empty<PersonInfo>())),
+                "candidate authoritative 快照应与 provider 最终产出的 TMDb people 指纹一致。 ");
+        }
+
+        private static PersonInfo CreateCurrentPerson(string name, string role, PersonKind type)
+        {
+            return new PersonInfo
+            {
+                Name = name,
+                Role = role,
+                Type = type,
             };
         }
 

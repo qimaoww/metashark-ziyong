@@ -5,7 +5,6 @@
 namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
-    using System.Collections;
     using System.Collections.Generic;
     using System.IO;
     using System.Text.RegularExpressions;
@@ -86,11 +85,18 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             if (item is not Movie and not Series)
             {
-                this.LogSkip("UnsupportedItemType", triggerName, item, e.UpdateReason, item.GetType().Name);
+                this.LogSkip(
+                    "UnsupportedItemType",
+                    triggerName,
+                    item,
+                    e.UpdateReason,
+                    item.GetType().Name,
+                    item is Season or Episode ? LogLevel.Debug : LogLevel.Information);
                 return;
             }
 
-            if (this.TryQueueSearchMissingMetadataOverwriteRefresh(item, triggerName, e.UpdateReason))
+            var currentState = this.stateStore.GetState(item.Id);
+            if (this.TryQueueSearchMissingMetadataOverwriteRefresh(item, triggerName, e.UpdateReason, out var authoritativePeopleSnapshot))
             {
                 return;
             }
@@ -103,7 +109,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             var legacyResidueRemoved = RemoveLegacyPeopleRefreshStateProviderId(item);
 
-            if (PeopleRefreshState.HasCurrentState(item, this.stateStore.GetState(item.Id)))
+            if (authoritativePeopleSnapshot == null && PeopleRefreshState.HasCurrentState(item, currentState))
             {
                 await this.PersistLegacyResidueCleanupAsync(item, triggerName, e.UpdateReason, legacyResidueRemoved, cancellationToken).ConfigureAwait(false);
                 var legacyNfoResidueRemoved = this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
@@ -117,7 +123,25 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            if (!PeopleRefreshState.TryCreateCurrent(item, out var nextState) || nextState == null)
+            if (authoritativePeopleSnapshot == null
+                && currentState?.AuthoritativePeopleSnapshot != null
+                && PeopleRefreshState.GetCurrentAuthoritativePeopleStatus(item, currentState) == CurrentItemAuthoritativePeopleStatus.NonAuthoritative)
+            {
+                this.LogSkip("CurrentItemNotAuthoritative", triggerName, item, e.UpdateReason, PeopleRefreshState.CurrentVersion);
+                return;
+            }
+
+            var settlementAuthoritativePeopleSnapshot = authoritativePeopleSnapshot;
+            if (settlementAuthoritativePeopleSnapshot == null
+                && (!TmdbAuthoritativePeopleSnapshot.TryCreateFromCurrentItem(item, out settlementAuthoritativePeopleSnapshot)
+                    || settlementAuthoritativePeopleSnapshot == null))
+            {
+                this.LogSkip("StateSnapshotRejected", triggerName, item, e.UpdateReason, null);
+                return;
+            }
+
+            var nextStateCreated = PeopleRefreshState.TryCreateCurrent(item, settlementAuthoritativePeopleSnapshot, out var nextState);
+            if (!nextStateCreated || nextState == null)
             {
                 this.LogSkip("StateSnapshotRejected", triggerName, item, e.UpdateReason, null);
                 return;
@@ -227,41 +251,6 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             yield return Path.Combine(directory, "movie.nfo");
         }
 
-        private static int GetCurrentPeopleCount(BaseItem item)
-        {
-            var currentType = item.GetType();
-            while (currentType != null)
-            {
-                var getPeopleMethod = currentType.GetMethod("GetPeople", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic, null, Type.EmptyTypes, null);
-                if (getPeopleMethod?.Invoke(item, null) is IEnumerable peopleFromMethod)
-                {
-                    return CountEnumerable(peopleFromMethod);
-                }
-
-                var peopleProperty = currentType.GetProperty("People", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                if (peopleProperty?.GetValue(item) is IEnumerable peopleFromProperty)
-                {
-                    return CountEnumerable(peopleFromProperty);
-                }
-
-                currentType = currentType.BaseType;
-            }
-
-            return 0;
-        }
-
-        private static int CountEnumerable(IEnumerable values)
-        {
-            var count = 0;
-            foreach (var value in values)
-            {
-                _ = value;
-                count++;
-            }
-
-            return count;
-        }
-
         private static bool TryRemoveLegacyPeopleRefreshStateTagFromNfo(string path)
         {
             if (!File.Exists(path))
@@ -363,8 +352,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         }
 #pragma warning restore CA1848
 
-        private bool TryQueueSearchMissingMetadataOverwriteRefresh(BaseItem item, string triggerName, ItemUpdateType updateReason)
+        private bool TryQueueSearchMissingMetadataOverwriteRefresh(BaseItem item, string triggerName, ItemUpdateType updateReason, out TmdbAuthoritativePeopleSnapshot? authoritativePeopleSnapshot)
         {
+            authoritativePeopleSnapshot = null;
+
             if (!updateReason.HasFlag(ItemUpdateType.MetadataDownload)
                 || this.providerManager == null
                 || this.overwriteRefreshCandidateStore == null
@@ -379,9 +370,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return false;
             }
 
-            var currentPeopleCount = GetCurrentPeopleCount(item);
-            if (currentPeopleCount >= candidate.ExpectedPeopleCount)
+            var currentAuthoritativeStatus = CurrentItemAuthoritativePeopleChecker.Check(item, candidate.AuthoritativePeopleSnapshot);
+            if (currentAuthoritativeStatus != CurrentItemAuthoritativePeopleStatus.NonAuthoritative)
             {
+                authoritativePeopleSnapshot = candidate.AuthoritativePeopleSnapshot?.Clone();
                 return false;
             }
 
@@ -416,11 +408,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         }
 
 #pragma warning disable CA1848
-        private void LogSkip(string reason, string triggerName, BaseItem item, ItemUpdateType updateReason, string? detail)
+        private void LogSkip(string reason, string triggerName, BaseItem item, ItemUpdateType updateReason, string? detail, LogLevel level = LogLevel.Information)
         {
             if (string.IsNullOrWhiteSpace(detail))
             {
-                this.logger.LogInformation(
+                this.logger.Log(
+                    level,
                     "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
                     reason,
                     triggerName,
@@ -430,7 +423,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            this.logger.LogInformation(
+            this.logger.Log(
+                level,
                 "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
                 reason,
                 triggerName,
