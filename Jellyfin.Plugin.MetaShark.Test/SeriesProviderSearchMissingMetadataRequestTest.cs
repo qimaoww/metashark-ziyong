@@ -141,10 +141,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     CreateCrewCredit(5299, "Ignored Crew", "Art", "Art Direction"),
                 });
             SeedTmdbSeries(tmdbApi, 456, "zh-CN", seededSeries);
-            SeedTmdbPerson(tmdbApi, 5101, "剧集演员大陆名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 5101, "剧集演员中文名", language: "zh-CN");
             SeedTmdbPerson(tmdbApi, 5102, string.Empty, language: "zh-CN");
             SeedTmdbPersonTranslations(tmdbApi, 5102);
-            SeedTmdbPerson(tmdbApi, 5201, "剧集导演大陆名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 5201, "剧集导演中文名", language: "zh-CN");
             var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
             var info = new SeriesInfo
             {
@@ -183,11 +183,89 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
-            Assert.AreEqual(2, result.People?.Count ?? 0, "candidate 计数应基于实际接受的 TMDb people，而不是 Douban celebrities 或未通过 strict helper 的原始 credits。 ");
+            Assert.AreEqual(1, result.People?.Count ?? 0, "candidate 计数应基于实际接受的剧集演员，而不是混入的 crew。 ");
             var candidate = store.Peek(currentSeries.Id);
             Assert.IsNotNull(candidate, "Douban 元数据分支在 user refresh 下补回 TMDb people 时，也应保存一次性 overwrite candidate。 ");
-            Assert.AreEqual(2, candidate!.ExpectedPeopleCount);
+            Assert.AreEqual(1, candidate!.ExpectedPeopleCount);
             Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount, "candidate 应记录 Douban 分支最终实际接受的 TMDb people 数。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", result.People);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldUseAggregateCastCount_WhenSeriesAggregateCreditsDifferFromCredits()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var seededSeries = new TvShow
+            {
+                Id = 456,
+                Name = "示例剧集",
+                OriginalName = "Sample Series",
+                Overview = "TMDb seeded series overview",
+                FirstAirDate = new DateTime(2024, 1, 1),
+                VoteAverage = 8.8,
+                EpisodeRunTime = new List<int>(),
+                ContentRatings = new ResultContainer
+                {
+                    Results = new List<ContentRating>(),
+                },
+            };
+            SetTmdbSeriesCredits(
+                seededSeries,
+                new[]
+                {
+                    CreateCastCredit(5101, "Raw Actor Accepted", "角色A", 0),
+                },
+                new[]
+                {
+                    CreateCrewCredit(5201, "Raw Director Accepted", "Production", "Director"),
+                });
+            SetTmdbSeriesAggregateCredits(
+                seededSeries,
+                new[]
+                {
+                    CreateAggregateCastCredit(5101, "Raw Actor Accepted", "角色A", 0, 11),
+                    CreateAggregateCastCredit(5102, "Second Aggregate Actor", "角色B", 1, 6),
+                    CreateAggregateCastCredit(5103, "Third Aggregate Actor", "角色C", 2, 4),
+                },
+                Array.Empty<Dictionary<string, object?>>());
+            SeedTmdbSeries(tmdbApi, 456, "zh-CN", seededSeries);
+            SeedTmdbPerson(tmdbApi, 5101, "剧集演员大陆名 A", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 5102, "剧集演员大陆名 B", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 5103, "剧集演员大陆名 C", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 5201, "剧集导演大陆名", language: "zh-CN");
+
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateSeriesInfo();
+            info.IsAutomated = false;
+            var currentSeries = new Series
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, true))
+                .Returns(currentSeries);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = null },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual(3, result.People?.Count ?? 0, "当 aggregate cast 与 credits 不一致时，应按 aggregate cast 计数。 ");
+            CollectionAssert.AreEqual(new[] { 5101, 5102, 5103 }, result.People!.Select(GetTmdbId).ToArray());
+            var candidate = store.Peek(currentSeries.Id);
+            Assert.IsNotNull(candidate);
+            Assert.AreEqual(3, candidate!.ExpectedPeopleCount, "overwrite candidate 应记录 aggregate cast 的最终演员数。 ");
             AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", result.People);
         }
 
@@ -361,6 +439,100 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(currentSeries.Path, candidate.ItemPath);
         }
 
+        [TestMethod]
+        public async Task GetMetadata_ShouldRearmQueuedCandidate_WhenExplicitRefreshRequestWithoutReplaceAllMetadata()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 456, "zh-CN", "示例剧集");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateSeriesInfo();
+            info.IsAutomated = false;
+            var currentSeries = new Series
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            store.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = currentSeries.Id,
+                ItemPath = currentSeries.Path,
+                ExpectedPeopleCount = 17,
+                OverwriteQueued = true,
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, true))
+                .Returns(currentSeries);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentSeries.Id, replaceAllMetadata: false) },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            var candidate = store.Peek(currentSeries.Id);
+            Assert.IsNotNull(candidate, "显式用户 refresh 且 ReplaceAllMetadata=false 时，应允许重新武装已锁死的 queued candidate。 ");
+            Assert.AreEqual(result.People?.Count ?? 0, candidate!.ExpectedPeopleCount, "重新武装后的 candidate 应反映本次 provider 实际产出的 people 数。 ");
+            Assert.IsFalse(candidate.OverwriteQueued, "显式用户 refresh 重新武装时，应把 queued candidate 还原成未排队状态，交给 post-process 再次决定是否 queue。 ");
+            AssertAuthoritativeSnapshot(candidate, nameof(Series), "456", result.People);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldKeepQueuedCandidate_WhenExplicitRefreshRequestUsesReplaceAllMetadata()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 456, "zh-CN", "示例剧集");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateSeriesInfo();
+            info.IsAutomated = false;
+            var currentSeries = new Series
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            store.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = currentSeries.Id,
+                ItemPath = currentSeries.Path,
+                ExpectedPeopleCount = 17,
+                OverwriteQueued = true,
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, true))
+                .Returns(currentSeries);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentSeries.Id, replaceAllMetadata: true) },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            var candidate = store.Peek(currentSeries.Id);
+            Assert.IsNotNull(candidate, "ReplaceAllMetadata=true 的 overwrite refresh 不应打破现有 queued candidate 幂等性。 ");
+            Assert.AreEqual(17, candidate!.ExpectedPeopleCount, "overwrite refresh 不应被新的未排队 candidate 覆盖。 ");
+            Assert.IsTrue(candidate.OverwriteQueued, "ReplaceAllMetadata=true 时，queued candidate 仍应保持已排队状态。 ");
+            Assert.AreEqual(currentSeries.Path, candidate.ItemPath);
+        }
+
         private static SeriesProvider CreateProvider(
             ILibraryManager libraryManager,
             IHttpContextAccessor httpContextAccessor,
@@ -404,6 +576,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 HttpContext = context,
             };
+        }
+
+        private static DefaultHttpContext CreateRefreshRequestContext(Guid itemId, bool replaceAllMetadata)
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/{itemId:N}/Refresh";
+            context.Request.QueryString = new QueryString($"?ReplaceAllMetadata={replaceAllMetadata.ToString().ToLowerInvariant()}");
+            return context;
         }
 
         private static void AssertAuthoritativeSnapshot(MovieSeriesPeopleOverwriteRefreshCandidate candidate, string itemType, string tmdbId, IEnumerable<PersonInfo>? people)
@@ -483,6 +664,22 @@ namespace Jellyfin.Plugin.MetaShark.Test
             creditsProperty.SetValue(series, credits);
         }
 
+        private static void SetTmdbSeriesAggregateCredits(
+            TvShow series,
+            IEnumerable<Dictionary<string, object?>> castEntries,
+            IEnumerable<Dictionary<string, object?>> crewEntries)
+        {
+            var creditsProperty = typeof(TvShow).GetProperty("AggregateCredits");
+            Assert.IsNotNull(creditsProperty, "TMDb tv AggregateCredits 属性未定义");
+
+            var credits = Activator.CreateInstance(creditsProperty!.PropertyType);
+            Assert.IsNotNull(credits, "无法创建 TMDb tv AggregateCredits 实例");
+
+            SetTmdbCreditList(credits!, "Cast", castEntries);
+            SetTmdbCreditList(credits!, "Crew", crewEntries);
+            creditsProperty.SetValue(series, credits);
+        }
+
         private static void SetTmdbCreditList(object credits, string propertyName, IEnumerable<Dictionary<string, object?>> entries)
         {
             var listProperty = credits.GetType().GetProperty(propertyName);
@@ -531,6 +728,47 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 ["Department"] = department,
                 ["Job"] = job,
             };
+        }
+
+        private static int GetTmdbId(PersonInfo person)
+        {
+            Assert.IsNotNull(person.ProviderIds, "人物缺少 provider ids。 ");
+            Assert.IsTrue(person.ProviderIds!.TryGetValue(MetadataProvider.Tmdb.ToString(), out var providerId), "人物缺少 TMDb provider id。 ");
+            Assert.IsTrue(int.TryParse(providerId, out var tmdbId), $"人物 TMDb provider id 无法解析为整数: {providerId}");
+            return tmdbId;
+        }
+
+        private static Dictionary<string, object?> CreateAggregateCastCredit(int id, string name, string character, int order, int totalEpisodeCount)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["Id"] = id,
+                ["Name"] = name,
+                ["Order"] = order,
+                ["TotalEpisodeCount"] = totalEpisodeCount,
+                ["Roles"] = CreateAggregateCastRoles((character, totalEpisodeCount)),
+            };
+        }
+
+        private static IList CreateAggregateCastRoles(params (string Character, int EpisodeCount)[] roles)
+        {
+            var roleType = typeof(TvShow).Assembly.GetType("TMDbLib.Objects.TvShows.CastRole");
+            Assert.IsNotNull(roleType, "TMDb CastRole 类型未定义");
+
+            var listType = typeof(List<>).MakeGenericType(roleType!);
+            var list = Activator.CreateInstance(listType) as IList;
+            Assert.IsNotNull(list, "无法创建 TMDb CastRole 列表实例");
+
+            foreach (var roleData in roles)
+            {
+                var role = Activator.CreateInstance(roleType!);
+                Assert.IsNotNull(role, "无法创建 TMDb CastRole 实例");
+                roleType!.GetProperty("Character")!.SetValue(role, roleData.Character);
+                roleType!.GetProperty("EpisodeCount")!.SetValue(role, roleData.EpisodeCount);
+                list!.Add(role);
+            }
+
+            return list!;
         }
 
         private static void SeedTmdbPerson(TmdbApi tmdbApi, int tmdbId, string? name, string? language = null, string? countryCode = null)

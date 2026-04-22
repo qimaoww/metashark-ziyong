@@ -101,9 +101,8 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return false;
             }
 
-            if (authoritativePeopleSnapshot != null
-                && (!string.Equals(authoritativePeopleSnapshot.ItemType, itemType, StringComparison.Ordinal)
-                    || !string.Equals(authoritativePeopleSnapshot.TmdbId, tmdbId, StringComparison.Ordinal)))
+            if (!string.Equals(authoritativePeopleSnapshot.ItemType, itemType, StringComparison.Ordinal)
+                || !string.Equals(authoritativePeopleSnapshot.TmdbId, tmdbId, StringComparison.Ordinal))
             {
                 state = null;
                 return false;
@@ -115,7 +114,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 ItemType = itemType,
                 TmdbId = tmdbId,
                 Version = CurrentVersion,
-                AuthoritativePeopleSnapshot = authoritativePeopleSnapshot?.Clone(),
+                AuthoritativePeopleSnapshot = authoritativePeopleSnapshot.Clone(),
                 UpdatedAtUtc = DateTimeOffset.UtcNow,
             };
             return true;

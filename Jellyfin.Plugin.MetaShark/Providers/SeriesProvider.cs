@@ -255,6 +255,41 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 && Guid.TryParse(segments[1], out itemId);
         }
 
+        private static bool IsExplicitRefreshRequestWithoutReplaceAllMetadata(HttpContext? httpContext, Guid expectedItemId)
+        {
+            if (httpContext == null
+                || expectedItemId == Guid.Empty
+                || !HttpMethods.IsPost(httpContext.Request.Method))
+            {
+                return false;
+            }
+
+            var path = httpContext.Request.Path.Value;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length < 3
+                || !string.Equals(segments[0], "Items", StringComparison.OrdinalIgnoreCase)
+                || !Guid.TryParse(segments[1], out var requestItemId)
+                || requestItemId != expectedItemId
+                || !string.Equals(segments[2], "Refresh", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (httpContext.Request.Query.TryGetValue("ReplaceAllMetadata", out var replaceAllMetadataValues)
+                && bool.TryParse(replaceAllMetadataValues.ToString(), out var replaceAllMetadata)
+                && replaceAllMetadata)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
         private static string FormatProviderIdForLog(string? providerId)
         {
             if (providerId == null)
@@ -415,7 +450,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var semantic = this.ResolveMetadataSemantic(info);
-            if (!this.SupportsSearchMissingMetadataOverwriteCandidate(semantic))
+            if (!SupportsSearchMissingMetadataOverwriteCandidate(semantic))
             {
                 return;
             }
@@ -423,9 +458,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var series = !string.IsNullOrWhiteSpace(info.Path)
                 ? this.LibraryManager.FindByPath(info.Path, true) as Series
                 : null;
-            var authoritativePeopleSnapshot = this.CreateTmdbAuthoritativePeopleSnapshot(nameof(Series), tmdbId, authoritativePeople);
+            var authoritativePeopleSnapshot = CreateTmdbAuthoritativePeopleSnapshot(nameof(Series), tmdbId, authoritativePeople);
             if (authoritativePeopleSnapshot == null
-                || !this.RequiresSearchMissingMetadataOverwriteCandidate(series, authoritativePeopleSnapshot))
+                || !RequiresSearchMissingMetadataOverwriteCandidate(series, authoritativePeopleSnapshot))
             {
                 return;
             }
@@ -438,7 +473,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var existingCandidate = this.movieSeriesPeopleOverwriteRefreshCandidateStore.Peek(itemId);
-            if (existingCandidate?.OverwriteQueued == true)
+            if (existingCandidate?.OverwriteQueued == true
+                && !IsExplicitRefreshRequestWithoutReplaceAllMetadata(httpContext, itemId))
             {
                 return;
             }
@@ -607,6 +643,48 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             var persons = new List<PersonInfo>();
 
+            if (seriesResult.AggregateCredits?.Cast != null && seriesResult.AggregateCredits.Cast.Count > 0)
+            {
+                var acceptedActorCount = 0;
+
+                foreach (var actor in seriesResult.AggregateCredits.Cast)
+                {
+                    if (acceptedActorCount >= Configuration.PluginConfiguration.MAXCASTMEMBERS)
+                    {
+                        break;
+                    }
+
+                    var localizedName = await this.ResolveSimplifiedChineseOnlyItemPersonNameAsync(actor.Name, actor.Id, cancellationToken).ConfigureAwait(false);
+                    if (localizedName == null)
+                    {
+                        continue;
+                    }
+
+                    var personInfo = new PersonInfo
+                    {
+                        Name = localizedName,
+                        Role = actor.Roles?.FirstOrDefault(role => !string.IsNullOrWhiteSpace(role.Character))?.Character,
+                        Type = PersonKind.Actor,
+                        SortOrder = acceptedActorCount,
+                    };
+
+                    if (!string.IsNullOrWhiteSpace(actor.ProfilePath))
+                    {
+                        personInfo.ImageUrl = this.TmdbApi.GetProfileUrl(actor.ProfilePath)?.ToString();
+                    }
+
+                    if (actor.Id > 0)
+                    {
+                        personInfo.SetProviderId(MetadataProvider.Tmdb, actor.Id.ToString(CultureInfo.InvariantCulture));
+                    }
+
+                    persons.Add(personInfo);
+                    acceptedActorCount++;
+                }
+
+                return persons;
+            }
+
             // 演员
             if (seriesResult.Credits?.Cast != null)
             {
@@ -645,54 +723,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                     persons.Add(personInfo);
                     acceptedActorCount++;
-                }
-            }
-
-            // 导演
-            if (seriesResult.Credits?.Crew != null)
-            {
-                var keepTypes = new[]
-                {
-                    PersonType.Director,
-                    PersonType.Writer,
-                    PersonType.Producer,
-                };
-
-                foreach (var person in seriesResult.Credits.Crew)
-                {
-                    // Normalize this
-                    var type = MapCrewToPersonType(person);
-
-                    if (!keepTypes.Contains(type, StringComparer.OrdinalIgnoreCase)
-                        && !keepTypes.Contains(person.Job ?? string.Empty, StringComparer.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    var localizedName = await this.ResolveSimplifiedChineseOnlyItemPersonNameAsync(person.Name, person.Id, cancellationToken).ConfigureAwait(false);
-                    if (localizedName == null)
-                    {
-                        continue;
-                    }
-
-                    var personInfo = new PersonInfo
-                    {
-                        Name = localizedName,
-                        Role = person.Job,
-                        Type = type == PersonType.Director ? PersonKind.Director : (type == PersonType.Producer ? PersonKind.Producer : PersonKind.Actor),
-                    };
-
-                    if (!string.IsNullOrWhiteSpace(person.ProfilePath))
-                    {
-                        personInfo.ImageUrl = this.TmdbApi.GetPosterUrl(person.ProfilePath)?.ToString();
-                    }
-
-                    if (person.Id > 0)
-                    {
-                        personInfo.SetProviderId(MetadataProvider.Tmdb, person.Id.ToString(CultureInfo.InvariantCulture));
-                    }
-
-                    persons.Add(personInfo);
                 }
             }
 

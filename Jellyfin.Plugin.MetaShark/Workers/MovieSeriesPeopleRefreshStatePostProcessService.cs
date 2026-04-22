@@ -379,6 +379,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             if (candidate.OverwriteQueued)
             {
+                this.LogSkip(
+                    "QueuedOverwriteStillNonAuthoritative",
+                    triggerName,
+                    item,
+                    updateReason,
+                    $"expectedPeopleCount={candidate.ExpectedPeopleCount}");
                 this.overwriteRefreshCandidateStore.Save(candidate);
                 return true;
             }

@@ -16,6 +16,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System.Threading;
     using System.Threading.Tasks;
     using System.Web;
+    using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Configuration;
     using Jellyfin.Plugin.MetaShark.Core;
@@ -461,12 +462,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return info.IsAutomated ? DefaultScraperSemantic.AutomaticRefresh : DefaultScraperSemantic.UserRefresh;
         }
 
-        protected bool SupportsSearchMissingMetadataOverwriteCandidate(DefaultScraperSemantic semantic)
+#pragma warning disable SA1204
+        protected static bool SupportsSearchMissingMetadataOverwriteCandidate(DefaultScraperSemantic semantic)
         {
             return semantic is DefaultScraperSemantic.UserRefresh or DefaultScraperSemantic.ManualMatch;
         }
 
-        protected TmdbAuthoritativePeopleSnapshot? CreateTmdbAuthoritativePeopleSnapshot(string itemType, string? tmdbId, IEnumerable<PersonInfo>? people)
+        protected static TmdbAuthoritativePeopleSnapshot? CreateTmdbAuthoritativePeopleSnapshot(string itemType, string? tmdbId, IEnumerable<PersonInfo>? people)
         {
             if (string.IsNullOrWhiteSpace(tmdbId))
             {
@@ -476,13 +478,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return TmdbAuthoritativePeopleSnapshot.Create(itemType, tmdbId, people ?? Array.Empty<PersonInfo>());
         }
 
-        protected bool RequiresSearchMissingMetadataOverwriteCandidate(BaseItem? currentItem, TmdbAuthoritativePeopleSnapshot authoritativePeopleSnapshot)
+        protected static bool RequiresSearchMissingMetadataOverwriteCandidate(BaseItem? currentItem, TmdbAuthoritativePeopleSnapshot authoritativePeopleSnapshot)
         {
             ArgumentNullException.ThrowIfNull(authoritativePeopleSnapshot);
 
             return !authoritativePeopleSnapshot.IsAuthoritativeEmpty
                 || !CurrentItemAuthoritativePeopleChecker.IsAuthoritativeEmpty(currentItem, authoritativePeopleSnapshot);
         }
+#pragma warning restore SA1204
 
         protected DefaultScraperSemantic ResolveImageSemantic()
         {
@@ -1061,6 +1064,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var localizedName = await this.GetPreferredZhCnPersonNameAsync(personTmdbId, cancellationToken).ConfigureAwait(false);
                 if (localizedName != null)
                 {
+                    await this.TryAlignExistingLibraryPersonNameAsync(personTmdbId, localizedName, cancellationToken).ConfigureAwait(false);
                     return localizedName;
                 }
             }
@@ -1077,6 +1081,53 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return null;
+        }
+
+        private async Task TryAlignExistingLibraryPersonNameAsync(int personTmdbId, string resolvedName, CancellationToken cancellationToken)
+        {
+            var normalizedResolvedName = GetTrimmedNonEmptyText(resolvedName);
+            if (personTmdbId <= 0 || normalizedResolvedName == null)
+            {
+                return;
+            }
+
+            var existingPerson = this.FindExistingLibraryPersonByTmdbId(personTmdbId);
+            if (existingPerson == null)
+            {
+                return;
+            }
+
+            var currentExistingName = GetTrimmedNonEmptyText(existingPerson.Name);
+            if (string.Equals(currentExistingName, normalizedResolvedName, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            existingPerson.Name = normalizedResolvedName;
+            var updateReason = existingPerson.OnMetadataChanged();
+            await existingPerson.UpdateToRepositoryAsync(updateReason, cancellationToken).ConfigureAwait(false);
+        }
+
+        private Person? FindExistingLibraryPersonByTmdbId(int personTmdbId)
+        {
+            var tmdbProviderId = personTmdbId.ToString(CultureInfo.InvariantCulture);
+            var peopleQuery = new InternalItemsQuery
+            {
+                IncludeItemTypes = new[] { BaseItemKind.Person },
+                IsVirtualItem = false,
+                IsMissing = false,
+                Recursive = true,
+            };
+
+            var items = this.LibraryManager.GetItemList(peopleQuery);
+            if (items == null)
+            {
+                return null;
+            }
+
+            return items
+                .OfType<Person>()
+                .FirstOrDefault(person => string.Equals(person.GetProviderId(MetadataProvider.Tmdb), tmdbProviderId, StringComparison.Ordinal));
         }
 
         private async Task<string?> GetPreferredZhCnPersonNameAsync(int personTmdbId, CancellationToken cancellationToken)

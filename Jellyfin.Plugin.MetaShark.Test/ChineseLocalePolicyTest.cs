@@ -92,7 +92,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     CreateLocalizedValue("zh", "通用中文名"),
                     CreateLocalizedValue("zh-Hant", "繁體中文名"),
-                    CreateLocalizedValue("zh-CN", "中国大陆名"),
+            CreateLocalizedValue("zh-CN", "中文名"),
                 },
                 localizedValue => localizedValue.Language,
                 localizedValue => localizedValue.Value,
@@ -101,7 +101,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 out var sourceLanguage);
 
             Assert.IsTrue(result);
-            Assert.AreEqual("中国大陆名", value);
+            Assert.AreEqual("中文名", value);
             Assert.AreEqual("zh-CN", sourceLanguage);
         }
 

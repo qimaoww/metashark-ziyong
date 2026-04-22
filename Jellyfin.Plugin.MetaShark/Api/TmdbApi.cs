@@ -239,6 +239,24 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     extraMethods: TvShowMethods.Credits | TvShowMethods.Images | TvShowMethods.Keywords | TvShowMethods.ExternalIds | TvShowMethods.Videos | TvShowMethods.ContentRatings | TvShowMethods.EpisodeGroups,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
+                if (series != null && series.AggregateCredits == null)
+                {
+                    try
+                    {
+                        series.AggregateCredits = await this.tmDbClient
+                            .GetAggregateCredits(tmdbId, NormalizeLanguage(language), cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        this.logTmdbError(this.logger, "GetAggregateCredits", ex);
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        this.logTmdbError(this.logger, "GetAggregateCredits", ex);
+                    }
+                }
+
                 if (series != null)
                 {
                     this.memoryCache.Set(key, series, TimeSpan.FromHours(CacheDurationInHours));

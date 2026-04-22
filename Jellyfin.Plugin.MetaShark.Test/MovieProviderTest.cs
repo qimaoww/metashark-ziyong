@@ -1058,7 +1058,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 });
             SeedTmdbMovie(tmdbApi, 9100, "zh-CN", seededMovie);
 
-            SeedTmdbPerson(tmdbApi, 1001, "这个演员大陆候选", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 1001, "这个演员中文候选", language: "zh-CN");
             SeedTmdbPerson(tmdbApi, 1002, "這個演員原名", language: "zh-CN");
             SeedTmdbPerson(tmdbApi, 1003, "Actor Hans Raw", language: "zh-CN");
             SeedTmdbPerson(tmdbApi, 1004, "这个演员详情名", language: "zh-CN");
@@ -1066,7 +1066,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             SeedTmdbPersonTranslations(tmdbApi, 1005, CreatePersonTranslation("zh", "CN", "这个演员翻译名"));
             SeedBlankExactZhCnCastPerson(tmdbApi, 1006);
 
-            SeedTmdbPerson(tmdbApi, 2001, "这个导演大陆名", language: "zh-CN");
+            SeedTmdbPerson(tmdbApi, 2001, "这个导演中文名", language: "zh-CN");
             SeedTmdbPerson(tmdbApi, 2002, "這個製片人繁體名", language: "zh-CN");
             SeedTmdbPerson(tmdbApi, 2003, string.Empty, language: "zh-CN");
             SeedTmdbPersonTranslations(tmdbApi, 2003, CreatePersonTranslation("zh", "CN", "这个编剧翻译名"));
@@ -1082,7 +1082,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(8, result.People.Count, "没有可接受的精确 zh-CN 源值时，不应写入电影 item-level people。 ");
 
             var actorExactZhCn = GetPersonByTmdbId(result.People, 1001);
-            Assert.AreEqual("这个演员大陆候选", actorExactZhCn.Name, "strict item-level path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
+            Assert.AreEqual("这个演员中文候选", actorExactZhCn.Name, "strict item-level path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
             Assert.AreEqual("角色A", actorExactZhCn.Role);
             Assert.AreEqual(PersonKind.Actor, actorExactZhCn.Type);
             Assert.AreEqual(0, actorExactZhCn.SortOrder);
@@ -1095,7 +1095,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(HasPersonByTmdbId(result.People, 1006), "strict path 在精确 zh-CN detail/translation 都为空时应返回 null，不得回退到 raw。 ");
 
             var director = GetPersonByTmdbId(result.People, 2001);
-            Assert.AreEqual("这个导演大陆名", director.Name, "strict crew path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
+            Assert.AreEqual("这个导演中文名", director.Name, "strict crew path 命中精确 zh-CN detail 时应优先返回它，而不是 raw credits 名称。 ");
             Assert.AreEqual("Director", director.Role);
             Assert.AreEqual(PersonKind.Director, director.Type);
             Assert.AreEqual(tmdbApi.GetPosterUrl("/director.jpg")?.ToString(), director.ImageUrl);
@@ -1390,6 +1390,73 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 expectException: false,
                 originalFormatContains: "[MetaShark] {Message}",
                 messageContains: new[] { "开始搜索电影候选. name: " });
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByTMDB_WithExistingPersonEntityNameMismatch_OverwritesLocalPersonNameToResolvedTmdbName()
+        {
+            var info = new MovieInfo
+            {
+                Name = "人物对齐电影",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { MetaSharkPlugin.ProviderId, "Tmdb_9302" },
+                    { MetadataProvider.Tmdb.ToString(), "9302" },
+                },
+            };
+
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbImageConfig(tmdbApi);
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            var seededMovie = new TmdbMovie
+            {
+                Id = 9302,
+                Title = "人物对齐电影",
+                OriginalTitle = "Movie Person Alignment",
+                ImdbId = "tt0930200",
+                Overview = "TMDb seeded movie overview",
+                ReleaseDate = new DateTime(2024, 3, 2),
+                VoteAverage = 8.0,
+                ProductionCountries = new List<ProductionCountry>(),
+                Genres = new List<TmdbGenre>(),
+            };
+
+            SetTmdbMovieCredits(
+                seededMovie,
+                new[]
+                {
+                    CreateCastCredit(1201637, "三瓶 由布子", "角色A", 0, "/actor.jpg"),
+                },
+                Array.Empty<Dictionary<string, object?>>());
+            SeedTmdbMovie(tmdbApi, 9302, "zh-CN", seededMovie);
+            SeedTmdbPerson(tmdbApi, 1201637, "三瓶由布子", language: "zh-CN");
+
+            var existingPerson = new TrackingPerson
+            {
+                Name = "三瓶 由布子",
+            };
+            existingPerson.SetProviderId(MetadataProvider.Tmdb, "1201637");
+
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem> { existingPerson });
+
+            var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            var actor = GetPersonByTmdbId(result.People, 1201637);
+            Assert.AreEqual("三瓶由布子", actor.Name, "电影演员名也应对齐 TMDb 解析结果。 ");
+            Assert.AreEqual("三瓶由布子", existingPerson.Name, "共享 BaseProvider 逻辑应覆盖已有 Person 实体名。 ");
+            Assert.AreEqual(1, existingPerson.MetadataChangedCallCount);
+            Assert.AreEqual(1, existingPerson.UpdateToRepositoryCallCount);
+            Assert.AreEqual(ItemUpdateType.MetadataEdit, existingPerson.LastUpdateReason);
         }
 
         [TestMethod]

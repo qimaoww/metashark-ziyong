@@ -365,7 +365,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var semantic = this.ResolveMetadataSemantic(info);
-            if (!this.SupportsSearchMissingMetadataOverwriteCandidate(semantic))
+            if (!SupportsSearchMissingMetadataOverwriteCandidate(semantic))
             {
                 return;
             }
@@ -373,9 +373,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var movie = !string.IsNullOrWhiteSpace(info.Path)
                 ? this.LibraryManager.FindByPath(info.Path, false) as Movie
                 : null;
-            var authoritativePeopleSnapshot = this.CreateTmdbAuthoritativePeopleSnapshot(nameof(Movie), tmdbId, authoritativePeople);
+            var authoritativePeopleSnapshot = CreateTmdbAuthoritativePeopleSnapshot(nameof(Movie), tmdbId, authoritativePeople);
             if (authoritativePeopleSnapshot == null
-                || !this.RequiresSearchMissingMetadataOverwriteCandidate(movie, authoritativePeopleSnapshot))
+                || !RequiresSearchMissingMetadataOverwriteCandidate(movie, authoritativePeopleSnapshot))
             {
                 return;
             }

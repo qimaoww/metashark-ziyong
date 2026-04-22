@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -176,6 +177,169 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(1, harness.Item.ProviderIds!.Count, "overwrite 结清后不应把内部 people state 写回 provider ids。 ");
             CollectionAssert.AreEquivalent(new[] { MetadataProvider.Tmdb.ToString() }, harness.Item.ProviderIds.Keys.ToArray());
             Assert.IsFalse(harness.Item.ProviderIds.ContainsKey("MetaSharkPeopleRefreshState"), "overwrite 结清后不应保留 legacy people state provider id。 ");
+        }
+
+        [TestMethod]
+        public async Task SingleItemSearchMissingLifecycle_Series_MetadataDownloadAfterQueuedOverwriteShouldLogDiagnosticSkipWhenStillNonAuthoritative()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var loggerStub = new Mock<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var providerManagerStub = new Mock<IProviderManager>();
+            var candidateStore = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var series = new TrackingSeries
+            {
+                Id = Guid.NewGuid(),
+                Name = "Queued Series",
+                Path = "/library/tv/queued-series",
+                Overview = "queued series overview",
+            };
+
+            series.SetProviderId(MetadataProvider.Tmdb, "654321");
+            series.SetSimulatedPeople(Array.Empty<PersonInfo>());
+
+            var authoritativePeople = CreateAuthoritativePeopleSet();
+            candidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = series.Id,
+                ItemPath = series.Path,
+                ExpectedPeopleCount = authoritativePeople.Count,
+                AuthoritativePeopleSnapshot = CreateAuthoritativePeopleSnapshot(series, authoritativePeople),
+                OverwriteQueued = true,
+            });
+
+            var service = new MovieSeriesPeopleRefreshStatePostProcessService(
+                loggerStub.Object,
+                stateStore,
+                providerManagerStub.Object,
+                candidateStore,
+                Mock.Of<IFileSystem>());
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = series,
+                    UpdateReason = ItemUpdateType.MetadataDownload,
+                },
+                MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
+                Times.Never);
+            Assert.AreEqual(0, stateStore.SaveCallCount, "已排队 overwrite 的 follow-up 二次命中且仍 non-authoritative 时，不应误结清 state。 ");
+            Assert.IsNull(stateStore.GetState(series.Id));
+
+            var pendingCandidate = candidateStore.Peek(series.Id);
+            Assert.IsNotNull(pendingCandidate, "二次命中 queued overwrite 且仍未 authoritative 时，应保留 pending candidate。 ");
+            Assert.IsTrue(pendingCandidate!.OverwriteQueued, "queued overwrite 诊断日志不应把 candidate 重置成未排队。 ");
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Reason"] = "QueuedOverwriteStillNonAuthoritative",
+                    ["Trigger"] = MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                    ["ItemId"] = series.Id,
+                    ["ItemPath"] = series.Path,
+                    ["UpdateReason"] = ItemUpdateType.MetadataDownload,
+                    ["Detail"] = $"expectedPeopleCount={authoritativePeople.Count}",
+                },
+                originalFormatContains: "[MetaShark] 跳过影视人物刷新状态结清",
+                messageContains: ["reason=QueuedOverwriteStillNonAuthoritative", $"itemId={series.Id}"]);
+        }
+
+        [TestMethod]
+        public async Task SingleItemSearchMissingLifecycle_Series_ExplicitRefreshRearmedCandidateAfterQueuedStaleStateShouldQueueOverwriteAgain()
+        {
+            using var harness = FlowHarness<TrackingSeries>.CreateSeries();
+            var authoritativePeople = CreateAuthoritativePeopleSet();
+            var authoritativeSnapshot = CreateAuthoritativePeopleSnapshot(harness.Item, authoritativePeople);
+            harness.Item.SetSimulatedPeople(Array.Empty<PersonInfo>());
+            harness.OverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = harness.Item.Id,
+                ItemPath = harness.Item.Path,
+                ExpectedPeopleCount = authoritativePeople.Count,
+                AuthoritativePeopleSnapshot = authoritativeSnapshot,
+                OverwriteQueued = true,
+            });
+
+            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
+
+            Assert.AreEqual(0, harness.QueueInvocations.Count, "已锁死的 queued candidate 首轮只应给出诊断，不应自动重复排队。 ");
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: authoritativePeople.Count, expectedAuthoritativePeopleSnapshot: authoritativeSnapshot);
+
+            harness.OverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = harness.Item.Id,
+                ItemPath = harness.Item.Path,
+                ExpectedPeopleCount = authoritativePeople.Count,
+                AuthoritativePeopleSnapshot = authoritativeSnapshot,
+                OverwriteQueued = false,
+            });
+
+            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
+
+            AssertQueuedOnceForSingleItemSearchMissingOverwrite(harness, harness.Item.Id);
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: authoritativePeople.Count, expectedAuthoritativePeopleSnapshot: authoritativeSnapshot);
+        }
+
+        [TestMethod]
+        public async Task OverwriteLifecycle_MetadataDownloadShouldCloseStateWhenCurrentPeopleOnlyAvailableViaLibraryManager()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var service = new MovieSeriesPeopleRefreshStatePostProcessService(
+                Mock.Of<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>>(),
+                stateStore,
+                providerManager: null,
+                overwriteRefreshCandidateStore: null,
+                fileSystem: Mock.Of<IFileSystem>());
+            var movie = new LibraryManagerBackedMovie
+            {
+                Id = Guid.NewGuid(),
+                Name = "LibraryManager Backed Movie",
+                Path = "/library/movies/librarymanager-backed/movie.mkv",
+                Overview = "movie overview",
+            };
+
+            movie.SetProviderId(MetadataProvider.Tmdb, "123456");
+            movie.SetLibraryManagerPeople(CreateAuthoritativePeopleSet());
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetPeople(It.Is<BaseItem>(item => ReferenceEquals(item, movie))))
+                .Returns(() => movie.GetLibraryManagerPeople().ToList());
+
+            var previousLibraryManager = BaseItem.LibraryManager;
+
+            try
+            {
+                BaseItem.LibraryManager = libraryManagerStub.Object;
+
+                await service.TryApplyAsync(
+                    new ItemChangeEventArgs
+                    {
+                        Item = movie,
+                        UpdateReason = ItemUpdateType.MetadataDownload,
+                    },
+                    MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                    CancellationToken.None).ConfigureAwait(false);
+
+                var state = stateStore.GetState(movie.Id);
+                var expectedSnapshot = CreateAuthoritativePeopleSnapshot(movie, movie.GetLibraryManagerPeople());
+
+                Assert.IsNotNull(state, "当前人物只能通过 Jellyfin LibraryManager 读取时，也应能在 overwrite 路径正常结清 state。 ");
+                Assert.AreEqual(PeopleRefreshState.CurrentVersion, state!.Version);
+                Assert.IsNotNull(state.AuthoritativePeopleSnapshot);
+                Assert.IsTrue(state.AuthoritativePeopleSnapshot!.SetEquals(expectedSnapshot), "LibraryManager 路径生成的 authoritative snapshot 应与当前条目人物一致。 ");
+            }
+            finally
+            {
+                BaseItem.LibraryManager = previousLibraryManager;
+            }
         }
 
         private static void AssertCandidate<TItem>(FlowHarness<TItem> harness, BaseItem item, CandidateReason expectedReason, bool expectedCandidate)
@@ -587,6 +751,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
             public MetadataRefreshOptions Options { get; set; } = null!;
 
             public RefreshPriority Priority { get; set; }
+        }
+
+        private sealed class LibraryManagerBackedMovie : Movie
+        {
+            private List<PersonInfo> libraryManagerPeople = new List<PersonInfo>();
+
+            public override bool SupportsPeople => true;
+
+            public void SetLibraryManagerPeople(IEnumerable<PersonInfo> people)
+            {
+                this.libraryManagerPeople = people.ToList();
+            }
+
+            public IReadOnlyList<PersonInfo> GetLibraryManagerPeople()
+            {
+                return this.libraryManagerPeople.ToList();
+            }
         }
 
         private sealed class ProgressRecorder : IProgress<double>
