@@ -9,8 +9,10 @@ using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -300,6 +302,56 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void CurrentItemAuthoritativePeopleChecker_ShouldPreferLibraryManagerPeople_WhenGetPeopleLacksTmdbProviderIds()
+        {
+            var movie = new LibraryManagerPreferredAuthoritativeMovie
+            {
+                Id = Guid.NewGuid(),
+                Name = "LibraryManager Preferred Movie",
+            };
+            movie.SetProviderId(MetadataProvider.Tmdb, "123456");
+            movie.SetSimulatedPeople(new object[]
+            {
+                new { Type = "Actor", Role = "角色A" },
+                new { Type = "Director", Role = "Director" },
+            });
+
+            var libraryManagerPeople = new[]
+            {
+                CreatePerson("1001", "Actor", "角色A", "当前条目演员名"),
+                CreatePerson("2001", "Director", "Director", "当前条目导演名"),
+            };
+            var authoritativeSnapshot = TmdbAuthoritativePeopleSnapshot.Create(
+                nameof(Movie),
+                "123456",
+                new[]
+                {
+                    CreatePerson("1001", "Actor", "角色A", "TMDb authoritative actor name"),
+                    CreatePerson("2001", "Director", "Director", "TMDb authoritative director name"),
+                });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetPeople(It.Is<BaseItem>(item => ReferenceEquals(item, movie))))
+                .Returns(() => libraryManagerPeople.ToList());
+
+            var previousLibraryManager = BaseItem.LibraryManager;
+            try
+            {
+                BaseItem.LibraryManager = libraryManagerStub.Object;
+
+                var status = CurrentItemAuthoritativePeopleChecker.Check(movie, authoritativeSnapshot);
+
+                Assert.AreEqual(CurrentItemAuthoritativePeopleStatus.Authoritative, status);
+                Assert.IsTrue(CurrentItemAuthoritativePeopleChecker.IsAuthoritative(movie, authoritativeSnapshot));
+            }
+            finally
+            {
+                BaseItem.LibraryManager = previousLibraryManager;
+            }
+        }
+
+        [TestMethod]
         public void CurrentItemAuthoritativePeopleChecker_EmptyAuthoritativeSnapshotWithNoCurrentPeopleShouldReturnAuthoritativeEmpty()
         {
             var series = CreateAuthoritativeSeries(includeTmdb: true);
@@ -531,6 +583,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private List<PersonInfo> simulatedPeople = new List<PersonInfo>();
 
         public void SetSimulatedPeople(IEnumerable<PersonInfo> people)
+        {
+            this.simulatedPeople = people.ToList();
+        }
+
+        private System.Collections.IEnumerable GetPeople()
+        {
+            return this.simulatedPeople;
+        }
+    }
+
+    internal sealed class LibraryManagerPreferredAuthoritativeMovie : Movie
+    {
+        private List<object> simulatedPeople = new List<object>();
+
+        public override bool SupportsPeople => true;
+
+        public void SetSimulatedPeople(IEnumerable<object> people)
         {
             this.simulatedPeople = people.ToList();
         }

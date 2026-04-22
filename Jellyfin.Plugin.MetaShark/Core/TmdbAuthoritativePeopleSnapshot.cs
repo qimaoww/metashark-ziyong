@@ -129,6 +129,14 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
         private static bool TryGetCurrentPeople(BaseItem item, out IReadOnlyList<object?> people)
         {
+            var libraryManager = BaseItem.LibraryManager;
+            if (item.SupportsPeople && libraryManager != null)
+            {
+                var peopleFromLibraryManager = libraryManager.GetPeople(item);
+                people = peopleFromLibraryManager.Cast<object?>().ToArray();
+                return true;
+            }
+
             var currentType = item.GetType();
 
             while (currentType != null)
@@ -148,14 +156,6 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 }
 
                 currentType = currentType.BaseType;
-            }
-
-            var libraryManager = BaseItem.LibraryManager;
-            if (item.SupportsPeople && libraryManager != null)
-            {
-                var peopleFromLibraryManager = libraryManager.GetPeople(item);
-                people = peopleFromLibraryManager.Cast<object?>().ToArray();
-                return true;
             }
 
             people = Array.Empty<object?>();
