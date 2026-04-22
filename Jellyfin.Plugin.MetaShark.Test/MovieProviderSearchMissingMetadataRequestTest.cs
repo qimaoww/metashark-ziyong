@@ -39,7 +39,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private static readonly string PluginConfigurationsPath = Path.Combine(PluginTestRootPath, "configurations");
 
         [TestMethod]
-        public async Task GetMetadata_ShouldSaveCandidate_WhenInfoRepresentsUserRefresh()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenInfoRepresentsUserRefresh()
         {
             EnsurePluginInstance();
 
@@ -70,16 +70,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
-            var candidate = store.Peek(currentMovie.Id);
-            Assert.IsNotNull(candidate, "手动单项电影 refresh 命中 TMDb provider 时，应保存一次性 overwrite candidate。 ");
-            Assert.AreEqual(currentMovie.Id, candidate!.ItemId);
-            Assert.AreEqual(info.Path, candidate.ItemPath);
-            Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount, "candidate 应记录 provider 实际产出的期望 people 数。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
+            Assert.IsNull(store.Peek(currentMovie.Id), "UserRefresh 不应保存 overwrite candidate。 ");
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldSaveAcceptedTmdbPeopleCount_WhenDoubanBranchBackfillsPeopleForUserRefresh()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenDoubanBranchBackfillsPeopleDuringUserRefresh()
         {
             EnsurePluginInstance();
 
@@ -172,14 +167,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             Assert.IsNotNull(result.People);
-            Assert.AreEqual(2, result.People.Count, "Douban 主分支命中 tmdbId 时，应只统计并写入实际 accepted 的 TMDb people。 ");
-
-            var candidate = store.Peek(currentMovie.Id);
-            Assert.IsNotNull(candidate, "Douban 主分支在手动单项 refresh 中产出 TMDb people 时，应保存一次性 overwrite candidate。 ");
-            Assert.AreEqual(currentMovie.Id, candidate!.ItemId);
-            Assert.AreEqual(info.Path, candidate.ItemPath);
-            Assert.AreEqual(result.People.Count, candidate.ExpectedPeopleCount, "candidate 应记录 Douban 主分支实际接受的 TMDb people 数，而不是原始 credits 数。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
+            Assert.AreEqual(2, result.People.Count, "UserRefresh 下 Douban 主分支仍应正确统计实际 accepted 的 TMDb people。 ");
+            Assert.IsNull(store.Peek(currentMovie.Id), "UserRefresh 不应保存 overwrite candidate。 ");
         }
 
         [TestMethod]
@@ -214,11 +203,46 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
-            Assert.IsNull(store.Peek(currentMovie.Id), "自动刷新不应为单项 one-shot overwrite 保存 candidate。 ");
+            Assert.IsNull(store.Peek(currentMovie.Id), "AutomatedRefresh 不应保存 overwrite candidate。 ");
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldSaveCandidate_ForManualMatchRequest()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenRequestIsExplicitSearchMissingRefresh()
+        {
+            EnsurePluginInstance();
+
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
+            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+            var info = CreateMovieInfo();
+            info.IsAutomated = false;
+            var currentMovie = new Movie
+            {
+                Id = Guid.NewGuid(),
+                Path = info.Path,
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, false))
+                .Returns(currentMovie);
+
+            var provider = CreateProvider(
+                libraryManagerStub.Object,
+                new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: false, metadataRefreshMode: "FullRefresh") },
+                tmdbApi,
+                store,
+                loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsNull(store.Peek(currentMovie.Id), "SearchMissing/FullRefresh 不应保存 overwrite candidate。 ");
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldSaveCandidate_WhenRequestIsManualMatch()
         {
             EnsurePluginInstance();
 
@@ -250,7 +274,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             var candidate = store.Peek(currentMovie.Id);
-            Assert.IsNotNull(candidate, "手动匹配 /Items/RemoteSearch/Apply 命中 TMDb provider 时，也应创建单项 overwrite candidate。 ");
+            Assert.IsNotNull(candidate, "ManualMatch /Items/RemoteSearch/Apply 命中 TMDb provider 时，应创建单项 overwrite candidate。 ");
             Assert.AreEqual(currentMovie.Id, candidate!.ItemId);
             Assert.AreEqual(info.Path, candidate.ItemPath);
             Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount);
@@ -258,7 +282,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldSaveEmptyAuthoritativeCandidate_WhenTmdbPeopleIsEmptyButCurrentMovieStillHasPeople()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenTmdbPeopleIsEmptyButCurrentMovieStillHasPeople()
         {
             EnsurePluginInstance();
 
@@ -296,17 +320,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             Assert.AreEqual(0, result.People?.Count ?? 0, "测试前提：TMDb authoritative 应为空。 ");
-            var candidate = store.Peek(currentMovie.Id);
-            Assert.IsNotNull(candidate, "TMDb authoritative 为空但当前电影仍有旧 people 时，也应保存待清理 candidate。 ");
-            Assert.AreEqual(currentMovie.Id, candidate!.ItemId);
-            Assert.AreEqual(info.Path, candidate.ItemPath);
-            Assert.AreEqual(0, candidate.ExpectedPeopleCount, "空 authoritative candidate 仍应保留 0 的期望人数，兼容当前消费方。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", Array.Empty<PersonInfo>());
-            Assert.IsFalse(CurrentItemAuthoritativePeopleChecker.IsAuthoritativeEmpty(currentMovie, candidate.AuthoritativePeopleSnapshot), "当前条目仍残留旧人物时，空 authoritative 快照不应被误判成 authoritative empty。 ");
+            Assert.IsNull(store.Peek(currentMovie.Id), "UserRefresh 不应保存空 authoritative candidate。 ");
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldUseRequestPathFallback_WhenCurrentMovieLookupMisses()
+        public async Task GetMetadata_ShouldNotSaveCandidate_WhenCurrentMovieLookupMisses()
         {
             EnsurePluginInstance();
 
@@ -333,12 +351,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
-            var candidate = store.Peek(currentMovieId);
-            Assert.IsNotNull(candidate, "FindByPath 没拿到当前电影时，应回退到请求路径中的 item id 保存 candidate。 ");
-            Assert.AreEqual(currentMovieId, candidate!.ItemId);
-            Assert.AreEqual(info.Path, candidate.ItemPath);
-            Assert.AreEqual(result.People?.Count ?? 0, candidate.ExpectedPeopleCount, "路径回退命中时也应保留 provider 实际产出的期望 people 数。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
+            Assert.IsNull(store.Peek(currentMovieId), "UserRefresh 不应因为请求路径回退而保存 overwrite candidate。 ");
         }
 
         [TestMethod]
@@ -389,7 +402,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldRearmQueuedCandidate_WhenExplicitRefreshRequestWithoutReplaceAllMetadata()
+        public async Task GetMetadata_ShouldKeepQueuedCandidate_WhenExplicitRefreshRequestWithoutReplaceAllMetadata()
         {
             EnsurePluginInstance();
 
@@ -429,10 +442,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             var candidate = store.Peek(currentMovie.Id);
-            Assert.IsNotNull(candidate, "显式用户 refresh 且 ReplaceAllMetadata=false 时，应允许重新武装已锁死的 queued candidate。 ");
-            Assert.AreEqual(result.People?.Count ?? 0, candidate!.ExpectedPeopleCount, "重新武装后的 candidate 应反映本次 provider 实际产出的 people 数。 ");
-            Assert.IsFalse(candidate.OverwriteQueued, "显式用户 refresh 重新武装时，应把 queued candidate 还原成未排队状态，交给 post-process 再次决定是否 queue。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
+            Assert.IsNotNull(candidate, "UserRefresh 不应改写已排队的 queued candidate。 ");
+            Assert.AreEqual(17, candidate!.ExpectedPeopleCount, "UserRefresh 不应覆盖已有 candidate 的 expected people 数。 ");
+            Assert.IsTrue(candidate.OverwriteQueued, "UserRefresh 下 queued candidate 应保持已排队状态。 ");
+            Assert.IsNull(candidate.AuthoritativePeopleSnapshot, "UserRefresh 不应重写 queued candidate 的 authoritative 快照。 ");
         }
 
         [TestMethod]
@@ -483,7 +496,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_ShouldRearmQueuedCandidate_WhenUserRefreshRunsWithoutHttpContext()
+        public async Task GetMetadata_ShouldKeepQueuedCandidate_WhenUserRefreshRunsWithoutHttpContext()
         {
             EnsurePluginInstance();
 
@@ -523,10 +536,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsNotNull(result.Item);
             var candidate = store.Peek(currentMovie.Id);
-            Assert.IsNotNull(candidate, "Jellyfin 后台执行手动电影 refresh 时，即使没有 HttpContext，也应允许重新武装已锁死的 queued candidate。 ");
-            Assert.AreEqual(result.People?.Count ?? 0, candidate!.ExpectedPeopleCount, "无 HttpContext 的手动 refresh 重新武装后，也应反映本次 provider 实际产出的 people 数。 ");
-            Assert.IsFalse(candidate.OverwriteQueued, "无 HttpContext 的手动 refresh 重新武装时，应把 queued candidate 还原成未排队状态。 ");
-            AssertAuthoritativeSnapshot(candidate, nameof(Movie), "123", result.People);
+            Assert.IsNotNull(candidate, "UserRefresh 在没有 HttpContext 时也不应改写已排队的 queued candidate。 ");
+            Assert.AreEqual(17, candidate!.ExpectedPeopleCount, "无 HttpContext 的 UserRefresh 不应覆盖已有 candidate 的 expected people 数。 ");
+            Assert.IsTrue(candidate.OverwriteQueued, "无 HttpContext 的 UserRefresh 下 queued candidate 应保持已排队状态。 ");
+            Assert.IsNull(candidate.AuthoritativePeopleSnapshot, "无 HttpContext 的 UserRefresh 不应重写 queued candidate 的 authoritative 快照。 ");
         }
 
         private static MovieProvider CreateProvider(
@@ -563,14 +576,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
-        private static DefaultHttpContext CreateRefreshRequestContext(Guid itemId, bool? replaceAllMetadata = null)
+        private static DefaultHttpContext CreateRefreshRequestContext(Guid itemId, bool? replaceAllMetadata = null, string? metadataRefreshMode = null)
         {
             var context = new DefaultHttpContext();
             context.Request.Method = HttpMethods.Post;
             context.Request.Path = $"/Items/{itemId:N}/Refresh";
             if (replaceAllMetadata.HasValue)
             {
-                context.Request.QueryString = new QueryString($"?ReplaceAllMetadata={replaceAllMetadata.Value.ToString().ToLowerInvariant()}");
+                var queryString = $"?replaceAllMetadata={replaceAllMetadata.Value.ToString().ToLowerInvariant()}";
+                if (!string.IsNullOrWhiteSpace(metadataRefreshMode))
+                {
+                    queryString += $"&metadataRefreshMode={metadataRefreshMode}";
+                }
+
+                context.Request.QueryString = new QueryString(queryString);
             }
 
             return context;

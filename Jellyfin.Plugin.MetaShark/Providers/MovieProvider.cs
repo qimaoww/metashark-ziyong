@@ -414,6 +414,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return;
             }
 
+            var httpContext = this.HttpContextAccessor.HttpContext;
             var semantic = this.ResolveMetadataSemantic(info);
             if (!SupportsSearchMissingMetadataOverwriteCandidate(semantic))
             {
@@ -431,7 +432,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var itemId = movie?.Id ?? Guid.Empty;
-            var httpContext = this.HttpContextAccessor.HttpContext;
             if (itemId == Guid.Empty && !TryResolveItemIdFromRequestPath(httpContext, out itemId))
             {
                 return;
