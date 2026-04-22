@@ -288,6 +288,49 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_DoesNotAddEpisodePeople()
+        {
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedEpisode(tmdbApi, 26707, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "狼与香辛料",
+                Overview = "旅行商人与贤狼重逢的故事。",
+                AirDate = new DateTime(2008, 1, 9),
+                VoteAverage = 8.4,
+            });
+
+            var doubanApi = new DoubanApi(loggerFactory);
+            var omdbApi = new OmdbApi(loggerFactory);
+            var imdbApi = new ImdbApi(loggerFactory);
+            var tvdbApi = new TvdbApi(loggerFactory);
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+
+            var info = new EpisodeInfo()
+            {
+                Name = "第 1 集",
+                Path = "/test/Spice and Wolf/S01/episode-01.mkv",
+                MetadataLanguage = "zh-CN",
+                ParentIndexNumber = 1,
+                IndexNumber = 1,
+                SeriesProviderIds = new Dictionary<string, string>() { { MetadataProvider.Tmdb.ToString(), "26707" } },
+                IsAutomated = true,
+            };
+
+            var provider = new EpisodeProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi, tvdbApi);
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("狼与香辛料", result.Item.Name);
+            Assert.AreEqual(1, result.Item.IndexNumber);
+            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(new DateTime(2008, 1, 9), result.Item.PremiereDate);
+            Assert.IsTrue(result.People == null || result.People.Count == 0, "EpisodeProvider 不应向单集元数据写入任何演职人员。 ");
+        }
+
+        [TestMethod]
         public async Task EpisodeProviderLog_GetSearchResults_UsesChineseSummary()
         {
             var providerLogger = new Mock<ILogger>();

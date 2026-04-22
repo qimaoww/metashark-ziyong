@@ -91,12 +91,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var subject = await this.DoubanApi.GetMovieAsync(seasonSid, cancellationToken).ConfigureAwait(false);
                     if (subject != null)
                     {
-                        subject.Celebrities.Clear();
-                        foreach (var celebrity in await this.DoubanApi.GetCelebritiesBySidAsync(seasonSid, cancellationToken).ConfigureAwait(false))
-                        {
-                            subject.Celebrities.Add(celebrity);
-                        }
-
                         var movie = new Season
                         {
                             ProviderIds = new Dictionary<string, string> { { DoubanProviderId, subject.Sid } },
@@ -111,15 +105,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                         result.Item = movie;
                         result.HasMetadata = true;
-                        subject.LimitDirectorCelebrities.Take(Configuration.PluginConfiguration.MAXCASTMEMBERS).ToList().ForEach(c => result.AddPerson(new PersonInfo
-                        {
-                            Name = c.Name,
-                            Type = c.RoleType == PersonType.Director ? PersonKind.Director : PersonKind.Actor,
-                            Role = c.Role,
-                            ImageUrl = GetLocalProxyImageUrl(new Uri(c.Img, UriKind.Absolute)).ToString(),
-                            ProviderIds = new Dictionary<string, string> { { DoubanProviderId, c.Id } },
-                        }));
-
                         this.Log("已找到季 Douban sid. name: {0} sid: {1}", info.Name, seasonSid);
                         return result;
                     }

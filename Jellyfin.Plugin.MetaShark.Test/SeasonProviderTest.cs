@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Core;
+using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
@@ -157,6 +158,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return memoryCache!;
         }
 
+        private static IMemoryCache GetDoubanMemoryCache(DoubanApi doubanApi)
+        {
+            var memoryCacheField = typeof(DoubanApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(memoryCacheField, "DoubanApi.memoryCache 未定义");
+
+            var memoryCache = memoryCacheField!.GetValue(doubanApi) as IMemoryCache;
+            Assert.IsNotNull(memoryCache, "DoubanApi.memoryCache 不是有效的 IMemoryCache");
+            return memoryCache!;
+        }
+
+        private static void SeedDoubanSubject(DoubanApi doubanApi, DoubanSubject subject)
+        {
+            var cache = GetDoubanMemoryCache(doubanApi);
+            cache.Set($"movie_{subject.Sid}", subject, TimeSpan.FromMinutes(5));
+            cache.Set($"celebrities_{subject.Sid}", new List<DoubanCelebrity>(), TimeSpan.FromMinutes(5));
+        }
+
         private static void SeedTmdbSeason(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, string language, string seasonName)
         {
             GetTmdbMemoryCache(tmdbApi).Set(
@@ -219,6 +237,56 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var str = result.ToJson();
                 Console.WriteLine(result.ToJson());
             }).GetAwaiter().GetResult();
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByDouban_DoesNotAddSeasonPeople()
+        {
+            var info = new SeasonInfo
+            {
+                Name = "第1季",
+                IndexNumber = 1,
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, "season-douban-100" },
+                },
+                SeriesProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, "series-douban-100" },
+                },
+            };
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(loggerFactory);
+            SeedDoubanSubject(
+                doubanApi,
+                new DoubanSubject
+                {
+                    Sid = "season-douban-100",
+                    Name = "豆瓣示例剧集 第1季",
+                    Year = 2024,
+                    Rating = 8.1f,
+                    Genre = "剧情 / 动画",
+                    Intro = "豆瓣季简介",
+                    Screen = "2024-04-04",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000010.webp",
+                });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var omdbApi = new OmdbApi(loggerFactory);
+            var imdbApi = new ImdbApi(loggerFactory);
+
+            var provider = new SeasonProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("豆瓣示例剧集 第1季", result.Item.Name);
+            Assert.AreEqual("豆瓣季简介", result.Item.Overview);
+            Assert.AreEqual(1, result.Item.IndexNumber);
+            Assert.AreEqual("season-douban-100", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.IsTrue(result.People == null || result.People.Count == 0, "季级 Douban 元数据不应再写入任何人物。 ");
         }
 
         [TestMethod]
