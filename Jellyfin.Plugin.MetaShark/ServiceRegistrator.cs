@@ -10,7 +10,10 @@ namespace Jellyfin.Plugin.MetaShark
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Workers;
     using MediaBrowser.Controller;
+    using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Plugins;
+    using MediaBrowser.Controller.Providers;
+    using MediaBrowser.Model.IO;
     using Microsoft.Extensions.DependencyInjection;
     using Microsoft.Extensions.Logging;
 
@@ -64,7 +67,16 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPendingResolver, EpisodeTitleBackfillPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPersistence, JellyfinEpisodeTitleBackfillPersistence>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPostProcessService, EpisodeTitleBackfillPostProcessService>();
-            serviceCollection.AddSingleton<MovieSeriesPeopleRefreshStatePostProcessService>();
+            serviceCollection.AddSingleton<MovieSeriesPeopleRefreshStatePostProcessService>((ctx) =>
+            {
+                return new MovieSeriesPeopleRefreshStatePostProcessService(
+                    ctx.GetRequiredService<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>>(),
+                    ctx.GetRequiredService<IPeopleRefreshStateStore>(),
+                    ctx.GetRequiredService<IProviderManager>(),
+                    ctx.GetRequiredService<IMovieSeriesPeopleOverwriteRefreshCandidateStore>(),
+                    ctx.GetRequiredService<IFileSystem>(),
+                    ctx.GetRequiredService<ILibraryManager>());
+            });
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupCandidateStore, InMemoryEpisodeOverviewCleanupCandidateStore>();
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupPendingResolver, EpisodeOverviewCleanupPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupPersistence, JellyfinEpisodeOverviewCleanupPersistence>();

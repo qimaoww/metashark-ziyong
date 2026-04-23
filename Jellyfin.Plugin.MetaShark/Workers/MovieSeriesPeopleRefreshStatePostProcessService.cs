@@ -7,15 +7,18 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Text.RegularExpressions;
     using System.Threading;
     using System.Threading.Tasks;
+    using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Core;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
+    using MediaBrowser.Model.Configuration;
     using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.IO;
     using Microsoft.Extensions.Logging;
@@ -33,13 +36,17 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private static readonly Action<ILogger, Guid, string, string, ItemUpdateType, string, Exception?> LogQueuedSearchMissingOverwriteRefresh =
             LoggerMessage.Define<Guid, string, string, ItemUpdateType, string>(LogLevel.Information, new EventId(4, nameof(TryQueueSearchMissingMetadataOverwriteRefresh)), "[MetaShark] 已排队影视人物 search-missing 单次 overwrite refresh. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} queuedItemPath={QueuedItemPath}.");
 
+        private static readonly Action<ILogger, Guid, string, string, ItemUpdateType, int, Exception?> LogQueuedRelatedParentRefresh =
+            LoggerMessage.Define<Guid, string, string, ItemUpdateType, int>(LogLevel.Information, new EventId(5, nameof(TryApplyAsync)), "[MetaShark] 已排队人物图片完成后的关联影视 refresh. personId={PersonId} trigger={Trigger} personPath={PersonPath} updateReason={UpdateReason} queuedParentCount={QueuedParentCount}.");
+
         private readonly ILogger<MovieSeriesPeopleRefreshStatePostProcessService> logger;
         private readonly IPeopleRefreshStateStore stateStore;
         private readonly IProviderManager? providerManager;
         private readonly IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore;
         private readonly IFileSystem? fileSystem;
+        private readonly ILibraryManager? libraryManager;
 
-        public MovieSeriesPeopleRefreshStatePostProcessService(ILogger<MovieSeriesPeopleRefreshStatePostProcessService> logger, IPeopleRefreshStateStore stateStore, IProviderManager? providerManager = null, IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore = null, IFileSystem? fileSystem = null)
+        public MovieSeriesPeopleRefreshStatePostProcessService(ILogger<MovieSeriesPeopleRefreshStatePostProcessService> logger, IPeopleRefreshStateStore stateStore, IProviderManager? providerManager = null, IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore = null, IFileSystem? fileSystem = null, ILibraryManager? libraryManager = null)
         {
             ArgumentNullException.ThrowIfNull(logger);
             ArgumentNullException.ThrowIfNull(stateStore);
@@ -49,6 +56,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.providerManager = providerManager;
             this.overwriteRefreshCandidateStore = overwriteRefreshCandidateStore ?? InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared;
             this.fileSystem = fileSystem;
+            this.libraryManager = libraryManager;
         }
 
 #pragma warning disable CA1848
@@ -76,6 +84,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 item.Id,
                 item.Path ?? string.Empty,
                 e.UpdateReason);
+
+            if (item is Person person)
+            {
+                await this.TryQueueRelatedParentRefreshForPersonImageAsync(person, triggerName, e.UpdateReason, cancellationToken).ConfigureAwait(false);
+                return;
+            }
 
             if (!IsAcceptedUpdateReason(e.UpdateReason))
             {
@@ -206,6 +220,92 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 ReplaceAllMetadata = true,
                 ReplaceAllImages = false,
             };
+        }
+
+        private static MetadataRefreshOptions CreateRelatedParentRefreshOptions(IFileSystem fileSystem)
+        {
+            return new MetadataRefreshOptions(new DirectoryService(fileSystem))
+            {
+                MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
+                ImageRefreshMode = MetadataRefreshMode.FullRefresh,
+                ReplaceAllMetadata = false,
+                ReplaceAllImages = false,
+            };
+        }
+
+        private static bool HasUsablePrimaryImage(Person person)
+        {
+            if (!person.HasImage(ImageType.Primary))
+            {
+                return false;
+            }
+
+            return HasValidImagePath(person.GetImagePath(ImageType.Primary, 0));
+        }
+
+        private static bool HasValidImagePath(string? imagePath)
+        {
+            if (string.IsNullOrWhiteSpace(imagePath))
+            {
+                return false;
+            }
+
+            var candidates = imagePath
+                .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(path => !string.IsNullOrWhiteSpace(path));
+
+            return candidates.Any(IsValidImageCandidate);
+        }
+
+        private static bool IsValidImageCandidate(string path)
+        {
+            if (Uri.TryCreate(path, UriKind.Absolute, out var uri))
+            {
+                if (uri.IsFile)
+                {
+                    return File.Exists(uri.LocalPath);
+                }
+
+                return true;
+            }
+
+            return File.Exists(path);
+        }
+
+        private static bool TryGetCurrentPeople(BaseItem item, ILibraryManager libraryManager, out IReadOnlyList<object?> people)
+        {
+            if (item.SupportsPeople)
+            {
+                var peopleFromLibraryManager = libraryManager.GetPeople(item);
+                if (peopleFromLibraryManager != null)
+                {
+                    people = peopleFromLibraryManager.Cast<object?>().ToArray();
+                    return true;
+                }
+            }
+
+            var currentType = item.GetType();
+            while (currentType != null)
+            {
+                var getPeopleMethod = currentType.GetMethod("GetPeople", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+                if (getPeopleMethod?.Invoke(item, null) is System.Collections.IEnumerable peopleFromMethod)
+                {
+                    people = peopleFromMethod.Cast<object?>().ToArray();
+                    return true;
+                }
+
+                var peopleProperty = currentType.GetProperty("People", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                if (peopleProperty?.GetValue(item) is System.Collections.IEnumerable peopleFromProperty)
+                {
+                    people = peopleFromProperty.Cast<object?>().ToArray();
+                    return true;
+                }
+
+                currentType = currentType.BaseType;
+            }
+
+            people = Array.Empty<object?>();
+            return false;
         }
 
         private static IEnumerable<string> GetLegacyPeopleRefreshStateNfoPaths(BaseItem item)
@@ -411,6 +511,98 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 candidate.ItemPath ?? string.Empty,
                 null);
             return true;
+        }
+
+        private async Task TryQueueRelatedParentRefreshForPersonImageAsync(Person person, string triggerName, ItemUpdateType updateReason, CancellationToken cancellationToken)
+        {
+            if (!updateReason.HasFlag(ItemUpdateType.ImageUpdate)
+                || !HasUsablePrimaryImage(person)
+                || this.providerManager == null
+                || this.fileSystem == null)
+            {
+                return;
+            }
+
+            var personTmdbId = person.GetProviderId(MetadataProvider.Tmdb);
+            if (string.IsNullOrWhiteSpace(personTmdbId))
+            {
+                return;
+            }
+
+            var relatedItems = this.GetRelatedMovieSeriesItems(personTmdbId);
+            if (relatedItems.Count == 0)
+            {
+                return;
+            }
+
+            var refreshOptions = CreateRelatedParentRefreshOptions(this.fileSystem);
+            var queuedIds = new HashSet<Guid>();
+
+            foreach (var relatedItem in relatedItems)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!queuedIds.Add(relatedItem.Id))
+                {
+                    continue;
+                }
+
+                this.providerManager.QueueRefresh(relatedItem.Id, refreshOptions, RefreshPriority.Normal);
+            }
+
+            if (queuedIds.Count > 0)
+            {
+                LogQueuedRelatedParentRefresh(this.logger, person.Id, triggerName, person.Path ?? string.Empty, updateReason, queuedIds.Count, null);
+            }
+        }
+
+        private List<BaseItem> GetRelatedMovieSeriesItems(string personTmdbId)
+        {
+            var effectiveLibraryManager = this.libraryManager ?? BaseItem.LibraryManager;
+            if (effectiveLibraryManager == null)
+            {
+                return new List<BaseItem>();
+            }
+
+            var query = new InternalItemsQuery
+            {
+                IncludeItemTypes = new[] { BaseItemKind.Movie, BaseItemKind.Series },
+                IsVirtualItem = false,
+                IsMissing = false,
+                Recursive = true,
+            };
+
+            var items = effectiveLibraryManager.GetItemList(query);
+            return items
+                .Where(item => item is Movie or Series)
+                .Where(item => this.CurrentItemContainsTmdbPersonId(item, personTmdbId))
+                .ToList();
+        }
+
+        private bool CurrentItemContainsTmdbPersonId(BaseItem item, string personTmdbId)
+        {
+            var effectiveLibraryManager = this.libraryManager ?? BaseItem.LibraryManager;
+            if (effectiveLibraryManager == null)
+            {
+                return false;
+            }
+
+            if (!TryGetCurrentPeople(item, effectiveLibraryManager, out var people))
+            {
+                return false;
+            }
+
+            foreach (var currentPerson in people)
+            {
+                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(currentPerson, out var fingerprint)
+                    && fingerprint != null
+                    && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
 #pragma warning disable CA1848

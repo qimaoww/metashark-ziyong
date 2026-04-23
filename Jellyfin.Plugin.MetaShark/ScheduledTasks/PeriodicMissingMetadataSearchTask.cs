@@ -14,11 +14,14 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
     public sealed class PeriodicMissingMetadataSearchTask : IScheduledTask
     {
         private readonly IMissingMetadataSearchService missingMetadataSearchService;
+        private readonly IPersonMissingImageRefillService personMissingImageRefillService;
 
-        public PeriodicMissingMetadataSearchTask(IMissingMetadataSearchService missingMetadataSearchService)
+        public PeriodicMissingMetadataSearchTask(IMissingMetadataSearchService missingMetadataSearchService, IPersonMissingImageRefillService personMissingImageRefillService)
         {
             ArgumentNullException.ThrowIfNull(missingMetadataSearchService);
+            ArgumentNullException.ThrowIfNull(personMissingImageRefillService);
             this.missingMetadataSearchService = missingMetadataSearchService;
+            this.personMissingImageRefillService = personMissingImageRefillService;
         }
 
         public string Key => "MetaSharkPeriodicMissingMetadataSearch";
@@ -38,10 +41,11 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
             };
         }
 
-        public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+        public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(progress);
-            return this.missingMetadataSearchService.RunFullLibrarySearchAsync(progress, cancellationToken);
+            _ = this.personMissingImageRefillService.QueueMissingImagesForFullLibraryScan(cancellationToken);
+            await this.missingMetadataSearchService.RunFullLibrarySearchAsync(progress, cancellationToken).ConfigureAwait(false);
         }
     }
 }

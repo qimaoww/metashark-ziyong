@@ -17,7 +17,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void MetadataProperties_ShouldMatchContract()
         {
-            var task = new PeriodicMissingMetadataSearchTask(Mock.Of<IMissingMetadataSearchService>());
+            var task = new PeriodicMissingMetadataSearchTask(Mock.Of<IMissingMetadataSearchService>(), Mock.Of<IPersonMissingImageRefillService>());
 
             Assert.AreEqual("MetaSharkPeriodicMissingMetadataSearch", task.Key);
             Assert.AreEqual("定时搜索缺失元数据", task.Name);
@@ -28,7 +28,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void GetDefaultTriggers_ShouldReturnSingleDailyMidnightTrigger()
         {
-            var task = new PeriodicMissingMetadataSearchTask(Mock.Of<IMissingMetadataSearchService>());
+            var task = new PeriodicMissingMetadataSearchTask(Mock.Of<IMissingMetadataSearchService>(), Mock.Of<IPersonMissingImageRefillService>());
             var triggers = task.GetDefaultTriggers().ToArray();
 
             Assert.AreEqual(1, triggers.Length);
@@ -44,6 +44,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var cancellationToken = cancellationTokenSource.Token;
             IProgress<double>? forwardedProgress = null;
             CancellationToken forwardedToken = default;
+            CancellationToken refillToken = default;
 
             var serviceStub = new Mock<IMissingMetadataSearchService>(MockBehavior.Strict);
             serviceStub
@@ -55,13 +56,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 })
                 .Returns(Task.CompletedTask);
 
-            var task = new PeriodicMissingMetadataSearchTask(serviceStub.Object);
+            var refillServiceStub = new Mock<IPersonMissingImageRefillService>(MockBehavior.Strict);
+            refillServiceStub
+                .Setup(x => x.QueueMissingImagesForFullLibraryScan(It.IsAny<CancellationToken>()))
+                .Callback<CancellationToken>(token => refillToken = token)
+                .Returns(new PersonMissingImageRefillScanSummary(0, 0, 0, "None"));
+
+            var task = new PeriodicMissingMetadataSearchTask(serviceStub.Object, refillServiceStub.Object);
 
             await task.ExecuteAsync(progress, cancellationToken).ConfigureAwait(false);
 
             Assert.AreSame(progress, forwardedProgress);
             Assert.AreEqual(cancellationToken, forwardedToken);
+            Assert.AreEqual(cancellationToken, refillToken);
             serviceStub.Verify(x => x.RunFullLibrarySearchAsync(progress, cancellationToken), Times.Once);
+            refillServiceStub.Verify(x => x.QueueMissingImagesForFullLibraryScan(cancellationToken), Times.Once);
         }
 
         [TestMethod]
@@ -73,6 +82,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var cancellationToken = cancellationTokenSource.Token;
             IProgress<double>? forwardedProgress = null;
             CancellationToken forwardedToken = default;
+            CancellationToken refillToken = default;
+            var refillServiceStub = new Mock<IPersonMissingImageRefillService>(MockBehavior.Strict);
+            refillServiceStub
+                .Setup(x => x.QueueMissingImagesForFullLibraryScan(It.IsAny<CancellationToken>()))
+                .Callback<CancellationToken>(token => refillToken = token)
+                .Returns(new PersonMissingImageRefillScanSummary(0, 0, 0, "None"));
 
             var serviceStub = new Mock<IMissingMetadataSearchService>(MockBehavior.Strict);
             serviceStub
@@ -88,14 +103,16 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     return Task.CompletedTask;
                 });
 
-            var task = new PeriodicMissingMetadataSearchTask(serviceStub.Object);
+            var task = new PeriodicMissingMetadataSearchTask(serviceStub.Object, refillServiceStub.Object);
 
             await Assert.ThrowsExceptionAsync<OperationCanceledException>(async () =>
                 await task.ExecuteAsync(progress, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
 
             Assert.AreSame(progress, forwardedProgress);
             Assert.AreEqual(cancellationToken, forwardedToken);
+            Assert.AreEqual(cancellationToken, refillToken);
             serviceStub.Verify(x => x.RunFullLibrarySearchAsync(progress, cancellationToken), Times.Once);
+            refillServiceStub.Verify(x => x.QueueMissingImagesForFullLibraryScan(cancellationToken), Times.Once);
         }
     }
 }

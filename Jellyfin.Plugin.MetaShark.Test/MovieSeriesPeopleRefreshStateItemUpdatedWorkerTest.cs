@@ -14,6 +14,7 @@ using Moq;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -87,6 +88,124 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(0, series.UpdateToRepositoryCallCount);
             Assert.AreEqual(0, stateStore.SaveCallCount);
             Assert.IsNull(stateStore.GetState(series.Id));
+        }
+
+        [TestMethod]
+        public async Task TryApplyAsync_PersonImageUpdateWithUsablePrimaryImage_ShouldQueueRelatedMovieAndSeriesRefresh()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            InternalItemsQuery? capturedQuery = null;
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var movie = CreateMovie(includeTmdb: true);
+            movie.SetSimulatedPeople(new[]
+            {
+                CreatePerson("1001", nameof(PersonKind.Actor), "角色A", "Actor A"),
+            });
+            var series = CreateSeries(includeTmdb: true);
+            series.SetSimulatedPeople(new[]
+            {
+                CreatePerson("1001", nameof(PersonKind.Actor), "角色A", "Actor A"),
+            });
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Callback<InternalItemsQuery>(query => capturedQuery = query)
+                .Returns(new List<BaseItem> { movie, series });
+
+            var queueCalls = new List<(Guid ItemId, MetadataRefreshOptions Options, RefreshPriority Priority)>();
+            var providerManagerStub = new Mock<IProviderManager>();
+            providerManagerStub
+                .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, options, priority) => queueCalls.Add((itemId, options, priority)));
+
+            var service = CreatePostProcessService(stateStore: stateStore, providerManager: providerManagerStub.Object, libraryManager: libraryManagerStub.Object);
+            var person = new Person
+            {
+                Id = Guid.NewGuid(),
+                Name = "Actor A",
+                Path = "/config/metadata/People/A/Actor A",
+            };
+            person.SetProviderId(MetadataProvider.Tmdb, "1001");
+            person.SetImagePath(ImageType.Primary, "https://example.com/actor-a.jpg");
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = person,
+                    UpdateReason = ItemUpdateType.ImageUpdate,
+                },
+                MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(capturedQuery);
+            CollectionAssert.AreEquivalent(new[] { BaseItemKind.Movie, BaseItemKind.Series }, capturedQuery!.IncludeItemTypes!.ToArray());
+            CollectionAssert.AreEquivalent(new[] { movie.Id, series.Id }, queueCalls.Select(call => call.ItemId).ToArray());
+            Assert.IsTrue(queueCalls.All(call => call.Options.MetadataRefreshMode == MetadataRefreshMode.FullRefresh));
+            Assert.IsTrue(queueCalls.All(call => call.Options.ImageRefreshMode == MetadataRefreshMode.FullRefresh));
+            Assert.IsTrue(queueCalls.All(call => !call.Options.ReplaceAllMetadata));
+            Assert.IsTrue(queueCalls.All(call => !call.Options.ReplaceAllImages));
+            Assert.IsTrue(queueCalls.All(call => call.Priority == RefreshPriority.Normal));
+        }
+
+        [TestMethod]
+        public async Task TryApplyAsync_PersonImageUpdateWithoutUsablePrimaryImage_ShouldNotQueueRelatedRefresh()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var providerManagerStub = new Mock<IProviderManager>();
+            var service = CreatePostProcessService(stateStore: stateStore, providerManager: providerManagerStub.Object, libraryManager: libraryManagerStub.Object);
+            var person = new Person
+            {
+                Id = Guid.NewGuid(),
+                Name = "Actor A",
+                Path = "/config/metadata/People/A/Actor A",
+            };
+            person.SetProviderId(MetadataProvider.Tmdb, "1001");
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = person,
+                    UpdateReason = ItemUpdateType.ImageUpdate,
+                },
+                MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
+                Times.Never);
+            libraryManagerStub.Verify(x => x.GetItemList(It.IsAny<InternalItemsQuery>()), Times.Never);
+            Assert.AreEqual(0, stateStore.SaveCallCount);
+        }
+
+        [TestMethod]
+        public async Task TryApplyAsync_PersonImageUpdateWithoutTmdbId_ShouldNotQueueRelatedRefresh()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var providerManagerStub = new Mock<IProviderManager>();
+            var service = CreatePostProcessService(stateStore: stateStore, providerManager: providerManagerStub.Object, libraryManager: libraryManagerStub.Object);
+            var person = new Person
+            {
+                Id = Guid.NewGuid(),
+                Name = "Actor A",
+                Path = "/config/metadata/People/A/Actor A",
+            };
+            person.SetImagePath(ImageType.Primary, "https://example.com/actor-a.jpg");
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = person,
+                    UpdateReason = ItemUpdateType.ImageUpdate,
+                },
+                MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
+                Times.Never);
+            libraryManagerStub.Verify(x => x.GetItemList(It.IsAny<InternalItemsQuery>()), Times.Never);
+            Assert.AreEqual(0, stateStore.SaveCallCount);
         }
 
         [TestMethod]
@@ -527,14 +646,30 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 messageContains: ["[MetaShark] 影视人物刷新状态后处理失败", "trigger=ItemUpdated", $"itemId={series.Id}", $"itemPath={series.Path}"]);
         }
 
-        private static MovieSeriesPeopleRefreshStatePostProcessService CreatePostProcessService(IPeopleRefreshStateStore? stateStore = null, IProviderManager? providerManager = null, IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore = null, ILogger<MovieSeriesPeopleRefreshStatePostProcessService>? logger = null)
+        private static MovieSeriesPeopleRefreshStatePostProcessService CreatePostProcessService(IPeopleRefreshStateStore? stateStore = null, IProviderManager? providerManager = null, IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore = null, ILogger<MovieSeriesPeopleRefreshStatePostProcessService>? logger = null, ILibraryManager? libraryManager = null)
         {
             return new MovieSeriesPeopleRefreshStatePostProcessService(
                 logger ?? new Mock<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>>().Object,
                 stateStore ?? new TestPeopleRefreshStateStore(),
                 providerManager,
                 overwriteRefreshCandidateStore,
-                new Mock<IFileSystem>().Object);
+                new Mock<IFileSystem>().Object,
+                libraryManager);
+        }
+
+        private static PersonInfo CreatePerson(string tmdbPersonId, string personTypeName, string role, string name)
+        {
+            var person = new PersonInfo
+            {
+                Name = name,
+                Role = role,
+            };
+
+            var typeProperty = typeof(PersonInfo).GetProperty("Type", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+            Assert.IsNotNull(typeProperty);
+            typeProperty!.SetValue(person, Enum.Parse(typeProperty.PropertyType, personTypeName, ignoreCase: false));
+            person.SetProviderId(MetadataProvider.Tmdb, tmdbPersonId);
+            return person;
         }
 
         private static Mock<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>> CreateEnabledPostProcessLogger()
@@ -646,6 +781,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 }
             }
 
+            public void SetSimulatedPeople(IEnumerable<PersonInfo> people)
+            {
+                this.simulatedPeople.Clear();
+                foreach (var person in people)
+                {
+                    this.simulatedPeople.Add(person);
+                }
+            }
+
             public override ItemUpdateType OnMetadataChanged()
             {
                 this.MetadataChangedCallCount++;
@@ -681,6 +825,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 for (var i = 0; i < count; i++)
                 {
                     this.simulatedPeople.Add(new object());
+                }
+            }
+
+            public void SetSimulatedPeople(IEnumerable<PersonInfo> people)
+            {
+                this.simulatedPeople.Clear();
+                foreach (var person in people)
+                {
+                    this.simulatedPeople.Add(person);
                 }
             }
 
