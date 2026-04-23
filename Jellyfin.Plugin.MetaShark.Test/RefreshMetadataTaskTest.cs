@@ -1,10 +1,13 @@
 using Jellyfin.Plugin.MetaShark.ScheduledTasks;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Providers;
+using Jellyfin.Plugin.MetaShark;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
@@ -127,6 +130,80 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+        [TestMethod]
+        public async Task ExecuteAsync_WhenItemsSpanEnabledAndDisabledLibraries_QueuesOnlyEnabledItems()
+        {
+            var enabledMoviePath = Path.GetTempFileName();
+            var enabledMovie = new Movie
+            {
+                Id = Guid.NewGuid(),
+                Name = "Enabled Movie",
+                Path = enabledMoviePath,
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [BaseProvider.DoubanProviderId] = "123456",
+                },
+            };
+            var disabledMovie = new Movie
+            {
+                Id = Guid.NewGuid(),
+                Name = "Disabled Movie",
+                ProviderIds = new Dictionary<string, string>(),
+            };
+
+            try
+            {
+                var loggerStub = CreateLoggerStub();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                    .Returns(new List<BaseItem> { enabledMovie, disabledMovie });
+
+                var queueCalls = new List<QueueRefreshCall>();
+                var providerManagerStub = new Mock<IProviderManager>();
+                providerManagerStub
+                    .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                    .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, options, priority) => queueCalls.Add(new QueueRefreshCall(itemId, options, priority)));
+
+                var progress = new ProgressRecorder();
+                var task = CreateTask(
+                    loggerStub.Object,
+                    libraryManagerStub.Object,
+                    providerManagerStub.Object,
+                    metadataAllowed: item => item.Id != disabledMovie.Id);
+
+                await task.ExecuteAsync(progress, CancellationToken.None).ConfigureAwait(false);
+
+                CollectionAssert.AreEqual(new[] { 100d }, progress.Values.ToArray());
+                CollectionAssert.AreEqual(new[] { enabledMovie.Id }, queueCalls.Select(x => x.ItemId).ToArray());
+                LogAssert.AssertLoggedOnce(
+                    loggerStub,
+                    LogLevel.Information,
+                    expectException: false,
+                    stateContains: new Dictionary<string, object?>
+                    {
+                        ["Count"] = 1,
+                    },
+                    originalFormatContains: "[MetaShark] 找到 {Count} 个待重新刮削条目",
+                    messageContains: ["[MetaShark] 找到 1 个待重新刮削条目"]);
+                LogAssert.AssertLoggedOnce(
+                    loggerStub,
+                    LogLevel.Debug,
+                    expectException: false,
+                    stateContains: new Dictionary<string, object?>
+                    {
+                        ["Name"] = "Enabled Movie",
+                        ["Id"] = enabledMovie.Id,
+                    },
+                    originalFormatContains: "[MetaShark] 已排队刷新条目",
+                    messageContains: ["[MetaShark] 已排队刷新条目", $"itemId={enabledMovie.Id}"]);
+            }
+            finally
+            {
+                File.Delete(enabledMoviePath);
+            }
+        }
+
         private static Mock<ILogger<RefreshMetadataTask>> CreateLoggerStub()
         {
             var loggerStub = new Mock<ILogger<RefreshMetadataTask>>();
@@ -137,9 +214,43 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private static RefreshMetadataTask CreateTask(
             ILogger<RefreshMetadataTask> logger,
             ILibraryManager libraryManager,
-            IProviderManager providerManager)
+            IProviderManager providerManager,
+            Func<BaseItem, bool>? metadataAllowed = null)
         {
+            ConfigureLibraryOptions(libraryManager, metadataAllowed);
             return new RefreshMetadataTask(logger, libraryManager, providerManager, Mock.Of<IFileSystem>());
+        }
+
+        private static void ConfigureLibraryOptions(ILibraryManager libraryManager, Func<BaseItem, bool>? metadataAllowed)
+        {
+            Mock.Get(libraryManager)
+                .Setup(x => x.GetLibraryOptions(It.IsAny<BaseItem>()))
+                .Returns<BaseItem>(item => CreateLibraryOptions(item, metadataAllowed?.Invoke(item) ?? true));
+        }
+
+        private static LibraryOptions CreateLibraryOptions(BaseItem item, bool metadataAllowed)
+        {
+            var itemType = item switch
+            {
+                Movie => nameof(Movie),
+                Series => nameof(Series),
+                Season => nameof(Season),
+                Episode => nameof(Episode),
+                _ => nameof(Movie),
+            };
+
+            return new LibraryOptions
+            {
+                TypeOptions = new[]
+                {
+                    new TypeOptions
+                    {
+                        Type = itemType,
+                        MetadataFetchers = metadataAllowed ? new[] { MetaSharkPlugin.PluginName } : Array.Empty<string>(),
+                        ImageFetchers = Array.Empty<string>(),
+                    },
+                },
+            };
         }
 
         private static void AssertNoLegacyProviderIdMessage(Mock<ILogger<RefreshMetadataTask>> loggerStub)

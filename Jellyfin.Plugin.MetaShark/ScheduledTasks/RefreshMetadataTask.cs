@@ -47,6 +47,7 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         private readonly IProviderManager providerManager;
 
         private readonly IFileSystem fileSystem;
+        private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemLibraryCapabilityResolver;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="RefreshMetadataTask"/> class.
@@ -61,6 +62,7 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
             this.libraryManager = libraryManager;
             this.providerManager = providerManager;
             this.fileSystem = fileSystem;
+            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
         }
 
         /// <inheritdoc />
@@ -139,10 +141,18 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
 
             var items = this.libraryManager.GetItemList(query);
 
-            return items.Where(item =>
-            (!item.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId) && !item.HasImage(ImageType.Primary)) ||
-             (File.Exists(item.Path) && !item.HasImage(ImageType.Primary)))
-            .ToList();
+            return items
+                .Where(item =>
+                    (((!item.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId) && !item.HasImage(ImageType.Primary))
+                    || (File.Exists(item.Path) && !item.HasImage(ImageType.Primary)))
+                    && this.IsMetadataAllowed(item)))
+                .ToList();
+        }
+
+        private bool IsMetadataAllowed(BaseItem item)
+        {
+            ArgumentNullException.ThrowIfNull(item);
+            return this.ordinaryItemLibraryCapabilityResolver.Resolve(item, MetaSharkLibraryCapability.Metadata).Allowed;
         }
     }
 }
