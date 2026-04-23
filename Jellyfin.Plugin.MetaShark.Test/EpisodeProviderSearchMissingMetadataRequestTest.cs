@@ -6,6 +6,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Workers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities.TV;
@@ -1037,11 +1038,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private static bool InvokeIsSearchMissingMetadataRefresh(string? metadataRefreshMode, string? replaceAllMetadata)
         {
-            var method = typeof(EpisodeProvider).GetMethod(
+            var method = typeof(EpisodeTitleBackfillRefreshClassifier).GetMethod(
                 "IsSearchMissingMetadataRefresh",
                 BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
 
-            Assert.IsNotNull(method, "EpisodeProvider.IsSearchMissingMetadataRefresh 未定义");
+            Assert.IsNotNull(method, "EpisodeTitleBackfillRefreshClassifier.IsSearchMissingMetadataRefresh 未定义");
 
             return (bool)method!.Invoke(null, new object?[] { metadataRefreshMode, replaceAllMetadata })!;
         }

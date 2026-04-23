@@ -1,5 +1,5 @@
 using Jellyfin.Plugin.MetaShark.Model;
-using Jellyfin.Plugin.MetaShark.Providers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using System.Reflection;
 
 namespace Jellyfin.Plugin.MetaShark.Test
@@ -10,7 +10,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldBackfillProviderTitle_WhenCanonicalizedSourceLanguageBecomesStrictZhCn()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宫", "ZH-cn"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宫", "ZH-cn"));
 
             Assert.AreEqual("皇后回宫", result);
         }
@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldKeepOriginalTitle_WhenOnlyBareZhSourceLanguageExistsWithoutExplicitTitleSourceLanguage()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宫", "zh"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宫", "zh"));
 
             Assert.AreEqual("第 1 集", result);
         }
@@ -26,7 +26,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldKeepOriginalTitle_WhenTitleSourceLanguageIsMissing()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宫", null));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宫", null));
 
             Assert.AreEqual("第 1 集", result);
         }
@@ -38,7 +38,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [DataRow("en")]
         public void ShouldKeepOriginalTitle_WhenSourceLanguageIsNotStrictZhCn(string language)
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宫", language));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宫", language));
 
             Assert.AreEqual("第 1 集", result);
         }
@@ -46,7 +46,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldKeepExistingNonTargetBehavior_WhenOriginalTitleIsNotDefaultJellyfinTitle()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("重逢", CreateLocalizedValue("Reunion", "zh-CN"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("重逢", CreateLocalizedValue("Reunion", "zh-CN"));
 
             Assert.AreEqual("Reunion", result);
         }
@@ -54,7 +54,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldKeepOriginalTitle_WhenProviderTitleIsWhitespaceUnderTrustedZhCnSource()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("   ", "zh-CN"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("   ", "zh-CN"));
 
             Assert.AreEqual("第 1 集", result);
         }
@@ -62,7 +62,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldBackfillProviderTitle_WhenSourceLanguageIsZhCnAndTitleUsesTraditionalCharacters()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宮", "zh-CN"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宮", "zh-CN"));
 
             Assert.AreEqual("皇后回宮", result);
         }
@@ -70,7 +70,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldBackfillProviderTitle_WhenSourceLanguageIsZhCnAndTitleUsesSharedGlyphs()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("千里之外", "zh-CN"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("千里之外", "zh-CN"));
 
             Assert.AreEqual("千里之外", result);
         }
@@ -78,7 +78,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldTrimProviderTitleBeforeAcceptingItUnderStrictZhCn()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("  皇后回宫  ", "zh-CN"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("  皇后回宫  ", "zh-CN"));
 
             Assert.AreEqual("皇后回宫", result);
         }
@@ -86,7 +86,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void ShouldKeepOriginalTitle_WhenTrimmedProviderTitleStillMatchesDefaultJellyfinTitleUnderStrictZhCn()
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("  第 1 集  ", "zh-CN"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("  第 1 集  ", "zh-CN"));
 
             Assert.AreEqual("第 1 集", result);
         }
@@ -96,7 +96,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [DataRow("Episode 1")]
         public void ShouldKeepOriginalTitle_WhenTrustedZhCnSourceStillReturnsGenericPlaceholderTitle(string providerTitle)
         {
-            var result = EpisodeProvider.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue(providerTitle, "zh-CN"));
+            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue(providerTitle, "zh-CN"));
 
             Assert.AreEqual("第 1 集", result);
         }
@@ -110,7 +110,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [DataRow("Episode 1", false)]
         public void ShouldMatchOnlyStrictDefaultJellyfinEpisodeTitleFormat(string title, bool expected)
         {
-            var result = EpisodeProvider.IsDefaultJellyfinEpisodeTitle(title);
+            var result = EpisodeTitleBackfillPolicy.IsDefaultJellyfinEpisodeTitle(title);
 
             Assert.AreEqual(expected, result);
         }
@@ -124,13 +124,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [DataRow("皇后回宫", false)]
         public void ShouldMatchOnlyGenericTmdbEpisodeTitleFormats(string title, bool expected)
         {
-            var method = typeof(EpisodeProvider).GetMethod(
-                "IsGenericTmdbEpisodeTitle",
-                BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
-
-            Assert.IsNotNull(method, "EpisodeProvider.IsGenericTmdbEpisodeTitle 未定义");
-
-            var result = (bool)method!.Invoke(null, new object?[] { title })!;
+            var result = EpisodeTitleBackfillPolicy.IsGenericTmdbEpisodeTitle(title);
 
             Assert.AreEqual(expected, result);
         }
@@ -149,6 +143,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = InvokeResolveSearchMissingMetadataTitleBackfillReason(false, true, Guid.NewGuid(), "第 1 集", CreateLocalizedValue("皇后回宫", "zh-CN"), "皇后回宫");
 
             Assert.AreEqual("FeatureDisabled", result);
+        }
+
+        [TestMethod]
+        public void ShouldReportRequestNotSearchMissingMetadataReason_WhenRequestIsNotSearchMissingMetadata()
+        {
+            var result = InvokeResolveSearchMissingMetadataTitleBackfillReason(true, false, Guid.NewGuid(), "第 1 集", CreateLocalizedValue("皇后回宫", "zh-CN"), "皇后回宫");
+
+            Assert.AreEqual("RequestNotSearchMissingMetadata", result);
         }
 
         [TestMethod]
@@ -241,11 +243,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private static bool InvokeShouldQueueSearchMissingMetadataTitleBackfill(bool featureEnabled, Guid itemId, string? originalMetadataTitle, string? resolvedTitle)
         {
-            var method = typeof(EpisodeProvider).GetMethod(
+            var method = typeof(EpisodeTitleBackfillRefreshClassifier).GetMethod(
                 "ShouldQueueSearchMissingMetadataTitleBackfill",
                 BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
 
-            Assert.IsNotNull(method, "EpisodeProvider.ShouldQueueSearchMissingMetadataTitleBackfill 未定义");
+            Assert.IsNotNull(method, "EpisodeTitleBackfillRefreshClassifier.ShouldQueueSearchMissingMetadataTitleBackfill 未定义");
 
             return (bool)method!.Invoke(null, new object?[] { featureEnabled, itemId, originalMetadataTitle, resolvedTitle })!;
         }
@@ -258,11 +260,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             EpisodeLocalizedValue? providerTitle,
             string? resolvedTitle)
         {
-            var method = typeof(EpisodeProvider).GetMethod(
+            var method = typeof(EpisodeTitleBackfillRefreshClassifier).GetMethod(
                 "ResolveSearchMissingMetadataTitleBackfillReason",
                 BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
 
-            Assert.IsNotNull(method, "EpisodeProvider.ResolveSearchMissingMetadataTitleBackfillReason 未定义");
+            Assert.IsNotNull(method, "EpisodeTitleBackfillRefreshClassifier.ResolveSearchMissingMetadataTitleBackfillReason 未定义");
 
             return method!.Invoke(null, new object?[] { featureEnabled, isSearchMissingMetadataRequest, itemId, originalMetadataTitle, providerTitle, resolvedTitle })!.ToString()!;
         }

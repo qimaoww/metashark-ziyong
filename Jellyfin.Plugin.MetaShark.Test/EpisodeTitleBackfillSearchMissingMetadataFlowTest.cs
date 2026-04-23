@@ -4,6 +4,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Workers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities.TV;
@@ -100,6 +101,19 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNull(harness.CandidateStore.Peek(harness.Episode.Id), "feature 关闭时 provider 不应入队 candidate。");
             Assert.AreEqual(0, harness.Persistence.SaveCallCount, "feature 关闭时 postprocess 不应触发持久化。");
             Assert.AreEqual("第 1 集", harness.Episode.Name, "feature 关闭时宿主 Episode 标题应保持默认值。");
+        }
+
+        [TestMethod]
+        public async Task SearchMissingMetadataFlow_NonSearchMissingRequest_DoesNotQueueOrApplyBackfill()
+        {
+            using var harness = CreateHarness(featureEnabled: true, metadataRefreshMode: "RefreshMetadata", replaceAllMetadata: "false");
+
+            _ = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+            await harness.TriggerItemUpdatedAsync(ItemUpdateType.MetadataDownload).ConfigureAwait(false);
+
+            Assert.IsNull(harness.CandidateStore.Peek(harness.Episode.Id), "非 search-missing 请求时 provider 不应入队 candidate。");
+            Assert.AreEqual(0, harness.Persistence.SaveCallCount, "非 search-missing 请求时 postprocess 不应触发持久化。");
+            Assert.AreEqual("第 1 集", harness.Episode.Name, "非 search-missing 请求时宿主 Episode 标题应保持默认值。");
         }
 
         [TestMethod]
