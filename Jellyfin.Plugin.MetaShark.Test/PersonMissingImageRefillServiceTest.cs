@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Jellyfin.Data.Enums;
@@ -130,6 +131,48 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 x => x.QueueRefresh(missingPerson.Id, It.IsAny<MetadataRefreshOptions>(), RefreshPriority.Normal),
                 Times.Once,
                 "缺少 TmDbId 的人物也应进入真实 refresh 执行路径，让 Douban-first 链路有机会补回。 ");
+        }
+
+        [TestMethod]
+        public void QueueMissingImagesForFullLibraryScan_TreatsDeletedLocalPrimaryAsMissing()
+        {
+            var person = new Person { Id = Guid.NewGuid(), Name = "Actor A", DateCreated = DateTime.UtcNow };
+            person.SetProviderId(MetadataProvider.Tmdb, "1001");
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"metashark-person-image-{Guid.NewGuid():N}.jpg");
+            File.WriteAllText(filePath, "test");
+            person.ImageInfos = new[]
+            {
+                new ItemImageInfo
+                {
+                    Type = ImageType.Primary,
+                    Path = filePath,
+                },
+            };
+
+            File.Delete(filePath);
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem> { person });
+
+            var stateStore = new TestPersonImageRefillStateStore();
+            var providerManagerStub = new Mock<IProviderManager>();
+            var service = this.CreateService(libraryManagerStub.Object, providerManagerStub.Object, stateStore);
+
+            var summary = service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
+            var state = stateStore.GetState(person.Id);
+
+            Assert.AreEqual(1, summary.CandidateCount);
+            Assert.AreEqual(1, summary.QueuedCount);
+            Assert.AreEqual(0, summary.SkippedCount);
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(person.Id, It.IsAny<MetadataRefreshOptions>(), RefreshPriority.Normal),
+                Times.Once,
+                "本地主图文件已经被删掉时，应重新把人物视为缺图并排队刷新。 ");
+            Assert.IsNotNull(state);
+            Assert.AreEqual(PersonImageRefillStatus.Pending, state!.Status);
         }
 
         [TestMethod]

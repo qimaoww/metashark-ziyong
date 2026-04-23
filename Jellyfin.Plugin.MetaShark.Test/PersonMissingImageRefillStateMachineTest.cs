@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Jellyfin.Plugin.MetaShark.Model;
@@ -153,6 +154,98 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void QueueMissingImagesForUpdatedItem_QueuesRefreshWhenImageUpdateStillLacksPrimaryImageWithoutExistingPendingState()
+        {
+            var person = new Person { Id = Guid.NewGuid(), Name = "Actor A" };
+            person.SetProviderId(MetadataProvider.Tmdb, "1001");
+
+            var stateStore = new TestPersonImageRefillStateStore();
+            var service = this.CreateService(new List<BaseItem>(), stateStore, out var providerManagerStub);
+
+            service.QueueMissingImagesForUpdatedItem(
+                new ItemChangeEventArgs
+                {
+                    Item = person,
+                    UpdateReason = ItemUpdateType.ImageUpdate,
+                },
+                CancellationToken.None);
+
+            var state = stateStore.GetState(person.Id);
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(person.Id, It.IsAny<MetadataRefreshOptions>(), RefreshPriority.Normal),
+                Times.Once);
+            Assert.IsNotNull(state);
+            Assert.AreEqual(PersonImageRefillStatus.Pending, state!.Status);
+            Assert.AreEqual("QueuedRefresh", state.LastReason);
+        }
+
+        [TestMethod]
+        public void QueueMissingImagesForUpdatedItem_TreatsCombinedImageUpdateFlagsAsImageUpdate()
+        {
+            var person = new Person { Id = Guid.NewGuid(), Name = "Actor A" };
+            person.SetProviderId(MetadataProvider.Tmdb, "1001");
+
+            var stateStore = new TestPersonImageRefillStateStore();
+            var service = this.CreateService(new List<BaseItem>(), stateStore, out var providerManagerStub);
+
+            service.QueueMissingImagesForUpdatedItem(
+                new ItemChangeEventArgs
+                {
+                    Item = person,
+                    UpdateReason = ItemUpdateType.MetadataImport | ItemUpdateType.ImageUpdate,
+                },
+                CancellationToken.None);
+
+            var state = stateStore.GetState(person.Id);
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(person.Id, It.IsAny<MetadataRefreshOptions>(), RefreshPriority.Normal),
+                Times.Once,
+                "组合 UpdateReason 里只要包含 ImageUpdate，就应该走人物缺图补图分支。 ");
+            Assert.IsNotNull(state);
+            Assert.AreEqual(PersonImageRefillStatus.Pending, state!.Status);
+            Assert.AreEqual("QueuedRefresh", state.LastReason);
+        }
+
+        [TestMethod]
+        public void QueueMissingImagesForUpdatedItem_QueuesRefreshWhenImageUpdateOnlyHasDeletedLocalPrimary()
+        {
+            var person = new Person { Id = Guid.NewGuid(), Name = "Actor A", DateCreated = DateTime.UtcNow };
+            person.SetProviderId(MetadataProvider.Tmdb, "1001");
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"metashark-person-image-{Guid.NewGuid():N}.jpg");
+            File.WriteAllText(filePath, "test");
+            person.ImageInfos = new[]
+            {
+                new ItemImageInfo
+                {
+                    Type = ImageType.Primary,
+                    Path = filePath,
+                },
+            };
+
+            File.Delete(filePath);
+
+            var stateStore = new TestPersonImageRefillStateStore();
+            var service = this.CreateService(new List<BaseItem>(), stateStore, out var providerManagerStub);
+
+            service.QueueMissingImagesForUpdatedItem(
+                new ItemChangeEventArgs
+                {
+                    Item = person,
+                    UpdateReason = ItemUpdateType.ImageUpdate,
+                },
+                CancellationToken.None);
+
+            var state = stateStore.GetState(person.Id);
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(person.Id, It.IsAny<MetadataRefreshOptions>(), RefreshPriority.Normal),
+                Times.Once);
+            Assert.IsNotNull(state);
+            Assert.AreEqual(PersonImageRefillStatus.Pending, state!.Status);
+            Assert.AreEqual("QueuedRefresh", state.LastReason);
+        }
+
+        [TestMethod]
         public void QueueMissingImagesForUpdatedItem_NoTmdbId_RemainsRetryableAndNotCompletedAfterImageUpdate()
         {
             var person = new Person { Id = Guid.NewGuid(), Name = "Actor A" };
@@ -203,6 +296,35 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var state = stateStore.GetState(person.Id);
             Assert.IsNotNull(state);
             Assert.AreEqual(PersonImageRefillStatus.Completed, state!.Status);
+            Assert.AreEqual("PrimaryImagePresent", state.LastReason);
+        }
+
+        [TestMethod]
+        public void MarkCompleted_DoesNotCompleteWhenPrimaryImageFileHasBeenDeleted()
+        {
+            var person = new Person { Id = Guid.NewGuid(), Name = "Actor A", DateCreated = DateTime.UtcNow };
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"metashark-person-image-{Guid.NewGuid():N}.jpg");
+            File.WriteAllText(filePath, "test");
+            person.ImageInfos = new[]
+            {
+                new ItemImageInfo
+                {
+                    Type = ImageType.Primary,
+                    Path = filePath,
+                },
+            };
+
+            File.Delete(filePath);
+
+            var stateStore = new TestPersonImageRefillStateStore();
+            var service = this.CreateService(new List<BaseItem>(), stateStore, out _);
+
+            service.MarkCompleted(person, "PrimaryImagePresent");
+
+            var state = stateStore.GetState(person.Id);
+            Assert.IsNotNull(state);
+            Assert.AreEqual(PersonImageRefillStatus.Pending, state!.Status);
             Assert.AreEqual("PrimaryImagePresent", state.LastReason);
         }
 

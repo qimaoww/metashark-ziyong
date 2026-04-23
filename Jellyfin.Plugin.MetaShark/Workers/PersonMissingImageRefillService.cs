@@ -100,15 +100,19 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            if (e.UpdateReason == ItemUpdateType.ImageUpdate)
+            if (e.UpdateReason.HasFlag(ItemUpdateType.ImageUpdate))
             {
-                if (person.HasImage(ImageType.Primary))
+                if (HasUsablePrimaryImage(person))
                 {
                     this.MarkCompleted(person, "ImageUpdateCompleted");
                 }
                 else
                 {
-                    this.MarkRetryable(person, "PrimaryImageStillMissingAfterImageUpdate");
+                    var skippedReason = this.QueueIfMissing(person);
+                    if (skippedReason is not null)
+                    {
+                        this.MarkRetryable(person, "PrimaryImageStillMissingAfterImageUpdate");
+                    }
                 }
 
                 return;
@@ -129,7 +133,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             var currentState = this.stateStore.GetState(person.Id);
             var currentFingerprint = CreateFingerprint(person);
             var now = DateTimeOffset.UtcNow;
-            if (!person.HasImage(ImageType.Primary))
+            if (!HasUsablePrimaryImage(person))
             {
                 this.stateStore.Save(new PersonImageRefillState
                 {
@@ -163,7 +167,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            if (person.HasImage(ImageType.Primary))
+            if (HasUsablePrimaryImage(person))
             {
                 this.MarkCompleted(person, "PrimaryImagePresent");
                 return;
@@ -222,6 +226,47 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return string.Join("|", person.Name ?? string.Empty, tmdbId, doubanId);
         }
 
+        private static bool HasUsablePrimaryImage(Person person)
+        {
+            ArgumentNullException.ThrowIfNull(person);
+
+            if (!person.HasImage(ImageType.Primary))
+            {
+                return false;
+            }
+
+            return HasValidImagePath(person.GetImagePath(ImageType.Primary, 0));
+        }
+
+        private static bool HasValidImagePath(string? imagePath)
+        {
+            if (string.IsNullOrWhiteSpace(imagePath))
+            {
+                return false;
+            }
+
+            var candidates = imagePath
+                .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(path => !string.IsNullOrWhiteSpace(path));
+
+            return candidates.Any(IsValidImageCandidate);
+        }
+
+        private static bool IsValidImageCandidate(string path)
+        {
+            if (Uri.TryCreate(path, UriKind.Absolute, out var uri))
+            {
+                if (uri.IsFile)
+                {
+                    return File.Exists(uri.LocalPath);
+                }
+
+                return true;
+            }
+
+            return File.Exists(path);
+        }
+
         private List<Person> GetPersonsForRefill()
         {
             var query = new InternalItemsQuery
@@ -235,7 +280,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return this.libraryManager
                 .GetItemList(query)
                 .OfType<Person>()
-                .Where(person => !person.HasImage(ImageType.Primary))
+                .Where(person => !HasUsablePrimaryImage(person))
                 .ToList();
         }
 
