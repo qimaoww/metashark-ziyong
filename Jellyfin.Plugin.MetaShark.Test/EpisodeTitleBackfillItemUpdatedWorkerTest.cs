@@ -1,6 +1,7 @@
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
@@ -90,9 +91,36 @@ namespace Jellyfin.Plugin.MetaShark.Test
             postProcessServiceStub.Verify(
                 x => x.TryApplyAsync(
                     It.Is<ItemChangeEventArgs>(e => e.Item == episode && e.UpdateReason == ItemUpdateType.MetadataImport),
-                    IEpisodeTitleBackfillPostProcessService.ItemUpdatedTrigger,
+                IEpisodeTitleBackfillPostProcessService.ItemUpdatedTrigger,
                     CancellationToken.None),
                 Times.Once);
+        }
+
+        [TestMethod]
+        public async Task StopAsync_UnsubscribesItemUpdatedEvent()
+        {
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var postProcessServiceStub = new Mock<IEpisodeTitleBackfillPostProcessService>();
+            var loggerStub = new Mock<ILogger<EpisodeTitleBackfillItemUpdatedWorker>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var worker = new EpisodeTitleBackfillItemUpdatedWorker(libraryManagerStub.Object, postProcessServiceStub.Object, loggerStub.Object);
+
+            await worker.StartAsync(CancellationToken.None).ConfigureAwait(false);
+            await worker.StopAsync(CancellationToken.None).ConfigureAwait(false);
+
+            libraryManagerStub.Raise(
+                x => x.ItemUpdated += null,
+                libraryManagerStub.Object,
+                new ItemChangeEventArgs
+                {
+                    Item = new Episode { Id = Guid.NewGuid(), Name = "Episode D", Path = "/library/tv/series-a/Season 01/episode-d.mkv" },
+                    UpdateReason = ItemUpdateType.MetadataImport,
+                });
+
+            postProcessServiceStub.Verify(
+                x => x.TryApplyAsync(It.IsAny<ItemChangeEventArgs>(), IEpisodeTitleBackfillPostProcessService.ItemUpdatedTrigger, CancellationToken.None),
+                Times.Never);
         }
 
         [TestMethod]

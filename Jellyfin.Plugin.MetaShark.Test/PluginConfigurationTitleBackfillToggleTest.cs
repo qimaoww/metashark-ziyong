@@ -33,6 +33,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void ShouldReadBackFalseAfterSettingTitleBackfillToggle()
+        {
+            var configuration = new PluginConfiguration();
+            var property = typeof(PluginConfiguration).GetProperty(PropertyName, BindingFlags.Public | BindingFlags.Instance);
+
+            Assert.IsNotNull(property, $"PluginConfiguration.{PropertyName} 未定义");
+
+            property.SetValue(configuration, false);
+
+            Assert.AreEqual(false, property.GetValue(configuration));
+            Assert.IsTrue(configuration.EnableTmdb);
+        }
+
+        [TestMethod]
         public void ShouldKeepEnableTmdbDefaultTrueAfterSettingTitleBackfillToggle()
         {
             var configuration = new PluginConfiguration();

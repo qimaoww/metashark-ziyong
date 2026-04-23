@@ -1,6 +1,7 @@
 using System;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Workers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -19,6 +20,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             var peeked = PeekCandidate(store, itemId);
 
+            AssertCandidate(candidate, peeked);
+        }
+
+        [TestMethod]
+        public void Save_ClearsClaimToken_AndPeekReturnsClone()
+        {
+            var itemId = Guid.NewGuid();
+            var nowUtc = DateTimeOffset.UtcNow;
+            var candidate = CreatePathAwareCandidate(
+                itemId,
+                "/library/tv/series-a/Season 01/episode-01.mkv",
+                nowUtc.AddMinutes(-1),
+                nowUtc.AddMinutes(10),
+                attemptCount: 0,
+                nowUtc.AddMinutes(10),
+                originalTitleSnapshot: "第 1 集",
+                candidateTitle: "皇后回宫");
+            SetRequiredProperty(candidate, "ClaimToken", "claim-before-save");
+            var store = new InMemoryEpisodeTitleBackfillCandidateStore();
+
+            store.Save(candidate);
+
+            var peeked = PeekCandidate(store, itemId);
+
+            Assert.AreEqual(string.Empty, ReadString(candidate, "ClaimToken"), "Save 应该清空传入 candidate 的 claim token，延续当前保存行为。\n");
+            Assert.IsNotNull(peeked);
+            Assert.AreEqual(string.Empty, ReadString(peeked!, "ClaimToken"), "Peek 返回的副本应保持未 claim 状态。");
             AssertCandidate(candidate, peeked);
         }
 
@@ -106,6 +134,32 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void PeekByPath_ReturnsCandidateWithoutRemoving()
+        {
+            var itemId = Guid.NewGuid();
+            var itemPath = "/library/tv/series-a/Season 01/episode-01.mkv";
+            var nowUtc = DateTimeOffset.UtcNow;
+            var candidate = CreatePathAwareCandidate(
+                itemId,
+                itemPath,
+                nowUtc.AddMinutes(-1),
+                nowUtc.AddMinutes(10),
+                attemptCount: 0,
+                nowUtc.AddMinutes(10),
+                originalTitleSnapshot: "第 1 集",
+                candidateTitle: "皇后回宫");
+            var store = new InMemoryEpisodeTitleBackfillCandidateStore();
+
+            store.Save(candidate);
+
+            var firstPeek = PeekCandidateByPath(store, itemPath);
+            var secondPeek = PeekCandidateByPath(store, itemPath);
+
+            AssertCandidate(candidate, firstPeek);
+            AssertCandidate(candidate, secondPeek);
+        }
+
+        [TestMethod]
         public void Remove_DeletesCandidateAfterSuccessfulPeek()
         {
             var itemId = Guid.NewGuid();
@@ -136,6 +190,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var peeked = PeekCandidate(store, itemId);
 
             Assert.IsNull(peeked);
+        }
+
+        [TestMethod]
+        public void PeekByPath_ExpiredCandidate_ReturnsNullAndClearsCandidate()
+        {
+            var itemId = Guid.NewGuid();
+            var itemPath = "/library/tv/series-a/Season 01/episode-01.mkv";
+            var nowUtc = DateTimeOffset.UtcNow;
+            var candidate = CreatePathAwareCandidate(
+                itemId,
+                itemPath,
+                nowUtc.AddMinutes(-10),
+                nowUtc.AddMinutes(-1),
+                attemptCount: 1,
+                nowUtc.AddMinutes(-1),
+                originalTitleSnapshot: "第 1 集",
+                candidateTitle: "皇后回宫");
+            var store = new InMemoryEpisodeTitleBackfillCandidateStore();
+
+            store.Save(candidate);
+
+            var firstPeek = PeekCandidateByPath(store, itemPath);
+            var secondPeek = PeekCandidateByPath(store, itemPath);
+
+            Assert.IsNull(firstPeek);
+            Assert.IsNull(secondPeek);
+            Assert.IsNull(PeekCandidate(store, itemId), "过期 candidate 应从 itemId 索引中清理。");
         }
 
         [TestMethod]

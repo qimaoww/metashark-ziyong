@@ -5,6 +5,7 @@ using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
@@ -75,6 +76,42 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(1, persistence.SaveCallCount, "deferred retry 应命中同一个 post-process apply 路径。");
             Assert.IsNull(candidateStore.Peek(recreatedEpisode.Id), "成功应用后应清除当前 itemId 对应的 candidate。");
             Assert.IsNull(PeekCandidateByPath(candidateStore, itemPath), "成功应用后路径索引也应被清空。");
+        }
+
+        [TestMethod]
+        public async Task ExecuteDueCycleAsync_WhenResolverCannotFindCurrentEpisode_MarksDeferredAttemptAndSkipsApply()
+        {
+            SetFeatureEnabled(true);
+
+            var nowUtc = DateTimeOffset.UtcNow;
+            var itemId = Guid.NewGuid();
+            var itemPath = "/library/tv/series-a/Season 01/episode-missing.mkv";
+            var candidateStore = new InMemoryEpisodeTitleBackfillCandidateStore();
+            var candidate = CreatePathAwareCandidate(itemId, itemPath, nowUtc.AddMinutes(-1), nowUtc.AddSeconds(-1), 0, nowUtc.AddMinutes(2));
+            candidateStore.Save(candidate);
+
+            var pendingResolverStub = new Mock<IEpisodeTitleBackfillPendingResolver>();
+            pendingResolverStub
+                .Setup(x => x.ResolveCurrentEpisode(candidate))
+                .Returns((Episode?)null);
+
+            var postProcessServiceStub = new Mock<IEpisodeTitleBackfillPostProcessService>();
+            var loggerStub = new Mock<ILogger<EpisodeTitleBackfillDeferredRetryWorker>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var worker = new EpisodeTitleBackfillDeferredRetryWorker(
+                candidateStore,
+                pendingResolverStub.Object,
+                postProcessServiceStub.Object,
+                loggerStub.Object);
+
+            await ExecuteDueCycleAsync(worker, nowUtc).ConfigureAwait(false);
+
+            pendingResolverStub.Verify(x => x.ResolveCurrentEpisode(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Once);
+            pendingResolverStub.Verify(x => x.MarkDeferredAttempt(It.IsAny<EpisodeTitleBackfillCandidate>(), nowUtc), Times.Once);
+            postProcessServiceStub.Verify(
+                x => x.TryApplyAsync(It.IsAny<ItemChangeEventArgs>(), IEpisodeTitleBackfillPostProcessService.DeferredRetryTrigger, CancellationToken.None),
+                Times.Never);
         }
 
         [TestMethod]
@@ -349,7 +386,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private static Type GetWorkerType()
         {
-            var workerType = typeof(EpisodeTitleBackfillItemUpdatedWorker).Assembly.GetType("Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfillDeferredRetryWorker");
+            var workerType = typeof(EpisodeTitleBackfillItemUpdatedWorker).Assembly.GetType("Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill.EpisodeTitleBackfillDeferredRetryWorker");
             Assert.IsNotNull(workerType, "Expected EpisodeTitleBackfillDeferredRetryWorker type for deferred compensation.");
             return workerType!;
         }

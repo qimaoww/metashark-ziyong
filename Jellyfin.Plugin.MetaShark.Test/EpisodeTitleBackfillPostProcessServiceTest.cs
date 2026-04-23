@@ -3,6 +3,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
@@ -89,6 +90,29 @@ namespace Jellyfin.Plugin.MetaShark.Test
             candidateStoreStub.Verify(x => x.Peek(episode.Id), Times.Once);
             candidateStoreStub.Verify(x => x.Remove(episode.Id, episode.Path), Times.Once);
             persistenceStub.Verify(x => x.SaveAsync(episode, CancellationToken.None), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task ProcessUpdatedItemAsync_MetadataDownloadWithWhitespaceCandidateTitle_PreservesRawSavedTitle()
+        {
+            SetFeatureEnabled(true);
+
+            var episode = CreateEpisode("第 1 集");
+            var candidateStore = new InMemoryEpisodeTitleBackfillCandidateStore();
+            candidateStore.Save(CreateCandidate(episode.Id, "第 1 集", "  皇后回宫  "));
+
+            var persistenceStub = new Mock<IEpisodeTitleBackfillPersistence>();
+            persistenceStub
+                .Setup(x => x.SaveAsync(episode, CancellationToken.None))
+                .Returns(Task.CompletedTask);
+
+            var service = CreateService(candidateStore, persistenceStub.Object, out var loggerStub);
+
+            await service.ProcessUpdatedItemAsync(CreateUpdate(episode, ItemUpdateType.MetadataDownload), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual("  皇后回宫  ", episode.Name);
+            persistenceStub.Verify(x => x.SaveAsync(episode, CancellationToken.None), Times.Once);
+            AssertAppliedLog(loggerStub, episode.Id, episode.Path!, "第 1 集", "皇后回宫", ItemUpdateType.MetadataDownload);
         }
 
         [TestMethod]

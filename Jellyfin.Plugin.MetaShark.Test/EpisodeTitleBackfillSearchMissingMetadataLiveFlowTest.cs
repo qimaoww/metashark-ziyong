@@ -4,6 +4,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Workers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities.TV;
@@ -59,6 +60,24 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 "皇后回宫",
                 harness.Episode.Name,
                 "task 3 后即使 live refresh 没有稳定送达 ItemUpdated，也应依靠 deferred retry 在同进程窗口内完成标题回填。");
+        }
+
+        [TestMethod]
+        public async Task SearchMissingMetadataFlow_WhenItemUpdatedArrivesBackfillsImmediatelyAndClearsQueue()
+        {
+            using var harness = this.CreateHarness(featureEnabled: true);
+
+            _ = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+            var queuedCandidate = harness.CandidateStore.Peek(harness.Episode.Id);
+
+            Assert.IsNotNull(queuedCandidate, "provider 必须先入队 candidate，ItemUpdated 才能验证 live 回填链路。");
+
+            await harness.TriggerItemUpdatedAsync(harness.Episode, ItemUpdateType.MetadataDownload).ConfigureAwait(false);
+
+            Assert.AreEqual("皇后回宫", harness.Episode.Name, "ItemUpdated 到达时应立即完成标题回填，而不是等待 deferred retry。");
+            Assert.AreEqual(1, harness.Persistence.SaveCallCount, "live ItemUpdated 链路应直接持久化一次。");
+            Assert.IsNull(harness.CandidateStore.Peek(harness.Episode.Id), "成功应用后不应残留 itemId work item。");
+            Assert.IsNull(harness.CandidateStore.PeekByPath(harness.Info.Path), "成功应用后路径索引也应清空。");
         }
 
         [TestMethod]
