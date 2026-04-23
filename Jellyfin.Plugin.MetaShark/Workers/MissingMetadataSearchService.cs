@@ -62,6 +62,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private readonly IPeopleRefreshStateStore peopleRefreshStateStore;
         private readonly IProviderManager providerManager;
         private readonly IFileSystem fileSystem;
+        private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemLibraryCapabilityResolver;
+        private readonly MetaSharkSharedEntityLibraryCapabilityResolver sharedEntityLibraryCapabilityResolver;
         private readonly Func<TimeSpan, CancellationToken, Task> delayAsync;
         private int isRunning;
 
@@ -95,6 +97,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.peopleRefreshStateStore = peopleRefreshStateStore;
             this.providerManager = providerManager;
             this.fileSystem = fileSystem;
+            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
+            this.sharedEntityLibraryCapabilityResolver = new MetaSharkSharedEntityLibraryCapabilityResolver(libraryManager);
             this.delayAsync = delayAsync;
         }
 
@@ -221,7 +225,23 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private List<BaseItem> GetMissingMetadataCandidates()
         {
             var items = this.libraryManager.GetItemList(CreateFullLibraryQuery());
-            return items.FindAll(item => IsMissingMetadataSearchCandidate(item, this.peopleRefreshStateStore.GetState(item.Id)));
+            return items.FindAll(item =>
+                IsMissingMetadataSearchCandidate(item, this.peopleRefreshStateStore.GetState(item.Id))
+                && this.IsMetadataAllowed(item));
+        }
+
+        private bool IsMetadataAllowed(BaseItem item)
+        {
+            ArgumentNullException.ThrowIfNull(item);
+
+            if (MetaSharkOrdinaryItemLibraryCapabilityResolver.TryResolveItemType(item, out _))
+            {
+                return this.ordinaryItemLibraryCapabilityResolver.Resolve(item, MetaSharkLibraryCapability.Metadata).Allowed;
+            }
+
+            return item is BoxSet boxSet
+                ? this.sharedEntityLibraryCapabilityResolver.Resolve(boxSet, MetaSharkLibraryCapability.Metadata).Allowed
+                : false;
         }
     }
 }

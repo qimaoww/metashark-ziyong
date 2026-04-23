@@ -1,10 +1,18 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Plugin.MetaShark.ScheduledTasks;
 using Jellyfin.Plugin.MetaShark.Workers;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Configuration;
+using MediaBrowser.Model.IO;
+using Microsoft.Extensions.Logging;
 using MediaBrowser.Model.Tasks;
 using Moq;
 
@@ -113,6 +121,90 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(cancellationToken, refillToken);
             serviceStub.Verify(x => x.RunFullLibrarySearchAsync(progress, cancellationToken), Times.Once);
             refillServiceStub.Verify(x => x.QueueMissingImagesForFullLibraryScan(cancellationToken), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task ExecuteAsync_WhenDownstreamSearchContainsDisabledLibraries_StillInvokesServicesButQueuesOnlyEnabledRefreshes()
+        {
+            var enabledMovie = CreateMovieCandidate("Enabled Movie");
+            var disabledMovie = CreateMovieCandidate("Disabled Movie");
+            var progress = new ProgressRecorder();
+            var queuedItemIds = new List<Guid>();
+            CancellationToken refillToken = default;
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem> { enabledMovie, disabledMovie });
+            libraryManagerStub
+                .Setup(x => x.GetLibraryOptions(It.IsAny<BaseItem>()))
+                .Returns<BaseItem>(item => CreateLibraryOptions(item.Id == enabledMovie.Id));
+
+            var providerManagerStub = new Mock<IProviderManager>();
+            providerManagerStub
+                .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, _, _) => queuedItemIds.Add(itemId));
+
+            var searchService = new MissingMetadataSearchService(
+                Mock.Of<ILogger<MissingMetadataSearchService>>(),
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                Mock.Of<IFileSystem>(),
+                new TestPeopleRefreshStateStore(),
+                (_, _) => Task.CompletedTask);
+
+            var refillServiceStub = new Mock<IPersonMissingImageRefillService>(MockBehavior.Strict);
+            refillServiceStub
+                .Setup(x => x.QueueMissingImagesForFullLibraryScan(It.IsAny<CancellationToken>()))
+                .Callback<CancellationToken>(token => refillToken = token)
+                .Returns(new PersonMissingImageRefillScanSummary(0, 0, 0, "None"));
+
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var cancellationToken = cancellationTokenSource.Token;
+            var task = new PeriodicMissingMetadataSearchTask(searchService, refillServiceStub.Object);
+
+            await task.ExecuteAsync(progress, cancellationToken).ConfigureAwait(false);
+
+            Assert.AreEqual(cancellationToken, refillToken);
+            CollectionAssert.AreEqual(new[] { enabledMovie.Id }, queuedItemIds.ToArray());
+            CollectionAssert.AreEqual(new[] { 100d }, progress.Values.ToArray());
+            refillServiceStub.Verify(x => x.QueueMissingImagesForFullLibraryScan(cancellationToken), Times.Once);
+        }
+
+        private static Movie CreateMovieCandidate(string name)
+        {
+            return new Movie
+            {
+                Id = Guid.NewGuid(),
+                Name = name,
+                ProviderIds = new Dictionary<string, string>(),
+                Overview = "Movie overview",
+            };
+        }
+
+        private static LibraryOptions CreateLibraryOptions(bool metadataAllowed)
+        {
+            return new LibraryOptions
+            {
+                TypeOptions = new[]
+                {
+                    new TypeOptions
+                    {
+                        Type = nameof(Movie),
+                        MetadataFetchers = metadataAllowed ? new[] { MetaSharkPlugin.PluginName } : Array.Empty<string>(),
+                        ImageFetchers = Array.Empty<string>(),
+                    },
+                },
+            };
+        }
+
+        private sealed class ProgressRecorder : IProgress<double>
+        {
+            public List<double> Values { get; } = new();
+
+            public void Report(double value)
+            {
+                this.Values.Add(value);
+            }
         }
     }
 }

@@ -1,9 +1,11 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Workers;
@@ -12,6 +14,7 @@ using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
@@ -25,6 +28,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
     [TestCategory("Stable")]
     public class PeriodicMissingMetadataSearchServiceTest
     {
+        private const BindingFlags InstanceMemberBindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
         [TestMethod]
         public void ResolveMissingMetadataCandidateReason_ShouldMatchMissingProviderIds()
         {
@@ -469,6 +474,107 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task RunFullLibrarySearchAsync_WhenCandidatesSpanEnabledAndDisabledLibraries_ShouldQueueOnlyEnabledOrdinaryItems()
+        {
+            var enabledMovie = CreateItem<Movie>("Enabled Movie Missing Provider", includeProviderIds: false, includeOverview: true, includePrimaryImage: true);
+            var disabledSeries = CreateItem<Series>("Disabled Series Missing Overview", includeProviderIds: true, includeOverview: false, includePrimaryImage: true);
+            var enabledEpisode = CreateItem<Episode>("第 1 集", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+            var queueInvocations = new List<QueueRefreshInvocation>();
+            var delayInvocations = new List<DelayInvocation>();
+            var progress = new ProgressRecorder();
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem> { enabledMovie, disabledSeries, enabledEpisode });
+
+            var providerManagerStub = new Mock<IProviderManager>();
+            providerManagerStub
+                .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, options, priority) =>
+                    queueInvocations.Add(new QueueRefreshInvocation
+                    {
+                        ItemId = itemId,
+                        Options = options,
+                        Priority = priority,
+                    }));
+
+            var service = CreateService(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                delayAsync: (delay, token) =>
+                {
+                    delayInvocations.Add(new DelayInvocation { Delay = delay, CancellationToken = token });
+                    return Task.CompletedTask;
+                },
+                metadataAllowed: item => item.Id != disabledSeries.Id);
+
+            await service.RunFullLibrarySearchAsync(progress, CancellationToken.None).ConfigureAwait(false);
+
+            CollectionAssert.AreEqual(
+                new[] { enabledMovie.Id, enabledEpisode.Id },
+                queueInvocations.Select(x => x.ItemId).ToArray());
+            Assert.AreEqual(2, delayInvocations.Count);
+            Assert.AreEqual(2, progress.Values.Count);
+            Assert.AreEqual(100d, progress.Values[^1], 0.000001d);
+            Assert.IsTrue(delayInvocations.All(x => x.Delay == TimeSpan.FromSeconds(5)));
+        }
+
+        [TestMethod]
+        public async Task RunFullLibrarySearchAsync_WhenBoxSetCandidatesSpanMixedAndDisabledLibraries_ShouldQueueOnlyMetadataAllowedBoxSets()
+        {
+            var enabledLinkedMovie = CreateItem<Movie>("Enabled Linked Movie", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+            var disabledLinkedMovie = CreateItem<Movie>("Disabled Linked Movie", includeProviderIds: true, includeOverview: true, includePrimaryImage: true);
+            var mixedBoxSet = CreateLinkedBoxSetCandidate("Mixed BoxSet Candidate", enabledLinkedMovie, disabledLinkedMovie);
+            var disabledOnlyBoxSet = CreateLinkedBoxSetCandidate("Disabled Only BoxSet Candidate", disabledLinkedMovie);
+            var queueInvocations = new List<QueueRefreshInvocation>();
+            var delayInvocations = new List<DelayInvocation>();
+            var progress = new ProgressRecorder();
+            var itemsById = new Dictionary<Guid, BaseItem>
+            {
+                [enabledLinkedMovie.Id] = enabledLinkedMovie,
+                [disabledLinkedMovie.Id] = disabledLinkedMovie,
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem> { mixedBoxSet, disabledOnlyBoxSet });
+            libraryManagerStub
+                .Setup(x => x.GetItemById(It.IsAny<Guid>()))
+                .Returns((Guid itemId) => itemsById.TryGetValue(itemId, out var item) ? item : null!);
+
+            var providerManagerStub = new Mock<IProviderManager>();
+            providerManagerStub
+                .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, options, priority) =>
+                    queueInvocations.Add(new QueueRefreshInvocation
+                    {
+                        ItemId = itemId,
+                        Options = options,
+                        Priority = priority,
+                    }));
+
+            var service = CreateService(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                delayAsync: (delay, token) =>
+                {
+                    delayInvocations.Add(new DelayInvocation { Delay = delay, CancellationToken = token });
+                    return Task.CompletedTask;
+                },
+                metadataAllowed: item => item.Id == enabledLinkedMovie.Id);
+
+            await service.RunFullLibrarySearchAsync(progress, CancellationToken.None).ConfigureAwait(false);
+
+            CollectionAssert.AreEqual(new[] { mixedBoxSet.Id }, queueInvocations.Select(x => x.ItemId).ToArray());
+            Assert.AreEqual(1, delayInvocations.Count);
+            CollectionAssert.AreEqual(new[] { 100d }, progress.Values.ToArray());
+            Assert.AreEqual(RefreshPriority.Normal, queueInvocations[0].Priority);
+            AssertRefreshOptions(queueInvocations[0].Options, expectedReplaceAllMetadata: false);
+        }
+
+        [TestMethod]
         public async Task RunFullLibrarySearchAsync_WhenAnotherRunIsInFlight_ShouldSkipImmediatelyWithoutQueueingSecondRun()
         {
             var missingProviderMovie = CreateItem<Movie>("Movie Missing Provider", includeProviderIds: false, includeOverview: true, includePrimaryImage: true);
@@ -597,8 +703,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             IFileSystem? fileSystem = null,
             Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
             ILogger<MissingMetadataSearchService>? logger = null,
-            IPeopleRefreshStateStore? peopleRefreshStateStore = null)
+            IPeopleRefreshStateStore? peopleRefreshStateStore = null,
+            Func<BaseItem, bool>? metadataAllowed = null)
         {
+            ConfigureLibraryOptions(libraryManager, metadataAllowed);
+
             return new MissingMetadataSearchService(
                 logger ?? Mock.Of<ILogger<MissingMetadataSearchService>>(),
                 libraryManager,
@@ -606,6 +715,46 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 fileSystem ?? Mock.Of<IFileSystem>(),
                 peopleRefreshStateStore ?? new TestPeopleRefreshStateStore(),
                 delayAsync ?? ((delay, cancellationToken) => Task.Delay(delay, cancellationToken)));
+        }
+
+        private static void ConfigureLibraryOptions(ILibraryManager libraryManager, Func<BaseItem, bool>? metadataAllowed)
+        {
+            Mock.Get(libraryManager)
+                .Setup(x => x.GetLibraryOptions(It.IsAny<BaseItem>()))
+                .Returns<BaseItem>(item => CreateLibraryOptions(item, metadataAllowed?.Invoke(item) ?? true));
+        }
+
+        private static LibraryOptions CreateLibraryOptions(BaseItem item, bool metadataAllowed)
+        {
+            var itemType = item switch
+            {
+                Movie => nameof(Movie),
+                Series => nameof(Series),
+                Season => nameof(Season),
+                Episode => nameof(Episode),
+                _ => null,
+            };
+
+            if (itemType == null)
+            {
+                return new LibraryOptions
+                {
+                    TypeOptions = Array.Empty<TypeOptions>(),
+                };
+            }
+
+            return new LibraryOptions
+            {
+                TypeOptions = new[]
+                {
+                    new TypeOptions
+                    {
+                        Type = itemType,
+                        MetadataFetchers = metadataAllowed ? new[] { MetaSharkPlugin.PluginName } : Array.Empty<string>(),
+                        ImageFetchers = Array.Empty<string>(),
+                    },
+                },
+            };
         }
 
         private static T CreateItem<T>(
@@ -646,6 +795,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
 
             return item;
+        }
+
+        private static BoxSet CreateLinkedBoxSetCandidate(string name, params BaseItem[] linkedItems)
+        {
+            var boxSet = CreateItem<BoxSet>(name, includeProviderIds: false, includeOverview: true, includePrimaryImage: true);
+            SetLinkedChildren(boxSet, linkedItems);
+            return boxSet;
         }
 
         private static AuthoritativeTrackingMovie CreateAuthoritativeMovie(string name, params PersonInfo[] people)
@@ -734,6 +890,96 @@ namespace Jellyfin.Plugin.MetaShark.Test
             public TimeSpan Delay { get; set; }
 
             public CancellationToken CancellationToken { get; set; }
+        }
+
+        private static void SetLinkedChildren(BoxSet boxSet, IEnumerable<BaseItem> linkedItems)
+        {
+            var linkedChildrenProperty = typeof(BoxSet).GetProperty("LinkedChildren", InstanceMemberBindingFlags);
+            Assert.IsNotNull(linkedChildrenProperty, "BoxSet.LinkedChildren 属性不存在。 ");
+
+            var linkedChildType = ResolveLinkedChildType(linkedChildrenProperty!.PropertyType);
+            Assert.IsNotNull(linkedChildType, "无法解析 BoxSet.LinkedChildren 元素类型。 ");
+
+            var linkedChildren = linkedItems
+                .Select(item => CreateLinkedChild(linkedChildType!, item.Id))
+                .ToArray();
+            var linkedChildrenValue = CreateLinkedChildrenValue(linkedChildrenProperty.PropertyType, linkedChildType!, linkedChildren);
+            linkedChildrenProperty.SetValue(boxSet, linkedChildrenValue);
+        }
+
+        private static object CreateLinkedChildrenValue(Type propertyType, Type linkedChildType, object[] linkedChildren)
+        {
+            var arrayType = linkedChildType.MakeArrayType();
+            if (propertyType.IsAssignableFrom(arrayType))
+            {
+                var array = Array.CreateInstance(linkedChildType, linkedChildren.Length);
+                for (var i = 0; i < linkedChildren.Length; i++)
+                {
+                    array.SetValue(linkedChildren[i], i);
+                }
+
+                return array;
+            }
+
+            var listType = typeof(List<>).MakeGenericType(linkedChildType);
+            if (propertyType.IsAssignableFrom(listType))
+            {
+                var list = (IList)Activator.CreateInstance(listType)!;
+                foreach (var linkedChild in linkedChildren)
+                {
+                    list.Add(linkedChild);
+                }
+
+                return list;
+            }
+
+            var value = Activator.CreateInstance(propertyType);
+            Assert.IsNotNull(value, "无法创建 BoxSet.LinkedChildren 容器实例。 ");
+
+            if (value is IList nonGenericList)
+            {
+                foreach (var linkedChild in linkedChildren)
+                {
+                    nonGenericList.Add(linkedChild);
+                }
+
+                return value!;
+            }
+
+            var addMethod = propertyType.GetMethod("Add", new[] { linkedChildType });
+            Assert.IsNotNull(addMethod, "BoxSet.LinkedChildren 容器不支持 Add。 ");
+            foreach (var linkedChild in linkedChildren)
+            {
+                addMethod!.Invoke(value, new[] { linkedChild });
+            }
+
+            return value!;
+        }
+
+        private static object CreateLinkedChild(Type linkedChildType, Guid itemId)
+        {
+            var linkedChild = Activator.CreateInstance(linkedChildType);
+            Assert.IsNotNull(linkedChild, "无法创建 LinkedChild 实例。 ");
+
+            var itemIdProperty = linkedChildType.GetProperty(nameof(LinkedChild.ItemId), InstanceMemberBindingFlags);
+            Assert.IsNotNull(itemIdProperty, "LinkedChild.ItemId 属性不存在。 ");
+            itemIdProperty!.SetValue(linkedChild, itemId);
+            return linkedChild!;
+        }
+
+        private static Type? ResolveLinkedChildType(Type propertyType)
+        {
+            if (propertyType.IsArray)
+            {
+                return propertyType.GetElementType();
+            }
+
+            if (propertyType.IsGenericType)
+            {
+                return propertyType.GetGenericArguments().FirstOrDefault();
+            }
+
+            return typeof(LinkedChild);
         }
     }
 }
