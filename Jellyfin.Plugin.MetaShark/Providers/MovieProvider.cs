@@ -337,7 +337,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             };
 
             movie.SetProviderId(MetadataProvider.Tmdb, tmdbId);
-            movie.SetProviderId(MetadataProvider.Imdb, movieResult.ImdbId);
+            if (!string.IsNullOrWhiteSpace(movieResult.ImdbId))
+            {
+                movie.SetProviderId(MetadataProvider.Imdb, movieResult.ImdbId);
+            }
 
             // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了保持唯一
             movie.SetProviderId(MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{tmdbId}");

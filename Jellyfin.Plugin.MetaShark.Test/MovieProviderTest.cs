@@ -20,6 +20,7 @@ using Moq;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -534,6 +535,69 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var str = result.ToJson();
                 Console.WriteLine(result.ToJson());
             }).GetAwaiter().GetResult();
+        }
+
+        [DataTestMethod]
+        [DataRow(null, false)]
+        [DataRow("", false)]
+        [DataRow("   ", false)]
+        [DataRow("tt1234567", true)]
+        public async Task GetMetadataByTMDB_IgnoresMissingImdbIdAndKeepsValidImdbId(string? imdbId, bool expectImdbProviderId)
+        {
+            var tmdbId = 945665;
+            var info = new MovieInfo
+            {
+                Name = "人生大事",
+                MetadataLanguage = "zh",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
+                    { MetadataProvider.Tmdb.ToString(), tmdbId.ToString(CultureInfo.InvariantCulture) },
+                },
+            };
+
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbImageConfig(tmdbApi);
+            SeedTmdbMovie(
+                tmdbApi,
+                tmdbId,
+                "zh",
+                new TmdbMovie
+                {
+                    Id = tmdbId,
+                    Title = "人生大事",
+                    OriginalTitle = "人生大事",
+                    ImdbId = imdbId,
+                    Overview = "TMDb seeded movie overview",
+                    Tagline = "TMDb seeded movie tagline",
+                    ReleaseDate = new DateTime(2022, 6, 24),
+                    VoteAverage = 8.0,
+                    ProductionCountries = new List<ProductionCountry>(),
+                    Genres = new List<TmdbGenre>(),
+                });
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual(tmdbId.ToString(CultureInfo.InvariantCulture), result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual($"{MetaSource.Tmdb}_{tmdbId}", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+
+            if (expectImdbProviderId)
+            {
+                Assert.AreEqual("tt1234567", result.Item.GetProviderId(MetadataProvider.Imdb));
+            }
+            else
+            {
+                Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Imdb));
+            }
         }
 
         [TestMethod]
