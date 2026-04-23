@@ -19,6 +19,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Workers;
+    using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
@@ -55,7 +56,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private static readonly HashSet<char> TraditionalOverviewScriptDistinctiveCharacters = new HashSet<char>("個麼樂習書親眾優傷兒這來為們讓帶開車輛兩厲講較聽說點體與無龍貓壞關級評論豐圍繞爭奪複選戰遺囑發間醫會現導經過國際組織懷驚計畫實驗檔錄歷樣歡覺觀記議語誤讀輕還遲釋難順須顧頓預領題額顏風飛宮歸馬訝");
 
         private readonly MemoryCache memoryCache;
-        private readonly IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore;
+        private readonly EpisodeTitleBackfillCoordinator? episodeTitleBackfillCoordinator;
         private readonly IEpisodeOverviewCleanupCandidateStore? episodeOverviewCleanupCandidateStore;
         private readonly TvdbApi tvdbApi;
 
@@ -68,21 +69,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             : base(httpClientFactory, loggerFactory.CreateLogger<EpisodeProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
-            this.episodeTitleBackfillCandidateStore = episodeTitleBackfillCandidateStore;
+            this.episodeTitleBackfillCoordinator = episodeTitleBackfillCandidateStore != null ? new EpisodeTitleBackfillCoordinator(episodeTitleBackfillCandidateStore, this.Logger) : null;
             this.episodeOverviewCleanupCandidateStore = episodeOverviewCleanupCandidateStore;
             this.tvdbApi = tvdbApi;
-        }
-
-        internal enum SearchMissingMetadataTitleBackfillReason
-        {
-            FeatureDisabled = 0,
-            RequestNotSearchMissingMetadata = 1,
-            EpisodeIdMissing = 2,
-            OriginalTitleNotDefault = 3,
-            ResolvedTitleEmpty = 4,
-            ResolvedTitleSameAsOriginal = 5,
-            StrictZhCnRejected = 6,
-            CandidateQueued = 7,
         }
 
         internal enum SearchMissingMetadataOverviewCleanupReason
@@ -277,18 +266,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var httpContext = this.HttpContextAccessor.HttpContext;
             var metadataRefreshMode = httpContext?.Request.Query["metadataRefreshMode"].ToString();
             var replaceAllMetadata = httpContext?.Request.Query["replaceAllMetadata"].ToString();
-            var hasExplicitSearchMissingMetadataQuery = HasSearchMissingMetadataRefreshQuery(httpContext);
+            var hasExplicitSearchMissingMetadataQuery = EpisodeTitleBackfillRefreshClassifier.HasSearchMissingMetadataRefreshQuery(httpContext);
             var isImplicitSearchMissingMetadataFallback = !hasExplicitSearchMissingMetadataQuery
-                && ShouldFallbackSearchMissingMetadataRefresh(originalMetadataTitle, episodeItem?.Name);
+                && EpisodeTitleBackfillRefreshClassifier.ShouldFallbackSearchMissingMetadataRefresh(originalMetadataTitle, episodeItem?.Name);
             var isSearchMissingMetadataRequest = hasExplicitSearchMissingMetadataQuery
-                ? IsSearchMissingMetadataRefresh(metadataRefreshMode, replaceAllMetadata)
+                ? EpisodeTitleBackfillRefreshClassifier.IsSearchMissingMetadataRefresh(metadataRefreshMode, replaceAllMetadata)
                 : isImplicitSearchMissingMetadataFallback;
             var loggedMetadataRefreshMode = isImplicitSearchMissingMetadataFallback ? "ImplicitFallback" : metadataRefreshMode;
             var loggedReplaceAllMetadata = isImplicitSearchMissingMetadataFallback ? string.Empty : replaceAllMetadata;
-            var originalTitleSnapshot = (originalMetadataTitle ?? string.Empty).Trim();
             var itemPath = episodeItem?.Path ?? info.Path ?? string.Empty;
             var originalOverviewSnapshot = ResolveSearchMissingMetadataOverviewCleanupOriginalSnapshot(episodeItem?.Overview, itemPath);
-            var candidateTitle = (item.Name ?? string.Empty).Trim();
             var episodeId = episodeItem?.Id ?? Guid.Empty;
 
             if (isSearchMissingMetadataRequest)
@@ -327,65 +314,26 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     loggedReplaceAllMetadata);
             }
 
-            if (this.episodeTitleBackfillCandidateStore != null)
+            if (this.episodeTitleBackfillCoordinator != null)
             {
-                var backfillReason = ResolveSearchMissingMetadataTitleBackfillReason(
+                this.episodeTitleBackfillCoordinator.Process(new EpisodeTitleBackfillCoordinator.EpisodeTitleBackfillOrchestrationInput(
                     Config.EnableSearchMissingMetadataEpisodeTitleBackfill,
-                    isSearchMissingMetadataRequest,
-                    episodeId,
-                    originalMetadataTitle,
-                    effectiveProviderTitle,
-                    item.Name);
-
-                if (isSearchMissingMetadataRequest)
-                {
-                    this.LogSearchMissingMetadataTitleBackfillInputs(
-                        episodeId,
-                        itemPath,
-                        info.MetadataLanguage,
-                        titleMetadataLanguage,
-                        episodeItem?.PreferredMetadataLanguage,
-                        episodeItem?.Series?.PreferredMetadataLanguage,
-                        seasonItem?.PreferredMetadataLanguage,
-                        titleResolution.DetailsTitle,
-                        titleResolution.TranslationTitle,
-                        effectiveProviderTitle,
-                        isSearchMissingMetadataRequest);
-                }
-
-                if (backfillReason == SearchMissingMetadataTitleBackfillReason.CandidateQueued)
-                {
-                    var nowUtc = DateTimeOffset.UtcNow;
-                    this.episodeTitleBackfillCandidateStore.Save(new EpisodeTitleBackfillCandidate
-                    {
-                        ItemId = episodeItem!.Id,
-                        ItemPath = itemPath,
-                        OriginalTitleSnapshot = originalTitleSnapshot,
-                        CandidateTitle = candidateTitle,
-                        QueuedAtUtc = nowUtc,
-                        NextAttemptAtUtc = nowUtc.AddSeconds(10),
-                        AttemptCount = 0,
-                        ExpiresAtUtc = nowUtc.AddMinutes(2),
-                    });
-                    this.LogSearchMissingMetadataTitleBackfillQueued(
-                        episodeItem.Id,
-                        itemPath,
-                        originalTitleSnapshot,
-                        candidateTitle,
-                        loggedMetadataRefreshMode,
-                        loggedReplaceAllMetadata,
-                        isSearchMissingMetadataRequest);
-                }
-
-                this.LogSearchMissingMetadataTitleBackfillDecision(
-                    backfillReason.ToString(),
                     episodeId,
                     itemPath,
-                    originalTitleSnapshot,
-                    candidateTitle,
+                    originalMetadataTitle,
+                    effectiveProviderTitle,
+                    item.Name,
+                    isSearchMissingMetadataRequest,
                     loggedMetadataRefreshMode,
                     loggedReplaceAllMetadata,
-                    isSearchMissingMetadataRequest);
+                    isSearchMissingMetadataRequest,
+                    info.MetadataLanguage,
+                    titleMetadataLanguage,
+                    episodeItem?.PreferredMetadataLanguage,
+                    episodeItem?.Series?.PreferredMetadataLanguage,
+                    seasonItem?.PreferredMetadataLanguage,
+                    titleResolution.DetailsTitle,
+                    titleResolution.TranslationTitle));
             }
 
             if (this.episodeOverviewCleanupCandidateStore != null)
@@ -532,157 +480,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         internal static string? ResolveEpisodeTitlePersistence(string? originalMetadataTitle, EpisodeLocalizedValue? providerTitle)
         {
-            if (!IsDefaultJellyfinEpisodeTitle(originalMetadataTitle))
-            {
-                return providerTitle?.Value;
-            }
-
-            if (!HasStrictZhCnTitleSource(providerTitle))
-            {
-                return originalMetadataTitle;
-            }
-
-            var trimmedProviderTitle = providerTitle?.Value?.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedProviderTitle))
-            {
-                return originalMetadataTitle;
-            }
-
-            if (IsGenericTmdbEpisodeTitle(trimmedProviderTitle))
-            {
-                return originalMetadataTitle;
-            }
-
-            return trimmedProviderTitle;
+            return Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill.EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence(originalMetadataTitle, providerTitle);
         }
 
         internal static bool IsGenericTmdbEpisodeTitle(string? title)
         {
-            var trimmedTitle = title?.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedTitle))
-            {
-                return false;
-            }
-
-            if (IsDefaultJellyfinEpisodeTitle(trimmedTitle))
-            {
-                return true;
-            }
-
-            if (!trimmedTitle.StartsWith("Episode ", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            var numericPart = trimmedTitle.Substring("Episode ".Length).Trim();
-            return numericPart.Length > 0 && numericPart.All(char.IsDigit);
+            return Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill.EpisodeTitleBackfillPolicy.IsGenericTmdbEpisodeTitle(title);
         }
 
         internal static bool IsDefaultJellyfinEpisodeTitle(string? title)
         {
-            if (string.IsNullOrEmpty(title) || !title.StartsWith("第 ", StringComparison.Ordinal) || !title.EndsWith(" 集", StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            var numericPart = title.Substring(2, title.Length - 4);
-            if (numericPart.Length == 0 || numericPart[0] == '0')
-            {
-                return false;
-            }
-
-            foreach (var character in numericPart)
-            {
-                if (!char.IsDigit(character))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        internal static bool IsSearchMissingMetadataRefresh(string? metadataRefreshMode, string? replaceAllMetadata)
-        {
-            return string.Equals(metadataRefreshMode?.Trim(), "FullRefresh", StringComparison.OrdinalIgnoreCase)
-                && string.Equals(replaceAllMetadata?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
-        }
-
-        internal static bool HasSearchMissingMetadataRefreshQuery(HttpContext? httpContext)
-        {
-            var query = httpContext?.Request.Query;
-            return query?.ContainsKey("metadataRefreshMode") == true
-                || query?.ContainsKey("replaceAllMetadata") == true;
-        }
-
-        internal static bool ShouldFallbackSearchMissingMetadataRefresh(string? originalMetadataTitle, string? currentItemTitle)
-        {
-            var trimmedOriginalTitle = originalMetadataTitle?.Trim();
-            var trimmedCurrentItemTitle = currentItemTitle?.Trim();
-            return IsDefaultJellyfinEpisodeTitle(trimmedOriginalTitle)
-                && string.Equals(trimmedOriginalTitle, trimmedCurrentItemTitle, StringComparison.Ordinal);
-        }
-
-        internal static SearchMissingMetadataTitleBackfillReason ResolveSearchMissingMetadataTitleBackfillReason(
-            bool featureEnabled,
-            bool isSearchMissingMetadataRequest,
-            Guid itemId,
-            string? originalMetadataTitle,
-            EpisodeLocalizedValue? providerTitle,
-            string? resolvedTitle)
-        {
-            if (!featureEnabled)
-            {
-                return SearchMissingMetadataTitleBackfillReason.FeatureDisabled;
-            }
-
-            if (!isSearchMissingMetadataRequest)
-            {
-                return SearchMissingMetadataTitleBackfillReason.RequestNotSearchMissingMetadata;
-            }
-
-            if (itemId == Guid.Empty)
-            {
-                return SearchMissingMetadataTitleBackfillReason.EpisodeIdMissing;
-            }
-
-            var trimmedOriginalTitle = originalMetadataTitle?.Trim();
-            if (!IsDefaultJellyfinEpisodeTitle(trimmedOriginalTitle))
-            {
-                return SearchMissingMetadataTitleBackfillReason.OriginalTitleNotDefault;
-            }
-
-            var trimmedProviderTitle = providerTitle?.Value?.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedProviderTitle))
-            {
-                return SearchMissingMetadataTitleBackfillReason.ResolvedTitleEmpty;
-            }
-
-            var trimmedResolvedTitle = resolvedTitle?.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedResolvedTitle))
-            {
-                return SearchMissingMetadataTitleBackfillReason.ResolvedTitleEmpty;
-            }
-
-            if (string.Equals(trimmedOriginalTitle, trimmedResolvedTitle, StringComparison.Ordinal))
-            {
-                return IsStrictZhCnRejectedSearchMissingMetadataTitleBackfill(trimmedOriginalTitle, providerTitle)
-                    ? SearchMissingMetadataTitleBackfillReason.StrictZhCnRejected
-                    : SearchMissingMetadataTitleBackfillReason.ResolvedTitleSameAsOriginal;
-            }
-
-            return SearchMissingMetadataTitleBackfillReason.CandidateQueued;
-        }
-
-        internal static bool ShouldQueueSearchMissingMetadataTitleBackfill(bool featureEnabled, Guid itemId, string? originalMetadataTitle, string? resolvedTitle)
-        {
-            return ResolveSearchMissingMetadataTitleBackfillReason(
-                featureEnabled,
-                true,
-                itemId,
-                originalMetadataTitle,
-                CreateEpisodeLocalizedValue(resolvedTitle, null),
-                resolvedTitle) == SearchMissingMetadataTitleBackfillReason.CandidateQueued;
+            return Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill.EpisodeTitleBackfillPolicy.IsDefaultJellyfinEpisodeTitle(title);
         }
 
         internal static bool ShouldQueueSearchMissingMetadataOverviewCleanup(Guid itemId, string? originalOverview, string? resolvedOverview)
@@ -832,14 +640,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             {
                 return null;
             }
-        }
-
-        private static bool HasStrictZhCnTitleSource(EpisodeLocalizedValue? providerTitle)
-        {
-            var normalizedSourceLanguage = string.IsNullOrWhiteSpace(providerTitle?.SourceLanguage)
-                ? null
-                : ChineseLocalePolicy.CanonicalizeLanguage(providerTitle.SourceLanguage);
-            return string.Equals(normalizedSourceLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string? ResolveEpisodeTargetMetadataLanguage(string? requestedLanguage)
@@ -1009,39 +809,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         }
 
 #pragma warning disable CA1848
-        private void LogSearchMissingMetadataTitleBackfillInputs(Guid itemId, string itemPath, string? lookupLanguage, string? titleMetadataLanguage, string? episodePreferredLanguage, string? seriesPreferredLanguage, string? seasonPreferredLanguage, EpisodeLocalizedValue? detailsTitle, EpisodeLocalizedValue? translationTitle, EpisodeLocalizedValue? effectiveProviderTitle, bool isSearchMissingMetadataRequest)
-        {
-            this.Logger.LogInformation(
-                "[MetaShark] 剧集标题回填输入. itemId={ItemId} itemPath={ItemPath} lookupLanguage={LookupLanguage} titleMetadataLanguage={TitleMetadataLanguage} episodePreferredLanguage={EpisodePreferredLanguage} seriesPreferredLanguage={SeriesPreferredLanguage} seasonPreferredLanguage={SeasonPreferredLanguage} detailsTitle={DetailsTitle} detailsTitleSourceLanguage={DetailsTitleSourceLanguage} translationTitle={TranslationTitle} translationTitleSourceLanguage={TranslationTitleSourceLanguage} effectiveProviderTitle={EffectiveProviderTitle} effectiveProviderTitleSourceLanguage={EffectiveProviderTitleSourceLanguage} isSearchMissingMetadataRequest={IsSearchMissingMetadataRequest}.",
-                itemId,
-                itemPath,
-                lookupLanguage ?? string.Empty,
-                titleMetadataLanguage ?? string.Empty,
-                episodePreferredLanguage ?? string.Empty,
-                seriesPreferredLanguage ?? string.Empty,
-                seasonPreferredLanguage ?? string.Empty,
-                detailsTitle?.Value ?? string.Empty,
-                detailsTitle?.SourceLanguage ?? string.Empty,
-                translationTitle?.Value ?? string.Empty,
-                translationTitle?.SourceLanguage ?? string.Empty,
-                effectiveProviderTitle?.Value ?? string.Empty,
-                effectiveProviderTitle?.SourceLanguage ?? string.Empty,
-                isSearchMissingMetadataRequest);
-        }
-
-        private void LogSearchMissingMetadataTitleBackfillQueued(Guid itemId, string itemPath, string originalTitle, string candidateTitle, string? metadataRefreshMode, string? replaceAllMetadata, bool liveVisible)
-        {
-            this.Logger.Log(
-                liveVisible ? LogLevel.Information : LogLevel.Debug,
-                "[MetaShark] 已排队剧集标题回填. itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} candidateTitle={CandidateTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
-                itemId,
-                itemPath,
-                originalTitle,
-                candidateTitle,
-                metadataRefreshMode ?? string.Empty,
-                replaceAllMetadata ?? string.Empty);
-        }
-
         private void LogOverviewDiagnosticsInputs(Guid itemId, string itemPath, EpisodeLocalizedValue? detailsOverview, EpisodeLocalizedValue? translationOverview, string? seriesOverview, string? seasonOverview, string? metadataRefreshMode, string? replaceAllMetadata)
         {
             var details = DescribeOverviewText(detailsOverview?.Value, detailsOverview?.SourceLanguage);
@@ -1098,19 +865,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 replaceAllMetadata ?? string.Empty);
         }
 
-        private void LogSearchMissingMetadataTitleBackfillDecision(string reason, Guid itemId, string itemPath, string originalTitle, string resolvedTitle, string? metadataRefreshMode, string? replaceAllMetadata, bool liveVisible)
-        {
-            this.Logger.Log(
-                liveVisible ? LogLevel.Information : LogLevel.Debug,
-                "[MetaShark] 剧集标题回填决策. reason={Reason} itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} resolvedTitle={ResolvedTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
-                reason,
-                itemId,
-                itemPath,
-                originalTitle,
-                resolvedTitle,
-                metadataRefreshMode ?? string.Empty,
-                replaceAllMetadata ?? string.Empty);
-        }
 #pragma warning restore CA1848
 
 #pragma warning disable SA1204
@@ -1164,18 +918,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return normalizedOverview.Distance(normalizedParentOverview) >= 0.95;
         }
 
-        private static bool IsStrictZhCnRejectedSearchMissingMetadataTitleBackfill(string? trimmedOriginalTitle, EpisodeLocalizedValue? providerTitle)
-        {
-            var trimmedProviderTitle = providerTitle?.Value?.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedProviderTitle)
-                || IsGenericTmdbEpisodeTitle(trimmedProviderTitle)
-                || string.Equals(trimmedOriginalTitle, trimmedProviderTitle, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            return !HasStrictZhCnTitleSource(providerTitle);
-        }
 #pragma warning restore SA1204
 
         private string? GetOriginalSeriesPath(EpisodeInfo info)
