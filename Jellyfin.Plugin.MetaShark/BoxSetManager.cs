@@ -37,6 +37,7 @@ public sealed class BoxSetManager : IHostedService, IDisposable
 
     private readonly ILibraryManager libraryManager;
     private readonly ICollectionManager collectionManager;
+    private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemLibraryCapabilityResolver;
     private readonly Timer timer;
     private readonly HashSet<string> queuedTmdbCollection;
     private readonly ILogger<BoxSetManager> logger; // TODO logging
@@ -45,6 +46,7 @@ public sealed class BoxSetManager : IHostedService, IDisposable
     {
         this.libraryManager = libraryManager;
         this.collectionManager = collectionManager;
+        this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
         this.logger = loggerFactory.CreateLogger<BoxSetManager>();
         this.timer = new Timer(_ => this.OnTimerElapsed(), null, Timeout.Infinite, Timeout.Infinite);
         this.queuedTmdbCollection = new HashSet<string>();
@@ -100,13 +102,6 @@ public sealed class BoxSetManager : IHostedService, IDisposable
 
         foreach (var library in this.libraryManager.RootFolder.Children)
         {
-            // 判断当前是媒体库是否是电影，并开启了 metashark 插件
-            var typeOptions = this.libraryManager.GetLibraryOptions(library).TypeOptions;
-            if (typeOptions.FirstOrDefault(x => x.Type == "Movie" && x.MetadataFetchers.Contains(MetaSharkPlugin.PluginName)) == null)
-            {
-                continue;
-            }
-
             var startIndex = 0;
             var pagesize = 1000;
 
@@ -124,6 +119,11 @@ public sealed class BoxSetManager : IHostedService, IDisposable
 
                 foreach (var movie in movies)
                 {
+                    if (!this.IsMovieMetadataEnabled(movie))
+                    {
+                        continue;
+                    }
+
                     // 从tmdb获取合集信息
                     movie.ProviderIds.TryGetValue("TmdbCollection", out var collectionName);
                     if (string.IsNullOrEmpty(collectionName))
@@ -220,9 +220,7 @@ public sealed class BoxSetManager : IHostedService, IDisposable
             return;
         }
 
-        // 判断 item 所在的媒体库是否是电影，并开启了 metashark 插件
-        var typeOptions = this.libraryManager.GetLibraryOptions(movie).TypeOptions;
-        if (typeOptions.FirstOrDefault(x => x.Type == "Movie" && x.MetadataFetchers.Contains(MetaSharkPlugin.PluginName)) == null)
+        if (!this.IsMovieMetadataEnabled(movie))
         {
             return;
         }
@@ -231,6 +229,12 @@ public sealed class BoxSetManager : IHostedService, IDisposable
 
         // Restart the timer. After idling for 60 seconds it should trigger the callback. This is to avoid clobbering during a large library update.
         this.timer.Change(60000, Timeout.Infinite);
+    }
+
+    private bool IsMovieMetadataEnabled(Movie movie)
+    {
+        ArgumentNullException.ThrowIfNull(movie);
+        return this.ordinaryItemLibraryCapabilityResolver.Resolve(movie, MetaSharkLibraryCapability.Metadata).Allowed;
     }
 
     private void OnTimerElapsed()
