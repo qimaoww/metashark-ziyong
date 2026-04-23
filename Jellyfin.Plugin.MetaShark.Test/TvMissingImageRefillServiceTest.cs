@@ -1,4 +1,5 @@
 using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.BaseItemManager;
 using MediaBrowser.Controller.Entities;
@@ -47,7 +48,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(seriesWithImages, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
 
-            var service = CreateServiceWithLogger(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object, out var loggerStub);
+            var service = CreateServiceWithLogger(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                baseItemManagerStub.Object,
+                CreateResolver((series, true), (seriesWithImages, true)),
+                out var loggerStub);
 
             var summary = service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
@@ -136,7 +142,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
 
-            var service = CreateServiceWithLogger(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object, out var loggerStub);
+            var service = CreateServiceWithLogger(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                baseItemManagerStub.Object,
+                CreateResolver((series, true)),
+                out var loggerStub);
 
             var summary = service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
@@ -202,13 +213,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(false);
 
-            var service = CreateService(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object);
+            var service = CreateService(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                baseItemManagerStub.Object,
+                CreateResolver((series, false)));
 
-            service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
+            var summary = service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
             providerManagerStub.Verify(
                 x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
                 Times.Never);
+            Assert.AreEqual(0, summary.QueuedCount);
+            Assert.AreEqual(1, summary.SkippedCount);
+            Assert.AreEqual("CapabilityDisabledForResolvedLibrary=1", summary.SkippedReasons);
         }
 
         [TestMethod]
@@ -225,7 +243,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             var baseItemManagerStub = new Mock<IBaseItemManager>();
 
-            var service = CreateService(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object);
+            var service = CreateService(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                baseItemManagerStub.Object);
 
             service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
@@ -255,7 +276,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(episode, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
 
-            var service = CreateService(libraryManagerStub.Object, providerManagerStub.Object, baseItemManagerStub.Object);
+            var service = CreateService(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                baseItemManagerStub.Object,
+                CreateResolver((season, true), (episode, true)));
 
             service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
 
@@ -278,7 +303,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
 
-            var service = CreateService(new Mock<ILibraryManager>().Object, providerManagerStub.Object, baseItemManagerStub.Object);
+            var service = CreateService(
+                new Mock<ILibraryManager>().Object,
+                providerManagerStub.Object,
+                baseItemManagerStub.Object,
+                CreateResolver((series, true)));
 
             service.QueueMissingImagesForUpdatedItem(new ItemChangeEventArgs
             {
@@ -303,7 +332,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
                 .Returns(true);
 
-            var service = CreateServiceWithLogger(new Mock<ILibraryManager>().Object, providerManagerStub.Object, baseItemManagerStub.Object, out var loggerStub);
+            var service = CreateServiceWithLogger(new Mock<ILibraryManager>().Object, providerManagerStub.Object, baseItemManagerStub.Object, null, out var loggerStub);
 
             service.QueueMissingImagesForUpdatedItem(new ItemChangeEventArgs
             {
@@ -380,20 +409,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private TvMissingImageRefillService CreateService(
             ILibraryManager libraryManager,
             IProviderManager providerManager,
-            IBaseItemManager baseItemManager)
+            IBaseItemManager baseItemManager,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
         {
             return new TvMissingImageRefillService(
                 this.loggerFactory,
                 libraryManager,
                 providerManager,
                 baseItemManager,
-                new Mock<IFileSystem>().Object);
+                new Mock<IFileSystem>().Object,
+                ordinaryItemLibraryCapabilityResolver: ordinaryItemLibraryCapabilityResolver);
         }
 
         private static TvMissingImageRefillService CreateServiceWithLogger(
             ILibraryManager libraryManager,
             IProviderManager providerManager,
             IBaseItemManager baseItemManager,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver,
             out Mock<ILogger> loggerStub)
         {
             loggerStub = new Mock<ILogger>();
@@ -407,7 +439,49 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 libraryManager,
                 providerManager,
                 baseItemManager,
-                new Mock<IFileSystem>().Object);
+                new Mock<IFileSystem>().Object,
+                ordinaryItemLibraryCapabilityResolver: ordinaryItemLibraryCapabilityResolver);
+        }
+
+        private static MetaSharkOrdinaryItemLibraryCapabilityResolver CreateResolver(params (BaseItem Item, bool ImageAllowed)[] entries)
+        {
+            var libraryOptionsByItem = entries.ToDictionary(
+                entry => entry.Item,
+                entry => CreateLibraryOptions(ResolveItemType(entry.Item), entry.ImageAllowed));
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetLibraryOptions(It.IsAny<BaseItem>()))
+                .Returns((BaseItem item) => libraryOptionsByItem.TryGetValue(item, out var libraryOptions) ? libraryOptions : null!);
+
+            return new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManagerStub.Object);
+        }
+
+        private static LibraryOptions CreateLibraryOptions(string itemType, bool imageAllowed)
+        {
+            return new LibraryOptions
+            {
+                TypeOptions = new[]
+                {
+                    new TypeOptions
+                    {
+                        Type = itemType,
+                        MetadataFetchers = Array.Empty<string>(),
+                        ImageFetchers = imageAllowed ? new[] { MetaSharkPlugin.PluginName } : Array.Empty<string>(),
+                    },
+                },
+            };
+        }
+
+        private static string ResolveItemType(BaseItem item)
+        {
+            return item switch
+            {
+                Series => nameof(Series),
+                Season => nameof(Season),
+                Episode => nameof(Episode),
+                _ => throw new ArgumentOutOfRangeException(nameof(item), item.GetType().FullName, "Unsupported TV item type."),
+            };
         }
 
     }

@@ -1,4 +1,5 @@
 using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.BaseItemManager;
 using MediaBrowser.Controller.Entities;
@@ -148,7 +149,40 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 libraryManagerStub.Object,
                 providerManagerStub.Object,
                 baseItemManagerStub.Object,
-                new Mock<IFileSystem>().Object);
+                new Mock<IFileSystem>().Object,
+                ordinaryItemLibraryCapabilityResolver: CreateResolver());
+        }
+
+        private static MetaSharkOrdinaryItemLibraryCapabilityResolver CreateResolver()
+        {
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetLibraryOptions(It.IsAny<BaseItem>()))
+                .Returns((BaseItem item) => item switch
+                {
+                    Series => CreateLibraryOptions(nameof(Series)),
+                    Season => CreateLibraryOptions(nameof(Season)),
+                    Episode => CreateLibraryOptions(nameof(Episode)),
+                    _ => null!,
+                });
+
+            return new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManagerStub.Object);
+        }
+
+        private static LibraryOptions CreateLibraryOptions(string itemType)
+        {
+            return new LibraryOptions
+            {
+                TypeOptions = new[]
+                {
+                    new TypeOptions
+                    {
+                        Type = itemType,
+                        MetadataFetchers = Array.Empty<string>(),
+                        ImageFetchers = new[] { MetaSharkPlugin.PluginName },
+                    },
+                },
+            };
         }
 
         private static bool HasConstructorParameterFragment(Type type, string fragment)

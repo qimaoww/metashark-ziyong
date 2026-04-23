@@ -10,6 +10,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Linq;
     using System.Threading;
     using Jellyfin.Data.Enums;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.BaseItemManager;
@@ -17,7 +18,6 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
-    using MediaBrowser.Model.Configuration;
     using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.IO;
     using Microsoft.Extensions.Logging;
@@ -33,8 +33,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private static readonly Action<ILogger, Guid, Exception?> LogSkipEmptyId =
             LoggerMessage.Define<Guid>(LogLevel.Debug, new EventId(3, nameof(QueueMissingImagesForUpdatedItem)), "[MetaShark] 跳过电视缺图回填. reason=EmptyId itemId={Id}.");
 
-        private static readonly Action<ILogger, string, Exception?> LogSkipDisabledImageFetcher =
-            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(4, nameof(QueueMissingImagesForUpdatedItem)), "[MetaShark] 跳过电视缺图回填. reason=ImageFetcherDisabled name={Name}.");
+        private static readonly Action<ILogger, string, Guid, string, Exception?> LogSkipImageGateDenied =
+            LoggerMessage.Define<string, Guid, string>(LogLevel.Debug, new EventId(4, nameof(QueueMissingImagesForUpdatedItem)), "[MetaShark] 跳过电视缺图回填. reason=ImageGateDenied name={Name} itemId={Id} detail={Detail}.");
 
         private static readonly Action<ILogger, string, Guid, Exception?> LogSkipNoMissingImages =
             LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(5, nameof(QueueIfMissingAndEnabled)), "[MetaShark] 跳过电视缺图回填. reason=NoMissingImages name={Name} itemId={Id}.");
@@ -51,9 +51,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private readonly ILogger<TvMissingImageRefillService> logger;
         private readonly ILibraryManager libraryManager;
         private readonly IProviderManager providerManager;
-        private readonly IBaseItemManager baseItemManager;
         private readonly IFileSystem fileSystem;
         private readonly ITvImageRefillStateStore retryStateStore;
+        private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemLibraryCapabilityResolver;
 
         public TvMissingImageRefillService(
             ILoggerFactory loggerFactory,
@@ -61,18 +61,19 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             IProviderManager providerManager,
             IBaseItemManager baseItemManager,
             IFileSystem fileSystem,
-            ITvImageRefillStateStore? retryStateStore = null)
+            ITvImageRefillStateStore? retryStateStore = null,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
         {
             ArgumentNullException.ThrowIfNull(loggerFactory);
 
             this.logger = loggerFactory.CreateLogger<TvMissingImageRefillService>();
             this.libraryManager = libraryManager;
             this.providerManager = providerManager;
-            this.baseItemManager = baseItemManager;
             this.fileSystem = fileSystem;
             this.retryStateStore = retryStateStore ?? new FileTvImageRefillStateStore(
                 Path.Combine(Path.GetTempPath(), MetaSharkPlugin.PluginName, $"tv-image-refill-state-{Guid.NewGuid():N}.json"),
                 loggerFactory);
+            this.ordinaryItemLibraryCapabilityResolver = ordinaryItemLibraryCapabilityResolver ?? new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
         }
 
         public TvMissingImageRefillScanSummary QueueMissingImagesForFullLibraryScan(CancellationToken cancellationToken)
@@ -196,11 +197,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return "CooldownActive";
             }
 
-            var typeOptions = this.GetTypeOptions(item);
-            if (!this.baseItemManager.IsImageFetcherEnabled(item, typeOptions, MetaSharkPlugin.PluginName))
+            if (!this.IsImageAllowed(item, out var gateDecision))
             {
-                LogSkipDisabledImageFetcher(this.logger, item.Name ?? item.Id.ToString(), null);
-                return "ImageFetcherDisabled";
+                LogSkipImageGateDenied(this.logger, item.Name ?? string.Empty, item.Id, gateDecision?.Reason.ToString() ?? string.Empty, null);
+                return gateDecision?.Reason.ToString() ?? "ImageGateDenied";
             }
 
             var missingImages = TvImageSupport.GetMissingImages(item).ToArray();
@@ -260,29 +260,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return false;
         }
 
-        private TypeOptions? GetTypeOptions(BaseItem item)
+        private bool IsImageAllowed(BaseItem item, out MetaSharkLibraryCapabilityDecision? gateDecision)
         {
-            var libraryOptions = this.libraryManager.GetLibraryOptions(item);
-            var typeOptions = libraryOptions?.TypeOptions;
-            if (typeOptions == null)
-            {
-                return null;
-            }
-
-            var targetType = item switch
-            {
-                Series => nameof(Series),
-                Season => nameof(Season),
-                Episode => nameof(Episode),
-                _ => string.Empty,
-            };
-
-            if (string.IsNullOrEmpty(targetType))
-            {
-                return null;
-            }
-
-            return typeOptions.FirstOrDefault(x => string.Equals(x.Type, targetType, StringComparison.OrdinalIgnoreCase));
+            gateDecision = this.ordinaryItemLibraryCapabilityResolver.Resolve(item, MetaSharkLibraryCapability.Image);
+            return gateDecision.Allowed;
         }
     }
 }
