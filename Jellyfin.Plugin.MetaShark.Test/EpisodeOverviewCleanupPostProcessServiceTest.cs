@@ -1,8 +1,11 @@
 using Jellyfin.Plugin.MetaShark.Model;
+using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -194,9 +197,43 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 messageContains: ["[MetaShark] 剧集简介清理保存失败", "trigger=ItemUpdated", $"itemId={episode.Id}"]);
         }
 
-        private static EpisodeOverviewCleanupPostProcessService CreateService(IEpisodeOverviewCleanupCandidateStore candidateStore, IEpisodeOverviewCleanupPersistence persistence)
+        [TestMethod]
+        public async Task TryApplyAsync_MetadataGateDisabled_DoesNotPersistAndAllowsFutureRetry()
         {
-            return new EpisodeOverviewCleanupPostProcessService(candidateStore, persistence, LoggerFactory.Create(builder => { }).CreateLogger<EpisodeOverviewCleanupPostProcessService>());
+            var episode = CreateEpisode("错误旧简介");
+            var candidateStore = new InMemoryEpisodeOverviewCleanupCandidateStore();
+            candidateStore.Save(CreateCandidate(episode.Id, episode.Path!, string.Empty));
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .SetupSequence(x => x.GetLibraryOptions(It.IsAny<BaseItem>()))
+                .Returns(CreateEpisodeLibraryOptions(metadataEnabled: false))
+                .Returns(CreateEpisodeLibraryOptions(metadataEnabled: true));
+
+            var ordinaryResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManagerStub.Object);
+            var persistence = new RecordingEpisodeOverviewCleanupPersistence();
+            var service = CreateService(candidateStore, persistence, ordinaryResolver);
+
+            await service.TryApplyAsync(CreateUpdate(episode, ItemUpdateType.MetadataDownload), IEpisodeOverviewCleanupPostProcessService.ItemUpdatedTrigger, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual("错误旧简介", episode.Overview);
+            Assert.AreEqual(0, persistence.SaveCallCount);
+            Assert.IsNotNull(candidateStore.Peek(episode.Id), "metadata gate 拒绝时不应把 cleanup candidate 消耗掉。 ");
+
+            await service.TryApplyAsync(CreateUpdate(episode, ItemUpdateType.MetadataDownload), IEpisodeOverviewCleanupPostProcessService.ItemUpdatedTrigger, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(null, episode.Overview);
+            Assert.AreEqual(1, persistence.SaveCallCount);
+            Assert.IsNull(candidateStore.Peek(episode.Id));
+            libraryManagerStub.Verify(x => x.GetLibraryOptions(It.IsAny<BaseItem>()), Times.Exactly(2));
+        }
+
+        private static EpisodeOverviewCleanupPostProcessService CreateService(
+            IEpisodeOverviewCleanupCandidateStore candidateStore,
+            IEpisodeOverviewCleanupPersistence persistence,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
+        {
+            return new EpisodeOverviewCleanupPostProcessService(candidateStore, persistence, LoggerFactory.Create(builder => { }).CreateLogger<EpisodeOverviewCleanupPostProcessService>(), ordinaryItemLibraryCapabilityResolver);
         }
 
         private static ItemChangeEventArgs CreateUpdate(Episode episode, ItemUpdateType updateReason)
@@ -229,6 +266,22 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 QueuedAtUtc = DateTimeOffset.UtcNow,
                 NextAttemptAtUtc = DateTimeOffset.UtcNow.AddSeconds(10),
                 ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(2),
+            };
+        }
+
+        private static LibraryOptions CreateEpisodeLibraryOptions(bool metadataEnabled)
+        {
+            return new LibraryOptions
+            {
+                TypeOptions = new[]
+                {
+                    new TypeOptions
+                    {
+                        Type = nameof(Episode),
+                        MetadataFetchers = metadataEnabled ? new[] { MetaSharkPlugin.PluginName } : Array.Empty<string>(),
+                        ImageFetchers = Array.Empty<string>(),
+                    },
+                },
             };
         }
 

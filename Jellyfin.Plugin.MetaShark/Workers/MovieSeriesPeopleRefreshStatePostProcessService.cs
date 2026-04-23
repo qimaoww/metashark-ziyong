@@ -45,8 +45,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private readonly IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore;
         private readonly IFileSystem? fileSystem;
         private readonly ILibraryManager? libraryManager;
+        private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver;
+        private readonly MetaSharkSharedEntityLibraryCapabilityResolver? sharedEntityLibraryCapabilityResolver;
 
-        public MovieSeriesPeopleRefreshStatePostProcessService(ILogger<MovieSeriesPeopleRefreshStatePostProcessService> logger, IPeopleRefreshStateStore stateStore, IProviderManager? providerManager = null, IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore = null, IFileSystem? fileSystem = null, ILibraryManager? libraryManager = null)
+        public MovieSeriesPeopleRefreshStatePostProcessService(ILogger<MovieSeriesPeopleRefreshStatePostProcessService> logger, IPeopleRefreshStateStore stateStore, IProviderManager? providerManager = null, IMovieSeriesPeopleOverwriteRefreshCandidateStore? overwriteRefreshCandidateStore = null, IFileSystem? fileSystem = null, ILibraryManager? libraryManager = null, MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null, MetaSharkSharedEntityLibraryCapabilityResolver? sharedEntityLibraryCapabilityResolver = null)
         {
             ArgumentNullException.ThrowIfNull(logger);
             ArgumentNullException.ThrowIfNull(stateStore);
@@ -57,6 +59,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.overwriteRefreshCandidateStore = overwriteRefreshCandidateStore ?? InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared;
             this.fileSystem = fileSystem;
             this.libraryManager = libraryManager;
+            this.ordinaryItemLibraryCapabilityResolver = ordinaryItemLibraryCapabilityResolver ?? (libraryManager == null ? null : new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager));
+            this.sharedEntityLibraryCapabilityResolver = sharedEntityLibraryCapabilityResolver ?? (libraryManager == null ? null : new MetaSharkSharedEntityLibraryCapabilityResolver(libraryManager));
         }
 
 #pragma warning disable CA1848
@@ -106,6 +110,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                     e.UpdateReason,
                     item.GetType().Name,
                     item is Season or Episode ? LogLevel.Debug : LogLevel.Information);
+                return;
+            }
+
+            if (!this.IsMetadataAllowed(item, triggerName, e.UpdateReason))
+            {
                 return;
             }
 
@@ -535,10 +544,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return Task.CompletedTask;
             }
 
+            var enabledRelatedItems = this.FilterMetadataEnabledRelatedItems(person, relatedItems, triggerName, updateReason);
+            if (enabledRelatedItems.Count == 0)
+            {
+                return Task.CompletedTask;
+            }
+
             var refreshOptions = CreateRelatedParentRefreshOptions(this.fileSystem);
             var queuedIds = new HashSet<Guid>();
 
-            foreach (var relatedItem in relatedItems)
+            foreach (var relatedItem in enabledRelatedItems)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -556,6 +571,60 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
 
             return Task.CompletedTask;
+        }
+
+        private bool IsMetadataAllowed(BaseItem item, string triggerName, ItemUpdateType updateReason)
+        {
+            if (this.ordinaryItemLibraryCapabilityResolver == null)
+            {
+                return true;
+            }
+
+            var gateDecision = this.ordinaryItemLibraryCapabilityResolver.Resolve(item, MetaSharkLibraryCapability.Metadata);
+            if (gateDecision.Allowed)
+            {
+                return true;
+            }
+
+            this.LogSkip("MetadataGateDenied", triggerName, item, updateReason, gateDecision.Reason.ToString());
+            return false;
+        }
+
+        private List<BaseItem> FilterMetadataEnabledRelatedItems(Person person, List<BaseItem> relatedItems, string triggerName, ItemUpdateType updateReason)
+        {
+            if (relatedItems.Count == 0)
+            {
+                return new List<BaseItem>();
+            }
+
+            if (this.sharedEntityLibraryCapabilityResolver != null)
+            {
+                var sharedDecision = this.sharedEntityLibraryCapabilityResolver.Resolve(person, MetaSharkLibraryCapability.Metadata);
+                if (!sharedDecision.Allowed)
+                {
+                    this.LogSkip("RelatedParentMetadataGateDenied", triggerName, person, updateReason, sharedDecision.Reason.ToString(), LogLevel.Debug);
+                    return new List<BaseItem>();
+                }
+            }
+
+            if (this.ordinaryItemLibraryCapabilityResolver == null)
+            {
+                return relatedItems.ToList();
+            }
+
+            var enabledItems = new List<BaseItem>();
+            foreach (var relatedItem in relatedItems)
+            {
+                var gateDecision = this.ordinaryItemLibraryCapabilityResolver.Resolve(relatedItem, MetaSharkLibraryCapability.Metadata);
+                if (!gateDecision.Allowed)
+                {
+                    continue;
+                }
+
+                enabledItems.Add(relatedItem);
+            }
+
+            return enabledItems;
         }
 
         private List<BaseItem> GetRelatedMovieSeriesItems(string personTmdbId)

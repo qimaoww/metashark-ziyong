@@ -63,11 +63,21 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<ITvMissingImageRefillService, TvMissingImageRefillService>();
             serviceCollection.AddSingleton<IPersonMissingImageRefillService, PersonMissingImageRefillService>();
             serviceCollection.AddSingleton<IMissingMetadataSearchService, MissingMetadataSearchService>();
+            serviceCollection.AddSingleton<MetaSharkOrdinaryItemLibraryCapabilityResolver>();
+            serviceCollection.AddSingleton<MetaSharkSharedEntityLibraryCapabilityResolver>();
             serviceCollection.AddSingleton<IMovieSeriesPeopleOverwriteRefreshCandidateStore>((_) => InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared);
             serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore, InMemoryEpisodeTitleBackfillCandidateStore>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPendingResolver, EpisodeTitleBackfillPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPersistence, JellyfinEpisodeTitleBackfillPersistence>();
-            serviceCollection.AddSingleton<IEpisodeTitleBackfillPostProcessService, EpisodeTitleBackfillPostProcessService>();
+            serviceCollection.AddSingleton<IEpisodeTitleBackfillPostProcessService>((ctx) =>
+            {
+                return new EpisodeTitleBackfillPostProcessService(
+                    ctx.GetRequiredService<IEpisodeTitleBackfillCandidateStore>(),
+                    ctx.GetRequiredService<IEpisodeTitleBackfillPendingResolver>(),
+                    ctx.GetRequiredService<IEpisodeTitleBackfillPersistence>(),
+                    ctx.GetRequiredService<ILogger<EpisodeTitleBackfillPostProcessService>>(),
+                    ctx.GetRequiredService<MetaSharkOrdinaryItemLibraryCapabilityResolver>());
+            });
             serviceCollection.AddSingleton<MovieSeriesPeopleRefreshStatePostProcessService>((ctx) =>
             {
                 return new MovieSeriesPeopleRefreshStatePostProcessService(
@@ -76,12 +86,22 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<IProviderManager>(),
                     ctx.GetRequiredService<IMovieSeriesPeopleOverwriteRefreshCandidateStore>(),
                     ctx.GetRequiredService<IFileSystem>(),
-                    ctx.GetRequiredService<ILibraryManager>());
+                    ctx.GetRequiredService<ILibraryManager>(),
+                    ctx.GetRequiredService<MetaSharkOrdinaryItemLibraryCapabilityResolver>(),
+                    ctx.GetRequiredService<MetaSharkSharedEntityLibraryCapabilityResolver>());
             });
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupCandidateStore, InMemoryEpisodeOverviewCleanupCandidateStore>();
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupPendingResolver, EpisodeOverviewCleanupPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupPersistence, JellyfinEpisodeOverviewCleanupPersistence>();
-            serviceCollection.AddSingleton<IEpisodeOverviewCleanupPostProcessService, EpisodeOverviewCleanupPostProcessService>();
+            serviceCollection.AddSingleton<IEpisodeOverviewCleanupPostProcessService>((ctx) =>
+            {
+                return new EpisodeOverviewCleanupPostProcessService(
+                    ctx.GetRequiredService<IEpisodeOverviewCleanupCandidateStore>(),
+                    ctx.GetRequiredService<IEpisodeOverviewCleanupPendingResolver>(),
+                    ctx.GetRequiredService<IEpisodeOverviewCleanupPersistence>(),
+                    ctx.GetRequiredService<ILogger<EpisodeOverviewCleanupPostProcessService>>(),
+                    ctx.GetRequiredService<MetaSharkOrdinaryItemLibraryCapabilityResolver>());
+            });
             serviceCollection.AddSingleton((ctx) =>
             {
                 return new DoubanApi(ctx.GetRequiredService<ILoggerFactory>());

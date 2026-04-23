@@ -13,6 +13,7 @@ using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
@@ -342,6 +343,111 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+        [TestMethod]
+        public async Task SingleItemSearchMissingLifecycle_Movie_MetadataGateDisabled_ShouldNotQueueOverwriteOrPersistStateUntilReenabled()
+        {
+            using var harness = FlowHarness<TrackingMovie>.CreateMovie();
+            var authoritativePeople = CreateAuthoritativePeopleSet();
+            var authoritativeSnapshot = CreateAuthoritativePeopleSnapshot(harness.Item, authoritativePeople);
+            harness.Item.SetSimulatedPeople(CreateNonAuthoritativePeopleWithSameCount());
+            harness.SetMetadataGate(harness.Item, metadataEnabled: false);
+            harness.OverwriteRefreshCandidateStore.Save(new MovieSeriesPeopleOverwriteRefreshCandidate
+            {
+                ItemId = harness.Item.Id,
+                ItemPath = harness.Item.Path,
+                ExpectedPeopleCount = authoritativePeople.Count,
+                AuthoritativePeopleSnapshot = authoritativeSnapshot,
+            });
+
+            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
+
+            Assert.IsNull(harness.StateStore.GetState(harness.Item.Id), "metadata gate 拒绝时不应提前结清 people state。 ");
+            Assert.AreEqual(0, harness.StateStore.SaveCallCount, "metadata gate 拒绝时不应写入 state store。 ");
+            Assert.AreEqual(0, harness.QueueInvocations.Count, "metadata gate 拒绝时不应排队 overwrite refresh。 ");
+            Assert.IsNotNull(harness.OverwriteRefreshCandidateStore.Peek(harness.Item.Id), "metadata gate 拒绝时必须保留 overwrite candidate。 ");
+            Assert.IsTrue(harness.LibraryOptionsQueryCount > 0, "普通条目 metadata gate 必须在 post-process 中真实执行，不能被绕过。 ");
+
+            harness.SetMetadataGate(harness.Item, metadataEnabled: true);
+
+            await harness.TriggerMetadataDownloadAsync().ConfigureAwait(false);
+
+            AssertQueuedOnceForSingleItemSearchMissingOverwrite(harness, harness.Item.Id);
+            AssertPendingOverwriteCandidate(harness, expectedPeopleCount: authoritativePeople.Count, expectedAuthoritativePeopleSnapshot: authoritativeSnapshot);
+        }
+
+        [TestMethod]
+        public async Task PersonImageUpdate_MixedEnabledAndDisabledRelatedParents_ShouldQueueOnlyEnabledParents()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var queuedIds = new List<Guid>();
+            var providerManagerStub = new Mock<IProviderManager>();
+            providerManagerStub
+                .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, _, _) => queuedIds.Add(itemId));
+
+            var person = new Person
+            {
+                Id = Guid.NewGuid(),
+                Name = "Actor A",
+                Path = "/library/people/actor-a",
+            };
+            person.SetProviderId(MetadataProvider.Tmdb, "777");
+            person.SetImagePath(ImageType.Primary, "https://example.com/actor-a.jpg");
+
+            var enabledMovie = new TrackingMovie
+            {
+                Id = Guid.NewGuid(),
+                Name = "Enabled Movie",
+                Path = "/library/movies/enabled/enabled.mkv",
+                Overview = "enabled movie overview",
+            };
+            enabledMovie.SetProviderId(MetadataProvider.Tmdb, "123456");
+            enabledMovie.SetSimulatedPeople(new[] { CreatePerson("777", "Actor", "角色A", "Actor A") });
+
+            var disabledSeries = new TrackingSeries
+            {
+                Id = Guid.NewGuid(),
+                Name = "Disabled Series",
+                Path = "/library/tv/disabled-series",
+                Overview = "disabled series overview",
+            };
+            disabledSeries.SetProviderId(MetadataProvider.Tmdb, "654321");
+            disabledSeries.SetSimulatedPeople(new[] { CreatePerson("777", "Actor", "角色A", "Actor A") });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem> { enabledMovie, disabledSeries });
+            libraryManagerStub
+                .Setup(x => x.GetLibraryOptions(It.Is<BaseItem>(item => ReferenceEquals(item, enabledMovie))))
+                .Returns(CreateMetadataLibraryOptions(enabledMovie, metadataEnabled: true));
+            libraryManagerStub
+                .Setup(x => x.GetLibraryOptions(It.Is<BaseItem>(item => ReferenceEquals(item, disabledSeries))))
+                .Returns(CreateMetadataLibraryOptions(disabledSeries, metadataEnabled: false));
+
+            var service = new MovieSeriesPeopleRefreshStatePostProcessService(
+                Mock.Of<ILogger<MovieSeriesPeopleRefreshStatePostProcessService>>(),
+                stateStore,
+                providerManagerStub.Object,
+                new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore(),
+                Mock.Of<IFileSystem>(),
+                libraryManagerStub.Object);
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = person,
+                    UpdateReason = ItemUpdateType.ImageUpdate,
+                },
+                MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            CollectionAssert.AreEquivalent(new[] { enabledMovie.Id }, queuedIds);
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()),
+                Times.Once);
+        }
+
         private static void AssertCandidate<TItem>(FlowHarness<TItem> harness, BaseItem item, CandidateReason expectedReason, bool expectedCandidate)
             where TItem : BaseItem, ITrackingLifecycleItem
         {
@@ -442,6 +548,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
+        private static LibraryOptions CreateMetadataLibraryOptions(BaseItem item, bool metadataEnabled)
+        {
+            var itemType = item switch
+            {
+                Movie => nameof(Movie),
+                Series => nameof(Series),
+                Season => nameof(Season),
+                Episode => nameof(Episode),
+                _ => string.Empty,
+            };
+
+            return new LibraryOptions
+            {
+                TypeOptions = string.IsNullOrWhiteSpace(itemType)
+                    ? Array.Empty<TypeOptions>()
+                    : new[]
+                    {
+                        new TypeOptions
+                        {
+                            Type = itemType,
+                            MetadataFetchers = metadataEnabled ? new[] { MetaSharkPlugin.PluginName } : Array.Empty<string>(),
+                            ImageFetchers = Array.Empty<string>(),
+                        },
+                    },
+            };
+        }
+
         private static IReadOnlyList<PersonInfo> CreateAuthoritativePeopleSet()
         {
             return new[]
@@ -513,6 +646,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private sealed class FlowHarness<TItem> : IDisposable
             where TItem : BaseItem, ITrackingLifecycleItem
         {
+            private readonly Dictionary<Guid, LibraryOptions?> metadataLibraryOptionsByItemId = new Dictionary<Guid, LibraryOptions?>();
             private readonly Mock<ILibraryManager> libraryManagerStub;
             private readonly MissingMetadataSearchService missingMetadataSearchService;
             private readonly MovieSeriesPeopleRefreshStateItemUpdatedWorker worker;
@@ -529,6 +663,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
                     .Callback(() => this.SearchQueryInvocationCount++)
                     .Returns(new List<BaseItem> { this.Item });
+                this.libraryManagerStub
+                    .Setup(x => x.GetLibraryOptions(It.IsAny<BaseItem>()))
+                    .Callback<BaseItem>(_ => this.LibraryOptionsQueryCount++)
+                    .Returns<BaseItem>(this.ResolveLibraryOptions);
+                this.SetMetadataGate(this.Item, metadataEnabled: true);
 
                 var providerManagerStub = new Mock<IProviderManager>();
                 providerManagerStub
@@ -554,7 +693,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     this.StateStore,
                     providerManagerStub.Object,
                     this.OverwriteRefreshCandidateStore,
-                    Mock.Of<IFileSystem>());
+                    Mock.Of<IFileSystem>(),
+                    this.libraryManagerStub.Object);
                 this.worker = new MovieSeriesPeopleRefreshStateItemUpdatedWorker(
                     this.libraryManagerStub.Object,
                     postProcessService,
@@ -568,6 +708,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             public InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore OverwriteRefreshCandidateStore { get; }
 
             public int SearchQueryInvocationCount { get; private set; }
+
+            public int LibraryOptionsQueryCount { get; private set; }
 
             public List<QueueRefreshInvocation> QueueInvocations { get; }
 
@@ -623,6 +765,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 return this.missingMetadataSearchService.RunFullLibrarySearchAsync(new ProgressRecorder(), CancellationToken.None);
             }
 
+            public void SetMetadataGate(BaseItem item, bool metadataEnabled)
+            {
+                this.metadataLibraryOptionsByItemId[item.Id] = CreateMetadataLibraryOptions(item, metadataEnabled);
+            }
+
             public async Task TriggerMetadataDownloadAsync()
             {
                 if (!this.workerStarted)
@@ -647,6 +794,16 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     this.worker.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
                 }
+            }
+
+            private LibraryOptions ResolveLibraryOptions(BaseItem item)
+            {
+                if (this.metadataLibraryOptionsByItemId.TryGetValue(item.Id, out var libraryOptions))
+                {
+                    return libraryOptions ?? CreateMetadataLibraryOptions(item, metadataEnabled: true);
+                }
+
+                return CreateMetadataLibraryOptions(item, metadataEnabled: true);
             }
         }
 

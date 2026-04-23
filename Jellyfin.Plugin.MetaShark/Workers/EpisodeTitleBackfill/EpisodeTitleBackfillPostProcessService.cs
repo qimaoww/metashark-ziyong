@@ -8,6 +8,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Entities.TV;
@@ -19,6 +20,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
     {
         private readonly IEpisodeTitleBackfillPendingResolver pendingResolver;
         private readonly IEpisodeTitleBackfillPersistence persistence;
+        private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver;
         private readonly ILogger<EpisodeTitleBackfillPostProcessService> logger;
 
         private static bool IsAcceptedUpdateReason(ItemUpdateType updateReason)
@@ -39,8 +41,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
         public EpisodeTitleBackfillPostProcessService(
             IEpisodeTitleBackfillCandidateStore candidateStore,
             IEpisodeTitleBackfillPersistence persistence,
-            ILogger<EpisodeTitleBackfillPostProcessService> logger)
-            : this(candidateStore, new EpisodeTitleBackfillPendingResolver(candidateStore), persistence, logger)
+            ILogger<EpisodeTitleBackfillPostProcessService> logger,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
+            : this(candidateStore, new EpisodeTitleBackfillPendingResolver(candidateStore), persistence, logger, ordinaryItemLibraryCapabilityResolver)
         {
         }
 
@@ -48,7 +51,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             IEpisodeTitleBackfillCandidateStore candidateStore,
             IEpisodeTitleBackfillPendingResolver pendingResolver,
             IEpisodeTitleBackfillPersistence persistence,
-            ILogger<EpisodeTitleBackfillPostProcessService> logger)
+            ILogger<EpisodeTitleBackfillPostProcessService> logger,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
         {
             ArgumentNullException.ThrowIfNull(candidateStore);
             ArgumentNullException.ThrowIfNull(pendingResolver);
@@ -57,6 +61,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
 
             this.pendingResolver = pendingResolver;
             this.persistence = persistence;
+            this.ordinaryItemLibraryCapabilityResolver = ordinaryItemLibraryCapabilityResolver;
             this.logger = logger;
         }
 #pragma warning restore SA1201
@@ -111,6 +116,20 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             var originalTitleSnapshot = (candidate.OriginalTitleSnapshot ?? string.Empty).Trim();
             var candidateTitle = (candidate.CandidateTitle ?? string.Empty).Trim();
             var itemPath = string.IsNullOrWhiteSpace(candidate.ItemPath) ? episode.Path ?? string.Empty : candidate.ItemPath;
+
+            if (!this.IsMetadataAllowed(episode, out var gateDecision))
+            {
+                this.pendingResolver.ReleaseClaim(candidate, claimToken);
+                this.LogSkip(
+                    "MetadataGateDenied",
+                    triggerName,
+                    episode,
+                    currentTitle,
+                    candidateTitle,
+                    e.UpdateReason,
+                    gateDecision?.Reason.ToString());
+                return;
+            }
 
             if (episode.IsLocked || episode.LockedFields?.Contains(MetadataField.Name) == true)
             {
@@ -182,6 +201,18 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             }
 
             throw new ArgumentOutOfRangeException(nameof(triggerName), triggerName, "Only ItemUpdated and DeferredRetry triggers are supported.");
+        }
+
+        private bool IsMetadataAllowed(Episode episode, out MetaSharkLibraryCapabilityDecision? gateDecision)
+        {
+            gateDecision = null;
+            if (this.ordinaryItemLibraryCapabilityResolver == null)
+            {
+                return true;
+            }
+
+            gateDecision = this.ordinaryItemLibraryCapabilityResolver.Resolve(episode, MetaSharkLibraryCapability.Metadata);
+            return gateDecision.Allowed;
         }
 
         private void LogSkip(string reason, string triggerName, Episode episode, string currentTitle, string candidateTitle, ItemUpdateType updateReason, string? detail)

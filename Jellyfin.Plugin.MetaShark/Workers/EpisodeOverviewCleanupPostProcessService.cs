@@ -8,6 +8,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
@@ -18,6 +19,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     {
         private readonly IEpisodeOverviewCleanupPendingResolver pendingResolver;
         private readonly IEpisodeOverviewCleanupPersistence persistence;
+        private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver;
         private readonly ILogger<EpisodeOverviewCleanupPostProcessService> logger;
 
         private static bool IsAcceptedUpdateReason(ItemUpdateType updateReason)
@@ -30,8 +32,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         public EpisodeOverviewCleanupPostProcessService(
             IEpisodeOverviewCleanupCandidateStore candidateStore,
             IEpisodeOverviewCleanupPersistence persistence,
-            ILogger<EpisodeOverviewCleanupPostProcessService> logger)
-            : this(candidateStore, new EpisodeOverviewCleanupPendingResolver(candidateStore), persistence, logger)
+            ILogger<EpisodeOverviewCleanupPostProcessService> logger,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
+            : this(candidateStore, new EpisodeOverviewCleanupPendingResolver(candidateStore), persistence, logger, ordinaryItemLibraryCapabilityResolver)
         {
         }
 
@@ -39,7 +42,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             IEpisodeOverviewCleanupCandidateStore candidateStore,
             IEpisodeOverviewCleanupPendingResolver pendingResolver,
             IEpisodeOverviewCleanupPersistence persistence,
-            ILogger<EpisodeOverviewCleanupPostProcessService> logger)
+            ILogger<EpisodeOverviewCleanupPostProcessService> logger,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
         {
             ArgumentNullException.ThrowIfNull(candidateStore);
             ArgumentNullException.ThrowIfNull(pendingResolver);
@@ -48,6 +52,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             this.pendingResolver = pendingResolver;
             this.persistence = persistence;
+            this.ordinaryItemLibraryCapabilityResolver = ordinaryItemLibraryCapabilityResolver;
             this.logger = logger;
         }
 #pragma warning restore SA1201
@@ -85,6 +90,20 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             var originalOverviewSnapshot = (candidate.OriginalOverviewSnapshot ?? string.Empty).Trim();
             var currentOverview = (episode.Overview ?? string.Empty).Trim();
+
+            if (!this.IsMetadataAllowed(episode, out var gateDecision))
+            {
+                this.pendingResolver.ReleaseClaim(candidate, claimToken);
+                this.logger.LogInformation(
+                    "[MetaShark] 跳过剧集简介清理. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
+                    "MetadataGateDenied",
+                    triggerName,
+                    episode.Id,
+                    episode.Path ?? string.Empty,
+                    e.UpdateReason,
+                    gateDecision?.Reason.ToString() ?? string.Empty);
+                return;
+            }
 
             if (episode.IsLocked || episode.LockedFields?.Contains(MetadataField.Overview) == true)
             {
@@ -145,6 +164,18 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
 
             throw new ArgumentOutOfRangeException(nameof(triggerName), triggerName, "Only ItemUpdated and DeferredRetry triggers are supported.");
+        }
+
+        private bool IsMetadataAllowed(Episode episode, out MetaSharkLibraryCapabilityDecision? gateDecision)
+        {
+            gateDecision = null;
+            if (this.ordinaryItemLibraryCapabilityResolver == null)
+            {
+                return true;
+            }
+
+            gateDecision = this.ordinaryItemLibraryCapabilityResolver.Resolve(episode, MetaSharkLibraryCapability.Metadata);
+            return gateDecision.Allowed;
         }
     }
 }

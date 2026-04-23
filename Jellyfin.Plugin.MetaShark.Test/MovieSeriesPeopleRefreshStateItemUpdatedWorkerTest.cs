@@ -7,6 +7,7 @@ using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
@@ -110,6 +111,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
                 .Callback<InternalItemsQuery>(query => capturedQuery = query)
                 .Returns(new List<BaseItem> { movie, series });
+            libraryManagerStub
+                .Setup(x => x.GetLibraryOptions(It.Is<BaseItem>(item => ReferenceEquals(item, movie))))
+                .Returns(CreateLibraryOptions(nameof(Movie), metadataAllowed: true));
+            libraryManagerStub
+                .Setup(x => x.GetLibraryOptions(It.Is<BaseItem>(item => ReferenceEquals(item, series))))
+                .Returns(CreateLibraryOptions(nameof(Series), metadataAllowed: true));
 
             var queueCalls = new List<(Guid ItemId, MetadataRefreshOptions Options, RefreshPriority Priority)>();
             var providerManagerStub = new Mock<IProviderManager>();
@@ -754,6 +761,22 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 item.SetProviderId(MetadataProvider.Tmdb, "123456");
             }
+        }
+
+        private static LibraryOptions CreateLibraryOptions(string itemType, bool metadataAllowed)
+        {
+            return new LibraryOptions
+            {
+                TypeOptions = new[]
+                {
+                    new TypeOptions
+                    {
+                        Type = itemType,
+                        MetadataFetchers = metadataAllowed ? new[] { MetaSharkPlugin.PluginName } : Array.Empty<string>(),
+                        ImageFetchers = Array.Empty<string>(),
+                    },
+                },
+            };
         }
 
         private static void AddLegacyPeopleRefreshStateProviderId(MediaBrowser.Controller.Entities.BaseItem item, string version)

@@ -1,5 +1,6 @@
 using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Plugin.MetaShark.Configuration;
+using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
@@ -10,6 +11,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Serialization;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -400,6 +402,64 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task ProcessUpdatedItemAsync_MetadataGateDisabled_DoesNotRemoveCandidateAndAllowsFutureRetry()
+        {
+            SetFeatureEnabled(true);
+
+            var episodeId = Guid.NewGuid();
+            var candidateStore = new InMemoryEpisodeTitleBackfillCandidateStore();
+            candidateStore.Save(CreateCandidate(episodeId, "第 1 集", "皇后回宫"));
+            var disabledEpisode = new Episode
+            {
+                Id = episodeId,
+                Name = "第 1 集",
+                Path = "/library/tv/series-a/Season 01/episode-01.mkv",
+            };
+            var retryEpisode = new Episode
+            {
+                Id = episodeId,
+                Name = "第 1 集",
+                Path = "/library/tv/series-a/Season 01/episode-01.mkv",
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .SetupSequence(x => x.GetLibraryOptions(It.IsAny<BaseItem>()))
+                .Returns(CreateEpisodeLibraryOptions(metadataEnabled: false))
+                .Returns(CreateEpisodeLibraryOptions(metadataEnabled: true));
+
+            var persistenceStub = new Mock<IEpisodeTitleBackfillPersistence>();
+            persistenceStub
+                .Setup(x => x.SaveAsync(retryEpisode, CancellationToken.None))
+                .Returns(Task.CompletedTask);
+
+            var ordinaryResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManagerStub.Object);
+            var service = CreateService(candidateStore, persistenceStub.Object, out var loggerStub, ordinaryResolver);
+
+            await service.ProcessUpdatedItemAsync(CreateUpdate(disabledEpisode, ItemUpdateType.MetadataImport), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual("第 1 集", disabledEpisode.Name);
+            Assert.IsNotNull(candidateStore.Peek(episodeId), "metadata gate 拒绝时必须保留 candidate，供库重新启用后继续重试。");
+            persistenceStub.Verify(x => x.SaveAsync(It.IsAny<Episode>(), It.IsAny<CancellationToken>()), Times.Never);
+            AssertSkipLog(
+                loggerStub,
+                "MetadataGateDenied",
+                episodeId,
+                disabledEpisode.Path!,
+                disabledEpisode.Name!,
+                "皇后回宫",
+                ItemUpdateType.MetadataImport,
+                detail: MetaSharkLibraryCapabilityGateReason.CapabilityDisabledForResolvedLibrary.ToString());
+
+            await service.ProcessUpdatedItemAsync(CreateUpdate(retryEpisode, ItemUpdateType.MetadataDownload), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual("皇后回宫", retryEpisode.Name);
+            Assert.IsNull(candidateStore.Peek(episodeId), "库重新启用并成功落库后，应真正消费 candidate。 ");
+            persistenceStub.Verify(x => x.SaveAsync(retryEpisode, CancellationToken.None), Times.Once);
+            libraryManagerStub.Verify(x => x.GetLibraryOptions(It.IsAny<BaseItem>()), Times.Exactly(2));
+        }
+
+        [TestMethod]
         public async Task ProcessUpdatedItemAsync_NoCandidateReturned_DoesNotSave()
         {
             SetFeatureEnabled(true);
@@ -656,24 +716,26 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private static EpisodeTitleBackfillPostProcessService CreateService(
             IEpisodeTitleBackfillCandidateStore candidateStore,
             IEpisodeTitleBackfillPersistence persistence,
-            out Mock<ILogger<EpisodeTitleBackfillPostProcessService>> loggerStub)
+            out Mock<ILogger<EpisodeTitleBackfillPostProcessService>> loggerStub,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
         {
             loggerStub = new Mock<ILogger<EpisodeTitleBackfillPostProcessService>>();
             loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
 
-            return new EpisodeTitleBackfillPostProcessService(candidateStore, new StoreBackedPendingResolver(candidateStore), persistence, loggerStub.Object);
+            return new EpisodeTitleBackfillPostProcessService(candidateStore, new StoreBackedPendingResolver(candidateStore), persistence, loggerStub.Object, ordinaryItemLibraryCapabilityResolver);
         }
 
         private static EpisodeTitleBackfillPostProcessService CreateService(
             IEpisodeTitleBackfillCandidateStore candidateStore,
             IEpisodeTitleBackfillPendingResolver resolver,
             IEpisodeTitleBackfillPersistence persistence,
-            out Mock<ILogger<EpisodeTitleBackfillPostProcessService>> loggerStub)
+            out Mock<ILogger<EpisodeTitleBackfillPostProcessService>> loggerStub,
+            MetaSharkOrdinaryItemLibraryCapabilityResolver? ordinaryItemLibraryCapabilityResolver = null)
         {
             loggerStub = new Mock<ILogger<EpisodeTitleBackfillPostProcessService>>();
             loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
 
-            return new EpisodeTitleBackfillPostProcessService(candidateStore, resolver, persistence, loggerStub.Object);
+            return new EpisodeTitleBackfillPostProcessService(candidateStore, resolver, persistence, loggerStub.Object, ordinaryItemLibraryCapabilityResolver);
         }
 
         private static ItemChangeEventArgs CreateUpdate(Episode episode, ItemUpdateType updateReason)
@@ -718,6 +780,22 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private static EpisodeTitleBackfillCandidate CreatePathAwareCandidate(Guid itemId, string itemPath, string originalTitleSnapshot = "第 1 集", string candidateTitle = "皇后回宫")
         {
             return CreateCandidate(itemId, originalTitleSnapshot, candidateTitle, itemPath);
+        }
+
+        private static LibraryOptions CreateEpisodeLibraryOptions(bool metadataEnabled)
+        {
+            return new LibraryOptions
+            {
+                TypeOptions = new[]
+                {
+                    new TypeOptions
+                    {
+                        Type = nameof(Episode),
+                        MetadataFetchers = metadataEnabled ? new[] { MetaSharkPlugin.PluginName } : Array.Empty<string>(),
+                        ImageFetchers = Array.Empty<string>(),
+                    },
+                },
+            };
         }
 
         private static EpisodeTitleBackfillCandidate? PeekCandidateByPath(InMemoryEpisodeTitleBackfillCandidateStore candidateStore, string itemPath)
