@@ -513,26 +513,26 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return true;
         }
 
-        private async Task TryQueueRelatedParentRefreshForPersonImageAsync(Person person, string triggerName, ItemUpdateType updateReason, CancellationToken cancellationToken)
+        private Task TryQueueRelatedParentRefreshForPersonImageAsync(Person person, string triggerName, ItemUpdateType updateReason, CancellationToken cancellationToken)
         {
             if (!updateReason.HasFlag(ItemUpdateType.ImageUpdate)
                 || !HasUsablePrimaryImage(person)
                 || this.providerManager == null
                 || this.fileSystem == null)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             var personTmdbId = person.GetProviderId(MetadataProvider.Tmdb);
             if (string.IsNullOrWhiteSpace(personTmdbId))
             {
-                return;
+                return Task.CompletedTask;
             }
 
             var relatedItems = this.GetRelatedMovieSeriesItems(personTmdbId);
             if (relatedItems.Count == 0)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             var refreshOptions = CreateRelatedParentRefreshOptions(this.fileSystem);
@@ -554,6 +554,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             {
                 LogQueuedRelatedParentRefresh(this.logger, person.Id, triggerName, person.Path ?? string.Empty, updateReason, queuedIds.Count, null);
             }
+
+            return Task.CompletedTask;
         }
 
         private List<BaseItem> GetRelatedMovieSeriesItems(string personTmdbId)
