@@ -9,6 +9,7 @@ namespace Jellyfin.Plugin.MetaShark
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Workers;
+    using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
     using MediaBrowser.Controller;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Plugins;

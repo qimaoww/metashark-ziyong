@@ -4,6 +4,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Workers;
+using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities.TV;

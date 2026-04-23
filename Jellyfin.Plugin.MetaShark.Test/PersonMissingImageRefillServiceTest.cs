@@ -207,7 +207,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             serviceCollection.AddSingleton(Mock.Of<ICollectionManager>());
 
             new ServiceRegistrator().RegisterServices(serviceCollection, Mock.Of<IServerApplicationHost>());
-            serviceCollection.AddSingleton(Mock.Of<IEpisodeTitleBackfillPersistence>());
+            serviceCollection.AddSingleton(Mock.Of<Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill.IEpisodeTitleBackfillPersistence>());
             serviceCollection.AddSingleton(Mock.Of<IEpisodeOverviewCleanupPersistence>());
 
             return serviceCollection.BuildServiceProvider();

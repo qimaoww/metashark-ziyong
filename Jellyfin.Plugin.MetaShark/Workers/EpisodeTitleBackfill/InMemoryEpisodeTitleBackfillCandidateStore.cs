@@ -2,7 +2,7 @@
 // Copyright (c) PlaceholderCompany. All rights reserved.
 // </copyright>
 
-namespace Jellyfin.Plugin.MetaShark.Workers
+namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
 {
     using System;
     using System.Collections.Generic;
