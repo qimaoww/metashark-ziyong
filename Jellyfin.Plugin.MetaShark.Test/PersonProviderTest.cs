@@ -21,6 +21,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using TMDbLib.Objects.Configuration;
 using TMDbLib.Objects.General;
 using TmdbPerson = TMDbLib.Objects.People.Person;
 
@@ -288,6 +289,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Assert.IsTrue(result.HasMetadata, "显式手动匹配语义下仍应允许使用 Douban 人物详情。");
                     Assert.IsNotNull(result.Item);
                     Assert.AreEqual("27257290", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+                    Assert.IsTrue(result.Item.GetImagePath(ImageType.Primary, 0)?.Contains("img9.doubanio.com", StringComparison.Ordinal) == true, "Douban 人物元数据路径应直接把主图 URL 写回人物主图。 ");
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -385,6 +387,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNull(result.Item.Name, "PersonProvider 不应主动覆盖 item.Name。");
             Assert.AreEqual("2001", result.Item.GetProviderId(MetadataProvider.Tmdb));
             Assert.AreEqual("https://www.example.com/person", result.Item.HomePageUrl);
+            Assert.AreEqual("https://image.tmdb.org/t/p/original/person-profile.jpg", result.Item.GetImagePath(ImageType.Primary, 0));
             CollectionAssert.AreEqual(new[] { "浙江 衢州" }, result.Item.ProductionLocations!.ToArray());
         }
 
@@ -538,6 +541,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private PersonProvider CreateTmdbPersonProvider(TmdbApi tmdbApi)
         {
+            ConfigureTmdbImageConfig(tmdbApi);
             return new PersonProvider(
                 new DefaultHttpClientFactory(),
                 this.loggerFactory,
@@ -547,6 +551,35 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 tmdbApi,
                 new OmdbApi(this.loggerFactory),
                 new ImdbApi(this.loggerFactory));
+        }
+
+        private static void ConfigureTmdbImageConfig(TmdbApi tmdbApi)
+        {
+            var tmdbClientField = typeof(TmdbApi).GetField("tmDbClient", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(tmdbClientField);
+
+            var tmdbClient = tmdbClientField!.GetValue(tmdbApi);
+            Assert.IsNotNull(tmdbClient);
+
+            var setConfigMethod = tmdbClient!.GetType().GetMethod("SetConfig", new[] { typeof(TMDbConfig) });
+            Assert.IsNotNull(setConfigMethod);
+
+            setConfigMethod!.Invoke(tmdbClient, new object[]
+            {
+                new TMDbConfig
+                {
+                    Images = new ConfigImageTypes
+                    {
+                        BaseUrl = "http://image.tmdb.org/t/p/",
+                        SecureBaseUrl = "https://image.tmdb.org/t/p/",
+                        PosterSizes = new List<string> { "w500" },
+                        BackdropSizes = new List<string> { "w780" },
+                        LogoSizes = new List<string> { "w500" },
+                        ProfileSizes = new List<string> { "original" },
+                        StillSizes = new List<string> { "w300" },
+                    },
+                },
+            });
         }
 
         private static IMemoryCache GetTmdbMemoryCache(TmdbApi tmdbApi)
@@ -580,6 +613,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Homepage = "https://www.example.com/person",
                     Birthday = new DateTime(1974, 10, 18),
                     PlaceOfBirth = "浙江 衢州",
+                    ProfilePath = "/person-profile.jpg",
                 },
                 TimeSpan.FromMinutes(5));
         }

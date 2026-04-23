@@ -125,6 +125,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         item.ProductionLocations = new[] { c.Birthplace };
                     }
 
+                    if (Uri.TryCreate(c.Img, UriKind.Absolute, out var doubanImageUri))
+                    {
+                        item.SetImagePath(ImageType.Primary, this.GetProxyImageUrl(doubanImageUri).ToString());
+                    }
+
                     item.SetProviderId(DoubanProviderId, c.Id);
                     if (!string.IsNullOrEmpty(c.Imdb))
                     {
@@ -188,6 +193,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 if (!string.IsNullOrWhiteSpace(person.PlaceOfBirth))
                 {
                     item.ProductionLocations = new[] { person.PlaceOfBirth };
+                }
+
+                var profileUrl = this.TmdbApi.GetProfileUrl(person.ProfilePath)?.ToString();
+                if (!string.IsNullOrWhiteSpace(profileUrl))
+                {
+                    item.SetImagePath(ImageType.Primary, profileUrl);
                 }
 
                 item.SetProviderId(MetadataProvider.Tmdb, person.Id.ToString(CultureInfo.InvariantCulture));
