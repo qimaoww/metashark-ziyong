@@ -10,6 +10,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Linq;
     using System.Threading;
     using Jellyfin.Data.Enums;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Entities;
@@ -33,13 +34,15 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private readonly IProviderManager providerManager;
         private readonly IFileSystem fileSystem;
         private readonly IPersonImageRefillStateStore stateStore;
+        private readonly MetaSharkSharedEntityLibraryCapabilityResolver sharedEntityLibraryCapabilityResolver;
 
         public PersonMissingImageRefillService(
             ILoggerFactory loggerFactory,
             ILibraryManager libraryManager,
             IProviderManager providerManager,
             IFileSystem fileSystem,
-            IPersonImageRefillStateStore? stateStore = null)
+            IPersonImageRefillStateStore? stateStore = null,
+            MetaSharkSharedEntityLibraryCapabilityResolver? sharedEntityLibraryCapabilityResolver = null)
         {
             ArgumentNullException.ThrowIfNull(loggerFactory);
             ArgumentNullException.ThrowIfNull(libraryManager);
@@ -53,6 +56,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.stateStore = stateStore ?? new FilePersonImageRefillStateStore(
                 Path.Combine(Path.GetTempPath(), MetaSharkPlugin.PluginName, $"person-image-refill-state-{Guid.NewGuid():N}.json"),
                 loggerFactory);
+            this.sharedEntityLibraryCapabilityResolver = sharedEntityLibraryCapabilityResolver ?? new MetaSharkSharedEntityLibraryCapabilityResolver(libraryManager);
         }
 
         public PersonMissingImageRefillScanSummary QueueMissingImagesForFullLibraryScan(CancellationToken cancellationToken)
@@ -308,6 +312,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return "CooldownActive";
             }
 
+            if (!this.IsImageAllowed(person, out var gateDecision))
+            {
+                return gateDecision?.Reason.ToString() ?? "ImageGateDenied";
+            }
+
             var refreshOptions = this.CreateRefreshOptions();
             this.stateStore.Save(new PersonImageRefillState
             {
@@ -333,6 +342,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 ReplaceAllMetadata = false,
                 ReplaceAllImages = false,
             };
+        }
+
+        private bool IsImageAllowed(Person person, out MetaSharkLibraryCapabilityDecision? gateDecision)
+        {
+            gateDecision = this.sharedEntityLibraryCapabilityResolver.Resolve(person, MetaSharkLibraryCapability.Image);
+            return gateDecision.Allowed;
         }
     }
 }
