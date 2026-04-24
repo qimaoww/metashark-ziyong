@@ -7,6 +7,7 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Providers;
 using MediaBrowser.Model.Serialization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
@@ -221,6 +222,56 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+        [DataTestMethod]
+        [DataRow("en-US", 288001)]
+        [DataRow("ja-JP", 288002)]
+        [DataRow("zh-CN", 288003)]
+        public void ManualRemoteImages_TmdbPersonFiltersAllowedLanguagesAndPreservesInputOrder(string preferredLanguage, int tmdbId)
+        {
+            var info = new Person
+            {
+                Name = "多语言人物图片",
+                PreferredMetadataLanguage = preferredLanguage,
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { MetadataProvider.Tmdb.ToString(), tmdbId.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                },
+            };
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessor = CreateManualRemoteImageContextAccessor();
+            var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "手动 TMDb 人物图片链路不应访问 Douban。");
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbImageConfig(tmdbApi);
+            SeedTmdbPersonProfiles(tmdbApi, tmdbId, CreateMultilingualPersonProfiles());
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            Task.Run(async () =>
+            {
+                var provider = new PersonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                Assert.AreEqual(6, images.Count, "手动人物 RemoteImages 应仅返回中/日/英/null/empty 范围内的 TMDb 头像候选。");
+                AssertManualImageLanguagesInOrder(images, "人物头像", "en", null, "ja", string.Empty, "zh", "zh-CN");
+                AssertManualImageUrlsPresent(
+                    images,
+                    "人物头像",
+                    tmdbApi.GetProfileUrl("/person-profile-en.jpg")?.ToString(),
+                    tmdbApi.GetProfileUrl("/person-profile-no-language.jpg")?.ToString(),
+                    tmdbApi.GetProfileUrl("/person-profile-ja.jpg")?.ToString(),
+                    tmdbApi.GetProfileUrl("/person-profile-empty-language.jpg")?.ToString(),
+                    tmdbApi.GetProfileUrl("/person-profile-zh.jpg")?.ToString(),
+                    tmdbApi.GetProfileUrl("/person-profile-zh-cn.jpg")?.ToString());
+                Assert.IsFalse(images.Any(image => string.Equals(image.Language, "fr", StringComparison.OrdinalIgnoreCase)), "手动人物 RemoteImages 应过滤法语图片。");
+                Assert.IsFalse(images.Any(image => string.Equals(image.Language, "ko", StringComparison.OrdinalIgnoreCase)), "手动人物 RemoteImages 应过滤韩语图片。");
+                Assert.IsTrue(images.All(image => image.Type == ImageType.Primary), "人物图片 Provider 只应返回主图类型。");
+                Assert.IsTrue(images.All(image => image.ProviderName == MetaSharkPlugin.PluginName), "TMDb 人物图片 provider name 应保持插件名。");
+                Assert.IsTrue(images.Any(image => image.Language == null), "手动人物 RemoteImages 应保留 null 无语言图片。");
+                Assert.IsTrue(images.Any(image => image.Language == string.Empty), "手动人物 RemoteImages 应保留 empty 无语言图片。");
+            }).GetAwaiter().GetResult();
+        }
+
         private static void EnsurePluginInstance()
         {
             if (MetaSharkPlugin.Instance != null)
@@ -364,15 +415,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private static void SeedTmdbPersonProfiles(TmdbApi tmdbApi, int tmdbId)
         {
+            SeedTmdbPersonProfiles(
+                tmdbApi,
+                tmdbId,
+                new List<ImageData>
+                {
+                    CreateImageData("/person-profile.jpg", null, 800, 1200),
+                });
+        }
+
+        private static void SeedTmdbPersonProfiles(TmdbApi tmdbApi, int tmdbId, IList<ImageData> profiles)
+        {
             var person = new TmdbPerson
             {
                 Id = tmdbId,
                 Biography = "TMDb seeded biography",
             };
-            SetTmdbImages(person, ("Profiles", new List<ImageData>
-            {
-                CreateImageData("/person-profile.jpg", null, 800, 1200),
-            }));
+            SetTmdbImages(person, ("Profiles", profiles));
 
             GetTmdbMemoryCache(tmdbApi).Set($"person-{tmdbId}", person, TimeSpan.FromMinutes(5));
         }
@@ -406,6 +465,47 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 VoteAverage = 8.5,
                 VoteCount = 10,
             };
+        }
+
+        private static List<ImageData> CreateMultilingualPersonProfiles()
+        {
+            return new List<ImageData>
+            {
+                CreateImageData("/person-profile-en.jpg", "en", 800, 1200),
+                CreateImageData("/person-profile-fr.jpg", "fr", 800, 1200),
+                CreateImageData("/person-profile-ko.jpg", "ko", 800, 1200),
+                CreateImageData("/person-profile-no-language.jpg", null, 800, 1200),
+                CreateImageData("/person-profile-ja.jpg", "ja", 800, 1200),
+                CreateImageData("/person-profile-empty-language.jpg", string.Empty, 800, 1200),
+                CreateImageData("/person-profile-zh.jpg", "zh", 800, 1200),
+                CreateImageData("/person-profile-zh-cn.jpg", "zh-CN", 800, 1200),
+            };
+        }
+
+        private static void AssertManualImageLanguagesInOrder(IEnumerable<RemoteImageInfo> images, string imageKind, params string?[] expectedLanguages)
+        {
+            var actualLanguages = images.Select(image => FormatLanguageValue(image.Language)).ToArray();
+            var expectedLanguageValues = expectedLanguages.Select(FormatLanguageValue).ToArray();
+
+            CollectionAssert.AreEqual(
+                expectedLanguageValues,
+                actualLanguages,
+                imageKind + "过滤后应保持 TMDb 输入相对顺序并保留原始语言值，不能做插件侧语言排序。实际语言: " + string.Join(", ", actualLanguages));
+        }
+
+        private static void AssertManualImageUrlsPresent(IEnumerable<RemoteImageInfo> images, string imageKind, params string?[] expectedUrls)
+        {
+            var actualUrls = images.Select(image => image.Url).ToList();
+            foreach (var expectedUrl in expectedUrls)
+            {
+                Assert.IsNotNull(expectedUrl, imageKind + "的候选 URL 不应为空。实际 URL: " + string.Join(", ", actualUrls));
+                Assert.IsTrue(actualUrls.Contains(expectedUrl), imageKind + "应保留候选 URL: " + expectedUrl + "。实际 URL: " + string.Join(", ", actualUrls));
+            }
+        }
+
+        private static string FormatLanguageValue(string? language)
+        {
+            return language == null ? "<null>" : language.Length == 0 ? "<empty>" : language;
         }
 
         private static void SeedDoubanCelebrity(DoubanApi doubanApi, DoubanCelebrity celebrity)

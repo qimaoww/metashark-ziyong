@@ -49,7 +49,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
             var language = item.GetPreferredMetadataLanguage();
-            var doubanAllowed = IsDoubanAllowed(this.ResolveImageSemantic());
+            var imageSemantic = this.ResolveImageSemantic();
+            var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
+            var doubanAllowed = IsDoubanAllowed(imageSemantic);
             var usedDouban = false;
             this.Log("开始获取人物图片. name: {0} metaSource: {1}", item.Name, metaSource);
             if (doubanAllowed && !string.IsNullOrEmpty(cid))
@@ -104,7 +106,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         Width = x.Width,
                         Height = x.Height,
                         Type = ImageType.Primary,
-                        Language = AdjustImageLanguage(x.Iso_639_1, language),
+                        Language = isManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, language),
                         CommunityRating = x.VoteAverage,
                         VoteCount = x.VoteCount,
                         RatingType = RatingType.Score,
@@ -117,7 +119,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 this.Log("获取人物图片失败，没有可用图片. name: {0}", item.Name);
             }
 
-            return list.OrderByLanguageDescending(language);
+            return isManualImageRequest
+                ? list.FilterManualRemoteImagesByLanguage()
+                : list.OrderByLanguageDescending(language);
         }
     }
 }
