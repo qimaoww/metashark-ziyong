@@ -8,6 +8,7 @@ using Jellyfin.Data.Enums;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
@@ -512,6 +513,80 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var str = result.ToJson();
                 Console.WriteLine(result.ToJson());
             }).GetAwaiter().GetResult();
+        }
+
+        [TestMethod]
+        public void HandleExtraType_DoesNotSkipRealMovieTitlesThatLookLikeEpisodes()
+        {
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+            var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var handleExtraType = typeof(MovieProvider).GetMethod("HandleExtraType", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.IsNotNull(handleExtraType);
+
+            var firstResult = handleExtraType!.Invoke(provider, new object[]
+            {
+                new MovieInfo
+                {
+                    Path = "/media/魔法少女奈叶 The MOVIE 1st (2010).mkv",
+                    Name = "魔法少女奈叶 The MOVIE 1st (2010)",
+                },
+            });
+            var secondResult = handleExtraType.Invoke(provider, new object[]
+            {
+                new MovieInfo
+                {
+                    Path = "/media/罗小黑战记 2 (2025).mkv",
+                    Name = "罗小黑战记 2 (2025)",
+                },
+            });
+
+            Assert.IsNull(firstResult);
+            Assert.IsNull(secondResult);
+        }
+
+        [TestMethod]
+        public void HandleExtraType_StillSkipsKnownExtraTitles()
+        {
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+            var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var handleExtraType = typeof(MovieProvider).GetMethod("HandleExtraType", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.IsNotNull(handleExtraType);
+
+            var firstResult = (MetadataResult<Movie>?)handleExtraType!.Invoke(provider, new object[]
+            {
+                new MovieInfo
+                {
+                    Path = "/media/[VCB-Studio] Spice and Wolf [NCOP][Ma10p_1080p][x265_flac].mkv",
+                    Name = "[VCB-Studio] Spice and Wolf [NCOP][Ma10p_1080p][x265_flac]",
+                },
+            });
+            var secondResult = (MetadataResult<Movie>?)handleExtraType.Invoke(provider, new object[]
+            {
+                new MovieInfo
+                {
+                    Path = "/media/Evangelion 3.0+1.11 Thrice Upon a Time - Voice Message01 In Shin Evangelion No All Night Nippo (BDRIP 1920x1080 x265 10bit ac3).mkv",
+                    Name = "Evangelion 3.0+1.11 Thrice Upon a Time - Voice Message01 In Shin Evangelion No All Night Nippo (BDRIP 1920x1080 x265 10bit ac3)",
+                },
+            });
+
+            Assert.IsNotNull(firstResult);
+            Assert.IsFalse(firstResult.HasMetadata);
+            Assert.IsNotNull(secondResult);
+            Assert.IsFalse(secondResult.HasMetadata);
         }
 
         [TestMethod]

@@ -394,7 +394,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // TODO：插件暂时不支持设置影片为extra类型，只能直接忽略处理（最好放extras目录）
             var fileName = Path.GetFileNameWithoutExtension(info.Path) ?? info.Name;
             var parseResult = NameParser.Parse(fileName);
-            if (parseResult.IsExtra)
+            if (IsSkippableMovieExtra(parseResult))
             {
                 this.Log("识别到影片特典，跳过处理. name: {0}", fileName);
                 return new MetadataResult<Movie>();
@@ -408,6 +408,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return null;
+        }
+
+        private static bool IsSkippableMovieExtra(ParseNameResult parseResult)
+        {
+            return parseResult.IsExtra
+                && !string.Equals(parseResult.AnimeType, "MOVIE", StringComparison.OrdinalIgnoreCase);
         }
 
         private void TryQueueSearchMissingMetadataOverwriteCandidate(MovieInfo info, string tmdbId, IEnumerable<PersonInfo>? authoritativePeople, int expectedPeopleCount)
