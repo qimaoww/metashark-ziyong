@@ -70,9 +70,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
                 else
                 {
-                    var backdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, doubanAllowed, cancellationToken).ConfigureAwait(false);
-                    var logoImgs = await this.GetLogos(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
-
                     var res = new List<RemoteImageInfo>
                     {
                         new RemoteImageInfo
@@ -83,25 +80,32 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                             Language = item.GetPreferredMetadataLanguage(),
                         },
                     };
-                    res.AddRange(backdropImgs);
-                    res.AddRange(logoImgs);
-                    if (isManualImageRequest && !string.IsNullOrEmpty(tmdbId))
+
+                    if (isManualImageRequest)
                     {
-                        var language = item.GetPreferredMetadataLanguage();
-                        var images = await this.TmdbApi
-                            .GetMovieImagesAsync(tmdbId.ToInt(), string.Empty, string.Empty, cancellationToken)
-                            .ConfigureAwait(false);
-                        if (images != null)
+                        var manualBackdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, doubanAllowed, cancellationToken, includeTmdbFallback: false).ConfigureAwait(false);
+                        res.AddRange(manualBackdropImgs);
+                        if (!string.IsNullOrEmpty(tmdbId))
                         {
-                            res.AddRange(this.MapAllTmdbImages(images, language));
+                            var images = await this.TmdbApi
+                                .GetMovieImagesAsync(tmdbId.ToInt(), string.Empty, string.Empty, cancellationToken)
+                                .ConfigureAwait(false);
+                            if (images != null)
+                            {
+                                res.AddRange(this.MapAllTmdbImages(images));
+                            }
                         }
 
                         return res
                             .GroupBy(x => new { x.Type, x.Url })
                             .Select(x => x.First())
-                            .OrderByLanguageDescending(language);
+                            .FilterManualRemoteImagesByLanguage();
                     }
 
+                    var backdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, doubanAllowed, cancellationToken).ConfigureAwait(false);
+                    var logoImgs = await this.GetLogos(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
+                    res.AddRange(backdropImgs);
+                    res.AddRange(logoImgs);
                     return res;
                 }
             }
@@ -128,10 +132,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var remoteImages = new List<RemoteImageInfo>();
                 if (isManualImageRequest)
                 {
-                    remoteImages.AddRange(this.MapAllTmdbImages(images, language));
+                    remoteImages.AddRange(this.MapAllTmdbImages(images));
 
                     // TODO：jellyfin 内部判断取哪个图片时，还会默认使用 OrderByLanguageDescending 排序一次，这里排序没用
-                    return remoteImages.OrderByLanguageDescending(language);
+                    return remoteImages.FilterManualRemoteImagesByLanguage();
                 }
 
                 remoteImages.AddRange(images.Posters.Where(x => x.FilePath == movie.PosterPath).Select(x => new RemoteImageInfo
@@ -185,7 +189,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         /// Query for a background photo.
         /// </summary>
         /// <param name="cancellationToken">Instance of the <see cref="CancellationToken"/> interface.</param>
-        private async Task<IEnumerable<RemoteImageInfo>> GetBackdrop(BaseItem item, string alternativeImageLanguage, bool doubanAllowed, CancellationToken cancellationToken)
+        private async Task<IEnumerable<RemoteImageInfo>> GetBackdrop(BaseItem item, string alternativeImageLanguage, bool doubanAllowed, CancellationToken cancellationToken, bool includeTmdbFallback = true)
         {
             var sid = item.GetProviderId(DoubanProviderId);
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
@@ -227,7 +231,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // 添加 TheMovieDb 背景图为备选
-            if (Config.EnableTmdbBackdrop && !string.IsNullOrEmpty(tmdbId))
+            if (includeTmdbFallback && Config.EnableTmdbBackdrop && !string.IsNullOrEmpty(tmdbId))
             {
                 var language = item.GetPreferredMetadataLanguage();
                 var movie = await this.TmdbApi
@@ -284,7 +288,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return AdjustImageLanguagePriority(list, language, alternativeImageLanguage);
         }
 
-        private List<RemoteImageInfo> MapAllTmdbImages(ImagesWithId images, string language)
+        private List<RemoteImageInfo> MapAllTmdbImages(ImagesWithId images)
         {
             ArgumentNullException.ThrowIfNull(images);
 
@@ -298,7 +302,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 VoteCount = x.VoteCount,
                 Width = x.Width,
                 Height = x.Height,
-                Language = AdjustImageLanguage(x.Iso_639_1, language),
+                Language = x.Iso_639_1,
                 RatingType = RatingType.Score,
             }));
 
@@ -311,7 +315,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 VoteCount = x.VoteCount,
                 Width = x.Width,
                 Height = x.Height,
-                Language = AdjustImageLanguage(x.Iso_639_1, language),
+                Language = x.Iso_639_1,
                 RatingType = RatingType.Score,
             }));
 
@@ -324,7 +328,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 VoteCount = x.VoteCount,
                 Width = x.Width,
                 Height = x.Height,
-                Language = AdjustImageLanguage(x.Iso_639_1, language),
+                Language = x.Iso_639_1,
                 RatingType = RatingType.Score,
             }));
 

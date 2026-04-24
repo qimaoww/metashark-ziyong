@@ -260,8 +260,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
-        [TestMethod]
-        public void ManualRemoteImageSearch_TmdbSeries_ReturnsAllImageLanguages()
+        [DataTestMethod]
+        [DataRow("en-US", 98765)]
+        [DataRow("ja-JP", 98769)]
+        [DataRow("zh-CN", 98770)]
+        public void ManualRemoteImages_TmdbSeriesFiltersAllowedLanguagesAndPreservesLanguageValues(string preferredLanguage, int tmdbId)
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -274,11 +277,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 plugin.Configuration.EnableTmdb = true;
 
-                var tmdbId = 98765;
                 var info = new MediaBrowser.Controller.Entities.TV.Series()
                 {
                     Name = "多语言图片剧集",
-                    PreferredMetadataLanguage = "zh",
+                    PreferredMetadataLanguage = preferredLanguage,
                     ProviderIds = new Dictionary<string, string>
                     {
                         { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
@@ -291,7 +293,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "手动 TMDb 剧集图片测试不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 ConfigureTmdbImageConfig(tmdbApi);
-                SeedTmdbSeriesDetails(tmdbApi, tmdbId, "zh");
+                SeedTmdbSeriesDetails(tmdbApi, tmdbId, preferredLanguage);
                 SeedTmdbSeriesImages(tmdbApi, tmdbId, CreateMultilingualSeriesImages());
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
@@ -304,12 +306,44 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var backdrops = images.Where(image => image.Type == ImageType.Backdrop).ToList();
                     var logos = images.Where(image => image.Type == ImageType.Logo).ToList();
 
-                    Assert.AreEqual(4, posters.Count, "手动 RemoteImages 应返回所有 TMDb 海报候选。");
-                    Assert.AreEqual(4, backdrops.Count, "手动 RemoteImages 应返回所有 TMDb 背景图候选。");
-                    Assert.AreEqual(4, logos.Count, "手动 RemoteImages 应返回所有 TMDb Logo 候选。");
-                    AssertContainsLanguages(posters, "海报");
-                    AssertContainsLanguages(backdrops, "背景图");
-                    AssertContainsLanguages(logos, "Logo");
+                    Assert.AreEqual(6, posters.Count, "手动 RemoteImages 应仅返回中/日/英/无语言范围内的 TMDb 海报候选。");
+                    Assert.AreEqual(6, backdrops.Count, "手动 RemoteImages 应仅返回中/日/英/无语言范围内的 TMDb 背景图候选。");
+                    Assert.AreEqual(6, logos.Count, "手动 RemoteImages 应仅返回中/日/英/无语言范围内的 TMDb Logo 候选。");
+                    AssertManualImageLanguages(posters, "剧集海报", 2);
+                    AssertManualImageLanguages(backdrops, "剧集背景图", 2);
+                    AssertManualImageLanguages(logos, "剧集 Logo", 2);
+                    AssertManualImageUrlsPresent(
+                        posters,
+                        "剧集海报",
+                        tmdbApi.GetPosterUrl("/series-poster.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/series-poster-zh-cn.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/series-poster-ja.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/series-poster-en.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/series-poster-no-language.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/series-poster-empty-language.jpg")?.ToString());
+                    AssertManualImageUrlsPresent(
+                        backdrops,
+                        "剧集背景图",
+                        tmdbApi.GetBackdropUrl("/series-backdrop.jpg")?.ToString(),
+                        tmdbApi.GetBackdropUrl("/series-backdrop-zh-cn.jpg")?.ToString(),
+                        tmdbApi.GetBackdropUrl("/series-backdrop-ja.jpg")?.ToString(),
+                        tmdbApi.GetBackdropUrl("/series-backdrop-en.jpg")?.ToString(),
+                        tmdbApi.GetBackdropUrl("/series-backdrop-no-language.jpg")?.ToString(),
+                        tmdbApi.GetBackdropUrl("/series-backdrop-empty-language.jpg")?.ToString());
+                    AssertManualImageUrlsPresent(
+                        logos,
+                        "剧集 Logo",
+                        tmdbApi.GetLogoUrl("/series-logo.png")?.ToString(),
+                        tmdbApi.GetLogoUrl("/series-logo-zh-cn.png")?.ToString(),
+                        tmdbApi.GetLogoUrl("/series-logo-ja.png")?.ToString(),
+                        tmdbApi.GetLogoUrl("/series-logo-en.png")?.ToString(),
+                        tmdbApi.GetLogoUrl("/series-logo-no-language.png")?.ToString(),
+                        tmdbApi.GetLogoUrl("/series-logo-empty-language.png")?.ToString());
+                    AssertManualImageLanguagesInOrder(posters, "剧集海报", "en", null, "ja", string.Empty, "zh", "zh-CN");
+                    AssertManualImageLanguagesInOrder(backdrops, "剧集背景图", "en", null, "ja", string.Empty, "zh", "zh-CN");
+                    AssertManualImageLanguagesInOrder(logos, "剧集 Logo", "en", null, "ja", string.Empty, "zh", "zh-CN");
+                    Assert.IsFalse(images.Any(image => string.Equals(image.Language, "fr", StringComparison.OrdinalIgnoreCase)), "手动 RemoteImages 应过滤法语等其他语言图片。");
+                    Assert.IsFalse(images.Any(image => string.Equals(image.Language, "ko", StringComparison.OrdinalIgnoreCase)), "手动 RemoteImages 应过滤韩语等其他语言图片。");
                     Assert.IsTrue(posters.Any(image => image.Url == tmdbApi.GetPosterUrl("/series-poster-en.jpg")?.ToString()), "海报应使用 TMDb poster URL helper。");
                     Assert.IsTrue(backdrops.Any(image => image.Url == tmdbApi.GetBackdropUrl("/series-backdrop-ja.jpg")?.ToString()), "背景图应使用 TMDb backdrop URL helper。");
                     Assert.IsTrue(logos.Any(image => image.Url == tmdbApi.GetLogoUrl("/series-logo-no-language.png")?.ToString()), "Logo 应使用 TMDb logo URL helper。");
@@ -325,7 +359,88 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualRemoteImageSearch_DoubanSeries_AlsoReturnsAllTmdbImageLanguages()
+        public void ManualRemoteImages_TmdbSeriesWithoutChineseKeepsAllowedLanguages()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.EnableTmdb = true;
+
+                var tmdbId = 98768;
+                var info = new MediaBrowser.Controller.Entities.TV.Series()
+                {
+                    Name = "无中文图片剧集",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
+                        { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = CreateManualRemoteImageContextAccessor();
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "手动 TMDb 剧集图片测试不应访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeriesDetails(tmdbApi, tmdbId, "zh");
+                SeedTmdbSeriesImages(tmdbApi, tmdbId, CreateSeriesImagesWithoutChinese());
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                    var posters = images.Where(image => image.Type == ImageType.Primary).ToList();
+                    var backdrops = images.Where(image => image.Type == ImageType.Backdrop).ToList();
+                    var logos = images.Where(image => image.Type == ImageType.Logo).ToList();
+
+                    Assert.AreEqual(4, posters.Count, "无中文候选时，手动 RemoteImages 仍应保留日/英/无语言范围内的 TMDb 海报候选。");
+                    Assert.AreEqual(4, backdrops.Count, "无中文候选时，手动 RemoteImages 仍应保留日/英/无语言范围内的 TMDb 背景图候选。");
+                    Assert.AreEqual(4, logos.Count, "无中文候选时，手动 RemoteImages 仍应保留日/英/无语言范围内的 TMDb Logo 候选。");
+                    AssertManualImageLanguages(posters, "无中文剧集海报", 0);
+                    AssertManualImageLanguages(backdrops, "无中文剧集背景图", 0);
+                    AssertManualImageLanguages(logos, "无中文剧集 Logo", 0);
+                    AssertManualImageUrlsPresent(
+                        posters,
+                        "无中文剧集海报",
+                        tmdbApi.GetPosterUrl("/series-poster-ja.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/series-poster-en.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/series-poster-no-language.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/series-poster-empty-language.jpg")?.ToString());
+                    AssertManualImageUrlsPresent(
+                        backdrops,
+                        "无中文剧集背景图",
+                        tmdbApi.GetBackdropUrl("/series-backdrop-ja.jpg")?.ToString(),
+                        tmdbApi.GetBackdropUrl("/series-backdrop-en.jpg")?.ToString(),
+                        tmdbApi.GetBackdropUrl("/series-backdrop-no-language.jpg")?.ToString(),
+                        tmdbApi.GetBackdropUrl("/series-backdrop-empty-language.jpg")?.ToString());
+                    AssertManualImageUrlsPresent(
+                        logos,
+                        "无中文剧集 Logo",
+                        tmdbApi.GetLogoUrl("/series-logo-ja.png")?.ToString(),
+                        tmdbApi.GetLogoUrl("/series-logo-en.png")?.ToString(),
+                        tmdbApi.GetLogoUrl("/series-logo-no-language.png")?.ToString(),
+                        tmdbApi.GetLogoUrl("/series-logo-empty-language.png")?.ToString());
+                    Assert.IsFalse(images.Any(image => string.Equals(image.Language, "fr", StringComparison.OrdinalIgnoreCase)), "无中文手动 RemoteImages 应过滤法语等其他语言图片。");
+                    Assert.IsFalse(images.Any(image => string.Equals(image.Language, "ko", StringComparison.OrdinalIgnoreCase)), "无中文手动 RemoteImages 应过滤韩语等其他语言图片。");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public void ManualRemoteImages_DoubanSeriesKeepsZhJaEnNoLanguageTmdbCandidates()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -376,10 +491,44 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var tmdbPosters = posters.Where(image => image.Url?.Contains("tmdb", StringComparison.OrdinalIgnoreCase) == true).ToList();
 
                     Assert.IsTrue(posters.Any(image => image.Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true), "手动 Douban 来源应保留豆瓣中文海报。");
-                    Assert.AreEqual(5, posters.Count, "手动 Douban 来源应同时追加 TMDb 全语言海报候选。");
-                    AssertContainsLanguages(tmdbPosters, "TMDb 海报");
-                    AssertContainsLanguages(images.Where(image => image.Type == ImageType.Backdrop), "背景图");
-                    AssertContainsLanguages(images.Where(image => image.Type == ImageType.Logo), "Logo");
+                    var backdrops = images.Where(image => image.Type == ImageType.Backdrop).ToList();
+                    var logos = images.Where(image => image.Type == ImageType.Logo).ToList();
+
+                    Assert.AreEqual(7, posters.Count, "手动 Douban 来源应同时追加中/日/英/无语言范围内的 TMDb 海报候选。");
+                    AssertManualImageLanguages(tmdbPosters, "Douban 剧集 TMDb 海报", 2);
+                    AssertManualImageLanguages(backdrops, "Douban 剧集背景图", 2);
+                    AssertManualImageLanguages(logos, "Douban 剧集 Logo", 2);
+                    AssertManualImageFileNamesPresent(
+                        tmdbPosters,
+                        "Douban 剧集 TMDb 海报",
+                        "series-poster.jpg",
+                        "series-poster-zh-cn.jpg",
+                        "series-poster-ja.jpg",
+                        "series-poster-en.jpg",
+                        "series-poster-no-language.jpg",
+                        "series-poster-empty-language.jpg");
+                    AssertManualImageFileNamesPresent(
+                        backdrops,
+                        "Douban 剧集背景图",
+                        "series-backdrop.jpg",
+                        "series-backdrop-zh-cn.jpg",
+                        "series-backdrop-ja.jpg",
+                        "series-backdrop-en.jpg",
+                        "series-backdrop-no-language.jpg",
+                        "series-backdrop-empty-language.jpg");
+                    AssertManualImageFileNamesPresent(
+                        logos,
+                        "Douban 剧集 Logo",
+                        "series-logo.png",
+                        "series-logo-zh-cn.png",
+                        "series-logo-ja.png",
+                        "series-logo-en.png",
+                        "series-logo-no-language.png",
+                        "series-logo-empty-language.png");
+                    Assert.IsFalse(images.Any(image => string.Equals(image.Language, "fr", StringComparison.OrdinalIgnoreCase)), "手动 Douban 来源追加 TMDb 候选时应过滤法语等其他语言图片。");
+                    Assert.IsFalse(images.Any(image => string.Equals(image.Language, "ko", StringComparison.OrdinalIgnoreCase)), "手动 Douban 来源追加 TMDb 候选时应过滤韩语等其他语言图片。");
+                    Assert.IsFalse(images.Any(image => image.Url?.Contains("-fr.", StringComparison.OrdinalIgnoreCase) == true), "手动 Douban 来源追加 TMDb 候选时不应保留法语图片 URL。");
+                    Assert.IsFalse(images.Any(image => image.Url?.Contains("-ko.", StringComparison.OrdinalIgnoreCase) == true), "手动 Douban 来源追加 TMDb 候选时不应保留韩语图片 URL。");
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -633,35 +782,143 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 Posters = new List<ImageData>
                 {
-                    CreateImageData("/series-poster.jpg", "zh", 1000, 1500),
                     CreateImageData("/series-poster-en.jpg", "en", 1000, 1500),
-                    CreateImageData("/series-poster-ja.jpg", "ja", 1000, 1500),
+                    CreateImageData("/series-poster-fr.jpg", "fr", 1000, 1500),
+                    CreateImageData("/series-poster-ko.jpg", "ko", 1000, 1500),
                     CreateImageData("/series-poster-no-language.jpg", null, 1000, 1500),
+                    CreateImageData("/series-poster-ja.jpg", "ja", 1000, 1500),
+                    CreateImageData("/series-poster-empty-language.jpg", string.Empty, 1000, 1500),
+                    CreateImageData("/series-poster.jpg", "zh", 1000, 1500),
+                    CreateImageData("/series-poster-zh-cn.jpg", "zh-CN", 1000, 1500),
                 },
                 Backdrops = new List<ImageData>
                 {
-                    CreateImageData("/series-backdrop.jpg", "zh", 1920, 1080),
                     CreateImageData("/series-backdrop-en.jpg", "en", 1920, 1080),
-                    CreateImageData("/series-backdrop-ja.jpg", "ja", 1920, 1080),
+                    CreateImageData("/series-backdrop-fr.jpg", "fr", 1920, 1080),
+                    CreateImageData("/series-backdrop-ko.jpg", "ko", 1920, 1080),
                     CreateImageData("/series-backdrop-no-language.jpg", null, 1920, 1080),
+                    CreateImageData("/series-backdrop-ja.jpg", "ja", 1920, 1080),
+                    CreateImageData("/series-backdrop-empty-language.jpg", string.Empty, 1920, 1080),
+                    CreateImageData("/series-backdrop.jpg", "zh", 1920, 1080),
+                    CreateImageData("/series-backdrop-zh-cn.jpg", "zh-CN", 1920, 1080),
                 },
                 Logos = new List<ImageData>
                 {
-                    CreateImageData("/series-logo.png", "zh", 500, 250),
                     CreateImageData("/series-logo-en.png", "en", 500, 250),
-                    CreateImageData("/series-logo-ja.png", "ja", 500, 250),
+                    CreateImageData("/series-logo-fr.png", "fr", 500, 250),
+                    CreateImageData("/series-logo-ko.png", "ko", 500, 250),
                     CreateImageData("/series-logo-no-language.png", null, 500, 250),
+                    CreateImageData("/series-logo-ja.png", "ja", 500, 250),
+                    CreateImageData("/series-logo-empty-language.png", string.Empty, 500, 250),
+                    CreateImageData("/series-logo.png", "zh", 500, 250),
+                    CreateImageData("/series-logo-zh-cn.png", "zh-CN", 500, 250),
                 },
             };
         }
 
-        private static void AssertContainsLanguages(IEnumerable<RemoteImageInfo> images, string imageKind)
+        private static ImagesWithId CreateSeriesImagesWithoutChinese()
         {
-            var languages = images.Select(image => image.Language).ToList();
-            Assert.IsTrue(languages.Contains("zh"), imageKind + "应包含 zh 图片语言。");
-            Assert.IsTrue(languages.Contains("en"), imageKind + "应包含 en 图片语言。");
-            Assert.IsTrue(languages.Contains("ja"), imageKind + "应包含 ja 图片语言。");
-            Assert.IsTrue(languages.Any(language => language == null), imageKind + "应包含无语言图片。");
+            return new ImagesWithId
+            {
+                Posters = new List<ImageData>
+                {
+                    CreateImageData("/series-poster-en.jpg", "en", 1000, 1500),
+                    CreateImageData("/series-poster-fr.jpg", "fr", 1000, 1500),
+                    CreateImageData("/series-poster-ko.jpg", "ko", 1000, 1500),
+                    CreateImageData("/series-poster-no-language.jpg", null, 1000, 1500),
+                    CreateImageData("/series-poster-ja.jpg", "ja", 1000, 1500),
+                    CreateImageData("/series-poster-empty-language.jpg", string.Empty, 1000, 1500),
+                },
+                Backdrops = new List<ImageData>
+                {
+                    CreateImageData("/series-backdrop-en.jpg", "en", 1920, 1080),
+                    CreateImageData("/series-backdrop-fr.jpg", "fr", 1920, 1080),
+                    CreateImageData("/series-backdrop-ko.jpg", "ko", 1920, 1080),
+                    CreateImageData("/series-backdrop-no-language.jpg", null, 1920, 1080),
+                    CreateImageData("/series-backdrop-ja.jpg", "ja", 1920, 1080),
+                    CreateImageData("/series-backdrop-empty-language.jpg", string.Empty, 1920, 1080),
+                },
+                Logos = new List<ImageData>
+                {
+                    CreateImageData("/series-logo-en.png", "en", 500, 250),
+                    CreateImageData("/series-logo-fr.png", "fr", 500, 250),
+                    CreateImageData("/series-logo-ko.png", "ko", 500, 250),
+                    CreateImageData("/series-logo-no-language.png", null, 500, 250),
+                    CreateImageData("/series-logo-ja.png", "ja", 500, 250),
+                    CreateImageData("/series-logo-empty-language.png", string.Empty, 500, 250),
+                },
+            };
+        }
+
+        private static void AssertManualImageLanguages(IEnumerable<RemoteImageInfo> images, string imageKind, int expectedChineseCount)
+        {
+            var imageList = images.ToList();
+            Assert.AreEqual(expectedChineseCount + 4, imageList.Count, imageKind + "应只保留中文、日语、英语和 null/empty 无语言图片。实际语言: " + FormatLanguages(imageList));
+            Assert.IsTrue(imageList.All(image => IsChineseLanguage(image.Language) || string.Equals(image.Language, "ja", StringComparison.OrdinalIgnoreCase) || string.Equals(image.Language, "en", StringComparison.OrdinalIgnoreCase) || IsNoLanguage(image.Language)), imageKind + "应仅保留中文、日语、英语和 null/empty 无语言图片。实际语言: " + FormatLanguages(imageList));
+            Assert.AreEqual(expectedChineseCount, imageList.Count(image => IsChineseLanguage(image.Language)), imageKind + "中文图片数量应保持不变。实际语言: " + FormatLanguages(imageList));
+            Assert.IsFalse(imageList.Any(image => string.Equals(image.Language, "fr", StringComparison.OrdinalIgnoreCase)), imageKind + "不应保留其他语言图片。实际语言: " + FormatLanguages(imageList));
+            Assert.IsFalse(imageList.Any(image => string.Equals(image.Language, "ko", StringComparison.OrdinalIgnoreCase)), imageKind + "不应保留其他语言图片。实际语言: " + FormatLanguages(imageList));
+
+            if (expectedChineseCount > 0)
+            {
+                Assert.IsTrue(imageList.Any(image => string.Equals(image.Language, "zh", StringComparison.OrdinalIgnoreCase)), imageKind + "应保留 zh 中文图片。");
+                Assert.IsTrue(imageList.Any(image => string.Equals(image.Language, "zh-CN", StringComparison.OrdinalIgnoreCase)), imageKind + "应保留 zh-CN 中文图片。");
+            }
+
+            Assert.IsTrue(imageList.Any(image => string.Equals(image.Language, "ja", StringComparison.OrdinalIgnoreCase)), imageKind + "应保留日语图片。");
+            Assert.IsTrue(imageList.Any(image => string.Equals(image.Language, "en", StringComparison.OrdinalIgnoreCase)), imageKind + "应保留英语图片。");
+            Assert.IsTrue(imageList.Any(image => image.Language == null), imageKind + "应保留 null 无语言图片。");
+            Assert.IsTrue(imageList.Any(image => image.Language == string.Empty), imageKind + "应保留 empty 无语言图片。");
+        }
+
+        private static void AssertManualImageLanguagesInOrder(IEnumerable<RemoteImageInfo> images, string imageKind, params string?[] expectedLanguages)
+        {
+            var actualLanguages = images.Select(image => FormatLanguageValue(image.Language)).ToArray();
+            var expectedLanguageValues = expectedLanguages.Select(FormatLanguageValue).ToArray();
+
+            CollectionAssert.AreEqual(
+                expectedLanguageValues,
+                actualLanguages,
+                imageKind + "过滤后应保持 TMDb 输入相对顺序并保留原始语言值，不能做插件侧语言排序。实际语言: " + string.Join(", ", actualLanguages));
+        }
+
+        private static void AssertManualImageUrlsPresent(IEnumerable<RemoteImageInfo> images, string imageKind, params string?[] expectedUrls)
+        {
+            var actualUrls = images.Select(image => image.Url).ToList();
+            foreach (var expectedUrl in expectedUrls)
+            {
+                Assert.IsNotNull(expectedUrl, imageKind + "的候选 URL 不应为空。实际 URL: " + string.Join(", ", actualUrls));
+                Assert.IsTrue(actualUrls.Contains(expectedUrl), imageKind + "应保留候选 URL: " + expectedUrl + "。实际 URL: " + string.Join(", ", actualUrls));
+            }
+        }
+
+        private static void AssertManualImageFileNamesPresent(IEnumerable<RemoteImageInfo> images, string imageKind, params string[] expectedFileNames)
+        {
+            var urls = images.Select(image => image.Url ?? string.Empty).ToList();
+            foreach (var expectedFileName in expectedFileNames)
+            {
+                Assert.IsTrue(urls.Any(url => url.Contains(expectedFileName, StringComparison.OrdinalIgnoreCase)), imageKind + "应保留候选图片 " + expectedFileName + "。实际 URL: " + string.Join(", ", urls));
+            }
+        }
+
+        private static bool IsChineseLanguage(string? language)
+        {
+            return language != null && language.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsNoLanguage(string? language)
+        {
+            return string.IsNullOrEmpty(language);
+        }
+
+        private static string FormatLanguages(IEnumerable<RemoteImageInfo> images)
+        {
+            return string.Join(", ", images.Select(image => FormatLanguageValue(image.Language)));
+        }
+
+        private static string FormatLanguageValue(string? language)
+        {
+            return language == null ? "<null>" : language.Length == 0 ? "<empty>" : language;
         }
 
         private static IHttpContextAccessor CreateManualRemoteImageContextAccessor(string itemId = "1")
