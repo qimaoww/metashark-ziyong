@@ -12,6 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Core;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Library;
@@ -63,6 +64,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var language = item.GetPreferredMetadataLanguage();
+            var isManualImageRequest = this.ResolveImageSemantic() == DefaultScraperSemantic.ManualSearch;
 
             // TODO use image languages if All Languages isn't toggled, but there's currently no way to get that value in here
             var collection = await this.TmdbApi
@@ -86,7 +88,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 VoteCount = x.VoteCount,
                 Width = x.Width,
                 Height = x.Height,
-                Language = AdjustImageLanguage(x.Iso_639_1, language),
+                Language = isManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, language),
                 RatingType = RatingType.Score,
             }));
 
@@ -99,11 +101,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 VoteCount = x.VoteCount,
                 Width = x.Width,
                 Height = x.Height,
-                Language = AdjustImageLanguage(x.Iso_639_1, language),
+                Language = isManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, language),
                 RatingType = RatingType.Score,
             }));
 
-            return remoteImages.OrderByLanguageDescending(language);
+            return isManualImageRequest
+                ? remoteImages.FilterManualRemoteImagesByLanguage()
+                : remoteImages.OrderByLanguageDescending(language);
         }
     }
 }
