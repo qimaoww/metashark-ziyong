@@ -70,6 +70,26 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }).ThenByDescending((RemoteImageInfo i) => i.CommunityRating.GetValueOrDefault()).ThenByDescending((RemoteImageInfo i) => i.VoteCount.GetValueOrDefault());
         }
 
+        public static IEnumerable<RemoteImageInfo> FilterManualRemoteImagesByLanguage(this IEnumerable<RemoteImageInfo> remoteImageInfos)
+        {
+            ArgumentNullException.ThrowIfNull(remoteImageInfos);
+
+            return remoteImageInfos.Where(i => IsManualRemoteImageLanguageAllowed(i.Language));
+        }
+
+        private static bool IsManualRemoteImageLanguageAllowed(string language)
+        {
+            if (string.IsNullOrWhiteSpace(language))
+            {
+                return true;
+            }
+
+            var genericLanguage = GetGenericLanguage(NormalizeLanguage(language));
+            return string.Equals(genericLanguage, "zh", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(genericLanguage, "ja", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(genericLanguage, "en", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string NormalizeLanguage(string language)
         {
             if (string.IsNullOrEmpty(language))
