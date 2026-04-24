@@ -174,22 +174,6 @@ namespace Jellyfin.Plugin.MetaShark.Core
             return parseResult;
         }
 
-        private static List<AnitomySharp.Element> ParseAnitomy(string fileName, bool isEpisode)
-        {
-            try
-            {
-                return AnitomySharp.AnitomySharp.Parse(fileName, new AnitomySharp.Options(title: isEpisode)).ToList();
-            }
-            catch (IndexOutOfRangeException)
-            {
-                return new List<AnitomySharp.Element>();
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                return new List<AnitomySharp.Element>();
-            }
-        }
-
         public static ParseNameResult ParseEpisode(string fileName)
         {
             return Parse(fileName, true);
@@ -300,6 +284,22 @@ namespace Jellyfin.Plugin.MetaShark.Core
             }
 
             return false;
+        }
+
+        private static List<AnitomySharp.Element> ParseAnitomy(string fileName, bool isEpisode)
+        {
+            try
+            {
+                return AnitomySharp.AnitomySharp.Parse(fileName, new AnitomySharp.Options(title: isEpisode)).ToList();
+            }
+            catch (IndexOutOfRangeException)
+            {
+                return new List<AnitomySharp.Element>();
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return new List<AnitomySharp.Element>();
+            }
         }
 
         private static string CleanName(string name)

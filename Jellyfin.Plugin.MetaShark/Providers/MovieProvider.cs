@@ -292,6 +292,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return httpContext == null || IsExplicitRefreshRequestWithoutReplaceAllMetadata(httpContext, expectedItemId);
         }
 
+        private static bool IsSkippableMovieExtra(ParseNameResult parseResult)
+        {
+            return parseResult.IsExtra
+                && !string.Equals(parseResult.AnimeType, "MOVIE", StringComparison.OrdinalIgnoreCase);
+        }
+
         private async Task<MetadataResult<Movie>> GetMetadataByTmdb(string tmdbId, MovieInfo info, CancellationToken cancellationToken)
         {
             this.Log("通过 TMDb 获取电影元数据. tmdbId: \"{0}\"", tmdbId);
@@ -408,12 +414,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return null;
-        }
-
-        private static bool IsSkippableMovieExtra(ParseNameResult parseResult)
-        {
-            return parseResult.IsExtra
-                && !string.Equals(parseResult.AnimeType, "MOVIE", StringComparison.OrdinalIgnoreCase);
         }
 
         private void TryQueueSearchMissingMetadataOverwriteCandidate(MovieInfo info, string tmdbId, IEnumerable<PersonInfo>? authoritativePeople, int expectedPeopleCount)
