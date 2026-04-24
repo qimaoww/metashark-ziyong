@@ -8,6 +8,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Providers;
 using MediaBrowser.Model.Serialization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
@@ -400,6 +401,53 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+        [DataTestMethod]
+        [DataRow("en-US", 34861)]
+        [DataRow("ja-JP", 34862)]
+        [DataRow("zh-CN", 34863)]
+        public void ManualRemoteImages_TmdbSeasonFiltersAllowedLanguagesAndPreservesInputOrder(string preferredLanguage, int seriesTmdbId)
+        {
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", seriesTmdbId.ToString(System.Globalization.CultureInfo.InvariantCulture), MetaSource.Tmdb);
+            info.ProviderIds.Remove(BaseProvider.DoubanProviderId);
+            info.PreferredMetadataLanguage = preferredLanguage;
+            var httpContextAccessor = CreateManualRemoteImageContextAccessor();
+            var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "手动 TMDb 季图片链路不应访问 Douban。");
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbImageConfig(tmdbApi);
+            SeedTmdbSeasonImages(tmdbApi, seriesTmdbId, 1, string.Empty, "第1季", CreateMultilingualSeasonPosters());
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            WithLibraryManager(libraryManagerStub.Object, () =>
+            {
+                Task.Run(async () =>
+                {
+                    var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                    Assert.AreEqual(6, images.Count, "手动季 RemoteImages 应仅返回中/日/英/null/empty 范围内的 TMDb 海报候选。");
+                    AssertManualImageLanguagesInOrder(images, "季海报", "en", null, "ja", string.Empty, "zh", "zh-CN");
+                    AssertManualImageUrlsPresent(
+                        images,
+                        "季海报",
+                        tmdbApi.GetPosterUrl("/season-poster-en.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/season-poster-no-language.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/season-poster-ja.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/season-poster-empty-language.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/season-poster-zh.jpg")?.ToString(),
+                        tmdbApi.GetPosterUrl("/season-poster-zh-cn.jpg")?.ToString());
+                    Assert.IsFalse(images.Any(image => string.Equals(image.Language, "fr", StringComparison.OrdinalIgnoreCase)), "手动季 RemoteImages 应过滤法语图片。");
+                    Assert.IsFalse(images.Any(image => string.Equals(image.Language, "ko", StringComparison.OrdinalIgnoreCase)), "手动季 RemoteImages 应过滤韩语图片。");
+                    Assert.IsTrue(images.All(image => image.Type == ImageType.Primary), "季图片 Provider 只应返回海报类型。");
+                    Assert.IsTrue(images.All(image => image.ProviderName == MetaSharkPlugin.PluginName), "TMDb 季图片 provider name 应保持插件名。");
+                    Assert.IsTrue(images.Any(image => image.Language == null), "手动季 RemoteImages 应保留 null 无语言图片。");
+                    Assert.IsTrue(images.Any(image => image.Language == string.Empty), "手动季 RemoteImages 应保留 empty 无语言图片。");
+                }).GetAwaiter().GetResult();
+            });
+        }
+
         [TestMethod]
         public void ManualRemoteImageSearch_TmdbOnly_ReturnsDoubanSeasonImage()
         {
@@ -658,16 +706,27 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private static void SeedTmdbSeasonImages(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, string language, string seasonName)
         {
+            SeedTmdbSeasonImages(
+                tmdbApi,
+                seriesTmdbId,
+                seasonNumber,
+                language,
+                seasonName,
+                new List<ImageData>
+                {
+                    CreateImageData("/season-poster.jpg", "zh", 1000, 1500),
+                });
+        }
+
+        private static void SeedTmdbSeasonImages(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, string language, string seasonName, IList<ImageData> posters)
+        {
             var season = new TvSeason
             {
                 Name = seasonName,
                 Overview = "TMDb seeded season overview",
                 AirDate = new DateTime(2015, 2, 1),
             };
-            SetTmdbImages(season, ("Posters", new List<ImageData>
-            {
-                CreateImageData("/season-poster.jpg", "zh", 1000, 1500),
-            }));
+            SetTmdbImages(season, ("Posters", posters));
 
             GetTmdbMemoryCache(tmdbApi).Set(
                 $"season-{seriesTmdbId}-s{seasonNumber}-{language}-{language}",
@@ -704,6 +763,47 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 VoteAverage = 8.5,
                 VoteCount = 10,
             };
+        }
+
+        private static List<ImageData> CreateMultilingualSeasonPosters()
+        {
+            return new List<ImageData>
+            {
+                CreateImageData("/season-poster-en.jpg", "en", 1000, 1500),
+                CreateImageData("/season-poster-fr.jpg", "fr", 1000, 1500),
+                CreateImageData("/season-poster-ko.jpg", "ko", 1000, 1500),
+                CreateImageData("/season-poster-no-language.jpg", null, 1000, 1500),
+                CreateImageData("/season-poster-ja.jpg", "ja", 1000, 1500),
+                CreateImageData("/season-poster-empty-language.jpg", string.Empty, 1000, 1500),
+                CreateImageData("/season-poster-zh.jpg", "zh", 1000, 1500),
+                CreateImageData("/season-poster-zh-cn.jpg", "zh-CN", 1000, 1500),
+            };
+        }
+
+        private static void AssertManualImageLanguagesInOrder(IEnumerable<RemoteImageInfo> images, string imageKind, params string?[] expectedLanguages)
+        {
+            var actualLanguages = images.Select(image => FormatLanguageValue(image.Language)).ToArray();
+            var expectedLanguageValues = expectedLanguages.Select(FormatLanguageValue).ToArray();
+
+            CollectionAssert.AreEqual(
+                expectedLanguageValues,
+                actualLanguages,
+                imageKind + "过滤后应保持 TMDb 输入相对顺序并保留原始语言值，不能做插件侧语言排序。实际语言: " + string.Join(", ", actualLanguages));
+        }
+
+        private static void AssertManualImageUrlsPresent(IEnumerable<RemoteImageInfo> images, string imageKind, params string?[] expectedUrls)
+        {
+            var actualUrls = images.Select(image => image.Url).ToList();
+            foreach (var expectedUrl in expectedUrls)
+            {
+                Assert.IsNotNull(expectedUrl, imageKind + "的候选 URL 不应为空。实际 URL: " + string.Join(", ", actualUrls));
+                Assert.IsTrue(actualUrls.Contains(expectedUrl), imageKind + "应保留候选 URL: " + expectedUrl + "。实际 URL: " + string.Join(", ", actualUrls));
+            }
+        }
+
+        private static string FormatLanguageValue(string? language)
+        {
+            return language == null ? "<null>" : language.Length == 0 ? "<empty>" : language;
         }
 
         private static IHttpContextAccessor CreateManualRemoteImageContextAccessor(string itemId = "1")

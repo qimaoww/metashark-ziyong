@@ -50,6 +50,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var series = season.Series;
             var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;
             var imageSemantic = this.ResolveImageSemantic();
+            var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
             var allowManualDoubanForSeasonImage = this.ShouldAllowDoubanForManualSeasonImageRequest(season, metaSource, imageSemantic);
 
@@ -73,7 +74,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                             Language = "zh",
                         },
                     };
-                    return res;
+                    return isManualImageRequest ? res.FilterManualRemoteImagesByLanguage() : res;
                 }
             }
 
@@ -105,13 +106,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     VoteCount = image.VoteCount,
                     Width = image.Width,
                     Height = image.Height,
-                    Language = AdjustImageLanguage(image.Iso_639_1, language),
+                    Language = isManualImageRequest ? image.Iso_639_1 : AdjustImageLanguage(image.Iso_639_1, language),
                     ProviderName = this.Name,
                     Type = ImageType.Primary,
                 };
             }
 
-            return remoteImages.OrderByLanguageDescending(language);
+            return isManualImageRequest
+                ? remoteImages.FilterManualRemoteImagesByLanguage()
+                : remoteImages.OrderByLanguageDescending(language);
         }
 
         private bool ShouldAllowDoubanForManualSeasonImageRequest(Season season, MetaSource metaSource, DefaultScraperSemantic imageSemantic)
