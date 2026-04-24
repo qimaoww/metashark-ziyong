@@ -7,6 +7,7 @@ using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Providers;
 using MediaBrowser.Model.Serialization;
@@ -259,6 +260,191 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+        [TestMethod]
+        public void ManualRemoteImageSearch_TmdbSeries_ReturnsAllImageLanguages()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.EnableTmdb = true;
+
+                var tmdbId = 98765;
+                var info = new MediaBrowser.Controller.Entities.TV.Series()
+                {
+                    Name = "多语言图片剧集",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
+                        { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = CreateManualRemoteImageContextAccessor();
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "手动 TMDb 剧集图片测试不应访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeriesDetails(tmdbApi, tmdbId, "zh");
+                SeedTmdbSeriesImages(tmdbApi, tmdbId, CreateMultilingualSeriesImages());
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                    var posters = images.Where(image => image.Type == ImageType.Primary).ToList();
+                    var backdrops = images.Where(image => image.Type == ImageType.Backdrop).ToList();
+                    var logos = images.Where(image => image.Type == ImageType.Logo).ToList();
+
+                    Assert.AreEqual(4, posters.Count, "手动 RemoteImages 应返回所有 TMDb 海报候选。");
+                    Assert.AreEqual(4, backdrops.Count, "手动 RemoteImages 应返回所有 TMDb 背景图候选。");
+                    Assert.AreEqual(4, logos.Count, "手动 RemoteImages 应返回所有 TMDb Logo 候选。");
+                    AssertContainsLanguages(posters, "海报");
+                    AssertContainsLanguages(backdrops, "背景图");
+                    AssertContainsLanguages(logos, "Logo");
+                    Assert.IsTrue(posters.Any(image => image.Url == tmdbApi.GetPosterUrl("/series-poster-en.jpg")?.ToString()), "海报应使用 TMDb poster URL helper。");
+                    Assert.IsTrue(backdrops.Any(image => image.Url == tmdbApi.GetBackdropUrl("/series-backdrop-ja.jpg")?.ToString()), "背景图应使用 TMDb backdrop URL helper。");
+                    Assert.IsTrue(logos.Any(image => image.Url == tmdbApi.GetLogoUrl("/series-logo-no-language.png")?.ToString()), "Logo 应使用 TMDb logo URL helper。");
+                    Assert.IsTrue(images.All(image => image.ProviderName == MetaSharkPlugin.PluginName), "TMDb 图片 provider name 应保持插件名。");
+                    Assert.IsTrue(posters.All(image => image.RatingType == RatingType.Score), "海报评分类型应保持 Score。");
+                    Assert.IsTrue(posters.Any(image => image.Width == 1000 && image.Height == 1500 && image.CommunityRating == 8.5 && image.VoteCount == 10), "海报应保留评分、尺寸和投票数。");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public void ManualRemoteImageSearch_DoubanSeries_AlsoReturnsAllTmdbImageLanguages()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.EnableTmdb = true;
+
+                var tmdbId = 98767;
+                var sid = "douban-manual-series";
+                var info = new MediaBrowser.Controller.Entities.TV.Series()
+                {
+                    Name = "豆瓣来源多语言剧集",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, sid },
+                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = CreateManualRemoteImageContextAccessor("series-id");
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanSubject(doubanApi, new DoubanSubject
+                {
+                    Sid = sid,
+                    Name = "豆瓣来源多语言剧集",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p98767.jpg",
+                    Language = "日语",
+                });
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeriesDetails(tmdbApi, tmdbId, "zh");
+                SeedTmdbSeriesImages(tmdbApi, tmdbId, CreateMultilingualSeriesImages());
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                    var posters = images.Where(image => image.Type == ImageType.Primary).ToList();
+                    var tmdbPosters = posters.Where(image => image.Url?.Contains("tmdb", StringComparison.OrdinalIgnoreCase) == true).ToList();
+
+                    Assert.IsTrue(posters.Any(image => image.Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true), "手动 Douban 来源应保留豆瓣中文海报。");
+                    Assert.AreEqual(5, posters.Count, "手动 Douban 来源应同时追加 TMDb 全语言海报候选。");
+                    AssertContainsLanguages(tmdbPosters, "TMDb 海报");
+                    AssertContainsLanguages(images.Where(image => image.Type == ImageType.Backdrop), "背景图");
+                    AssertContainsLanguages(images.Where(image => image.Type == ImageType.Logo), "Logo");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public void AutomaticTmdbSeriesImages_ReturnSelectedPosterAndBackdropOnly()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.EnableTmdb = true;
+
+                var tmdbId = 98766;
+                var info = new MediaBrowser.Controller.Entities.TV.Series()
+                {
+                    Name = "自动图片剧集",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
+                        { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "自动 TMDb 剧集图片测试不应访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeriesDetails(tmdbApi, tmdbId, "zh");
+                SeedTmdbSeriesImages(tmdbApi, tmdbId, CreateMultilingualSeriesImages());
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                    var posters = images.Where(image => image.Type == ImageType.Primary).ToList();
+                    var backdrops = images.Where(image => image.Type == ImageType.Backdrop).ToList();
+
+                    Assert.AreEqual(1, posters.Count, "自动刷新应继续只返回当前选中的 TMDb 海报。");
+                    Assert.AreEqual(1, backdrops.Count, "自动刷新应继续只返回当前选中的 TMDb 背景图。");
+                    Assert.AreEqual(tmdbApi.GetPosterUrl("/series-poster.jpg")?.ToString(), posters[0].Url);
+                    Assert.AreEqual(tmdbApi.GetBackdropUrl("/series-backdrop.jpg")?.ToString(), backdrops[0].Url);
+                    Assert.AreEqual("zh", posters[0].Language, "自动刷新海报语言应保持首选语言。");
+                    Assert.AreEqual("zh", backdrops[0].Language, "自动刷新背景图语言应保持首选语言。");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
         private static void EnsurePluginInstance()
         {
             if (MetaSharkPlugin.Instance != null)
@@ -390,6 +576,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return memoryCache!;
         }
 
+        private static MemoryCache GetDoubanMemoryCache(DoubanApi doubanApi)
+        {
+            var memoryCacheField = typeof(DoubanApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(memoryCacheField, "DoubanApi.memoryCache 未定义");
+
+            var memoryCache = memoryCacheField!.GetValue(doubanApi) as MemoryCache;
+            Assert.IsNotNull(memoryCache, "DoubanApi.memoryCache 不是有效的 MemoryCache");
+            return memoryCache!;
+        }
+
+        private static void SeedDoubanSubject(DoubanApi doubanApi, DoubanSubject subject)
+        {
+            var cache = GetDoubanMemoryCache(doubanApi);
+            cache.Set($"movie_{subject.Sid}", subject, TimeSpan.FromMinutes(5));
+            cache.Set($"photo_{subject.Sid}", new List<DoubanPhoto>(), TimeSpan.FromMinutes(5));
+        }
+
         private static void SeedTmdbSeriesDetails(TmdbApi tmdbApi, int tmdbId, string language)
         {
             var cache = GetTmdbMemoryCache(tmdbApi);
@@ -413,6 +616,64 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Logos = new List<ImageData> { CreateImageData("/series-logo.png", "zh", 500, 250) },
                 },
                 TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedTmdbSeriesImages(TmdbApi tmdbApi, int tmdbId, ImagesWithId images)
+        {
+            var cache = GetTmdbMemoryCache(tmdbApi);
+            cache.Set(
+                $"series-images-{tmdbId}--",
+                images,
+                TimeSpan.FromMinutes(5));
+        }
+
+        private static ImagesWithId CreateMultilingualSeriesImages()
+        {
+            return new ImagesWithId
+            {
+                Posters = new List<ImageData>
+                {
+                    CreateImageData("/series-poster.jpg", "zh", 1000, 1500),
+                    CreateImageData("/series-poster-en.jpg", "en", 1000, 1500),
+                    CreateImageData("/series-poster-ja.jpg", "ja", 1000, 1500),
+                    CreateImageData("/series-poster-no-language.jpg", null, 1000, 1500),
+                },
+                Backdrops = new List<ImageData>
+                {
+                    CreateImageData("/series-backdrop.jpg", "zh", 1920, 1080),
+                    CreateImageData("/series-backdrop-en.jpg", "en", 1920, 1080),
+                    CreateImageData("/series-backdrop-ja.jpg", "ja", 1920, 1080),
+                    CreateImageData("/series-backdrop-no-language.jpg", null, 1920, 1080),
+                },
+                Logos = new List<ImageData>
+                {
+                    CreateImageData("/series-logo.png", "zh", 500, 250),
+                    CreateImageData("/series-logo-en.png", "en", 500, 250),
+                    CreateImageData("/series-logo-ja.png", "ja", 500, 250),
+                    CreateImageData("/series-logo-no-language.png", null, 500, 250),
+                },
+            };
+        }
+
+        private static void AssertContainsLanguages(IEnumerable<RemoteImageInfo> images, string imageKind)
+        {
+            var languages = images.Select(image => image.Language).ToList();
+            Assert.IsTrue(languages.Contains("zh"), imageKind + "应包含 zh 图片语言。");
+            Assert.IsTrue(languages.Contains("en"), imageKind + "应包含 en 图片语言。");
+            Assert.IsTrue(languages.Contains("ja"), imageKind + "应包含 ja 图片语言。");
+            Assert.IsTrue(languages.Any(language => language == null), imageKind + "应包含无语言图片。");
+        }
+
+        private static IHttpContextAccessor CreateManualRemoteImageContextAccessor(string itemId = "1")
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Get;
+            context.Request.Path = $"/Items/{itemId}/RemoteImages";
+            context.Request.QueryString = new QueryString("?includeAllLanguages=true");
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
+            };
         }
 
         private static ImageData CreateImageData(string filePath, string? language, int width, int height)
