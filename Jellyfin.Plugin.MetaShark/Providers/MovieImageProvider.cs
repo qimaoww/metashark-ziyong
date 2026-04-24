@@ -22,6 +22,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using MediaBrowser.Model.Providers;
     using Microsoft.AspNetCore.Http;
     using Microsoft.Extensions.Logging;
+    using TMDbLib.Objects.General;
 
     public class MovieImageProvider : BaseProvider, IRemoteImageProvider
     {
@@ -51,7 +52,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var sid = item.GetProviderId(DoubanProviderId);
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
-            var doubanAllowed = IsDoubanAllowed(this.ResolveImageSemantic());
+            var imageSemantic = this.ResolveImageSemantic();
+            var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
+            var doubanAllowed = IsDoubanAllowed(imageSemantic);
             this.Log("开始获取电影图片. name: {0} lang: {1} metaSource: {2}", item.Name, item.GetPreferredMetadataLanguage(), metaSource);
             if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
             {
@@ -82,6 +85,23 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     };
                     res.AddRange(backdropImgs);
                     res.AddRange(logoImgs);
+                    if (isManualImageRequest && !string.IsNullOrEmpty(tmdbId))
+                    {
+                        var language = item.GetPreferredMetadataLanguage();
+                        var images = await this.TmdbApi
+                            .GetMovieImagesAsync(tmdbId.ToInt(), string.Empty, string.Empty, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (images != null)
+                        {
+                            res.AddRange(this.MapAllTmdbImages(images, language));
+                        }
+
+                        return res
+                            .GroupBy(x => new { x.Type, x.Url })
+                            .Select(x => x.First())
+                            .OrderByLanguageDescending(language);
+                    }
+
                     return res;
                 }
             }
@@ -106,6 +126,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
 
                 var remoteImages = new List<RemoteImageInfo>();
+                if (isManualImageRequest)
+                {
+                    remoteImages.AddRange(this.MapAllTmdbImages(images, language));
+
+                    // TODO：jellyfin 内部判断取哪个图片时，还会默认使用 OrderByLanguageDescending 排序一次，这里排序没用
+                    return remoteImages.OrderByLanguageDescending(language);
+                }
 
                 remoteImages.AddRange(images.Posters.Where(x => x.FilePath == movie.PosterPath).Select(x => new RemoteImageInfo
                 {
@@ -255,6 +282,53 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // TODO：jellyfin 内部判断取哪个图片时，还会默认使用 OrderByLanguageDescending 排序一次，这里排序没用
             //       默认图片优先级是：默认语言 > 无语言 > en > 其他语言
             return AdjustImageLanguagePriority(list, language, alternativeImageLanguage);
+        }
+
+        private List<RemoteImageInfo> MapAllTmdbImages(ImagesWithId images, string language)
+        {
+            ArgumentNullException.ThrowIfNull(images);
+
+            var remoteImages = new List<RemoteImageInfo>();
+            remoteImages.AddRange(images.Posters.Select(x => new RemoteImageInfo
+            {
+                ProviderName = this.Name,
+                Url = this.TmdbApi.GetPosterUrl(x.FilePath)?.ToString(),
+                Type = ImageType.Primary,
+                CommunityRating = x.VoteAverage,
+                VoteCount = x.VoteCount,
+                Width = x.Width,
+                Height = x.Height,
+                Language = AdjustImageLanguage(x.Iso_639_1, language),
+                RatingType = RatingType.Score,
+            }));
+
+            remoteImages.AddRange(images.Backdrops.Select(x => new RemoteImageInfo
+            {
+                ProviderName = this.Name,
+                Url = this.TmdbApi.GetBackdropUrl(x.FilePath)?.ToString(),
+                Type = ImageType.Backdrop,
+                CommunityRating = x.VoteAverage,
+                VoteCount = x.VoteCount,
+                Width = x.Width,
+                Height = x.Height,
+                Language = AdjustImageLanguage(x.Iso_639_1, language),
+                RatingType = RatingType.Score,
+            }));
+
+            remoteImages.AddRange(images.Logos.Select(x => new RemoteImageInfo
+            {
+                ProviderName = this.Name,
+                Url = this.TmdbApi.GetLogoUrl(x.FilePath)?.ToString(),
+                Type = ImageType.Logo,
+                CommunityRating = x.VoteAverage,
+                VoteCount = x.VoteCount,
+                Width = x.Width,
+                Height = x.Height,
+                Language = AdjustImageLanguage(x.Iso_639_1, language),
+                RatingType = RatingType.Score,
+            }));
+
+            return remoteImages;
         }
     }
 }
