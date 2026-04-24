@@ -164,6 +164,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(parseResult.Year, 2009);
         }
 
+        [DataTestMethod]
+        [DataRow("魔法少女奈叶 The MOVIE 1st (2010)")]
+        [DataRow("罗小黑战记 2 (2025)")]
+        public void Parse_DoesNotThrowForMovieTitlesThatLookLikeEpisodes(string fileName)
+        {
+            var parseResult = NameParser.Parse(fileName);
+
+            Assert.IsNotNull(parseResult);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(parseResult.Name));
+        }
+
         [TestMethod]
         public void TestEposideParse()
         {

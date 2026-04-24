@@ -47,10 +47,10 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
         public static ParseNameResult Parse(string fileName, bool isEpisode = false)
         {
-            fileName = NormalizeFileName(fileName);
+            fileName = NormalizeFileName(fileName ?? string.Empty);
 
             var parseResult = new ParseNameResult();
-            var anitomyResult = AnitomySharp.AnitomySharp.Parse(fileName);
+            var anitomyResult = ParseAnitomy(fileName, isEpisode);
             var isAnime = IsAnime(fileName);
             foreach (var item in anitomyResult)
             {
@@ -172,6 +172,22 @@ namespace Jellyfin.Plugin.MetaShark.Core
             TrySetExtraType(parseResult, fileName, isEpisode);
 
             return parseResult;
+        }
+
+        private static List<AnitomySharp.Element> ParseAnitomy(string fileName, bool isEpisode)
+        {
+            try
+            {
+                return AnitomySharp.AnitomySharp.Parse(fileName, new AnitomySharp.Options(title: isEpisode)).ToList();
+            }
+            catch (IndexOutOfRangeException)
+            {
+                return new List<AnitomySharp.Element>();
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return new List<AnitomySharp.Element>();
+            }
         }
 
         public static ParseNameResult ParseEpisode(string fileName)
