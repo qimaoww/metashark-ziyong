@@ -335,8 +335,11 @@ namespace AnitomySharp
             {
                 var token = Token.FindPrevToken(Tokens, tokenEnd, Token.TokenFlag.FlagNotDelimiter);
 
-                while (ParseHelper.IsTokenCategory(token, Token.TokenCategory.Bracket) && Tokens[token].Content[0] != ')')
+                while (Token.InListRange(token, Tokens) && ParseHelper.IsTokenCategory(token, Token.TokenCategory.Bracket))
                 {
+                    var tokenContent = Tokens[token].Content;
+                    if (string.IsNullOrEmpty(tokenContent) || tokenContent[0] == ')') break;
+
                     token = Token.FindPrevToken(Tokens, token, Token.TokenFlag.FlagBracket);
                     if (!Token.InListRange(token, Tokens)) continue;
                     tokenEnd = token;
@@ -394,8 +397,15 @@ namespace AnitomySharp
                 // Continue until a bracket or identifier is found
                 tokenEnd = Token.FindToken(Tokens, tokenBegin, Tokens.Count, Token.TokenFlag.FlagBracket, Token.TokenFlag.FlagIdentifier);
 
+                var tokenContent = Tokens[tokenBegin].Content;
+                if (string.IsNullOrEmpty(tokenContent))
+                {
+                    tokenEnd = tokenEnd > tokenBegin ? tokenEnd : tokenBegin + 1;
+                    continue;
+                }
+
                 // Ignore if it's only a dash
-                if (tokenEnd - tokenBegin <= 2 && ParserHelper.IsDashCharacter(Tokens[tokenBegin].Content[0])) continue;
+                if (tokenEnd - tokenBegin <= 2 && ParserHelper.IsDashCharacter(tokenContent[0])) continue;
                 //if (tokenBegin.Pos == null || tokenEnd.Pos == null) continue;
                 ParseHelper.BuildElement(Element.ElementCategory.ElementEpisodeTitle, false, Tokens.GetRange(tokenBegin, tokenEnd - tokenBegin));
                 return;
