@@ -131,6 +131,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var fileName = GetOriginalFileName(info);
             var result = new MetadataResult<Series>();
+            await this.TryMigrateExistingSeriesOfficialTmdbIdAsync(info, cancellationToken).ConfigureAwait(false);
             var semantic = this.ResolveMetadataSemantic(info);
             var doubanAllowed = IsDoubanAllowed(semantic);
 
@@ -324,6 +325,32 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     .Replace("\n", "\\n", StringComparison.Ordinal)
                     .Replace("\t", "\\t", StringComparison.Ordinal)
                     .Replace(" ", "\\u0020", StringComparison.Ordinal));
+        }
+
+        private async Task TryMigrateExistingSeriesOfficialTmdbIdAsync(SeriesInfo info, CancellationToken cancellationToken)
+        {
+            var series = this.ResolveExistingSeries(info);
+            if (series == null
+                || !SeriesTmdbProviderIdMigrationService.CanPersist(series)
+                || !SeriesTmdbProviderIdMigrationService.TryMigrateProviderIds(series))
+            {
+                return;
+            }
+
+            await SeriesTmdbProviderIdMigrationService.PersistAsync(series, cancellationToken).ConfigureAwait(false);
+            this.Log("已迁移现有剧集官方 TMDb provider id. name: {0}", series.Name);
+        }
+
+        private Series? ResolveExistingSeries(SeriesInfo info)
+        {
+            if (!string.IsNullOrWhiteSpace(info.Path))
+            {
+                return this.LibraryManager.FindByPath(info.Path, true) as Series;
+            }
+
+            return TryResolveItemIdFromRequestPath(this.HttpContextAccessor.HttpContext, out var itemId)
+                ? this.LibraryManager.GetItemById(itemId) as Series
+                : null;
         }
 
         private RemoteSearchResult MapTmdbSeriesSearchResult(SearchTv searchResult)

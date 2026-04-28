@@ -13,6 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
+    using Jellyfin.Plugin.MetaShark.Workers;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
@@ -49,6 +50,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteImageInfo>> GetImages(BaseItem item, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(item);
+            if (item is Series series
+                && SeriesTmdbProviderIdMigrationService.CanPersist(series)
+                && SeriesTmdbProviderIdMigrationService.TryMigrateProviderIds(series))
+            {
+                await SeriesTmdbProviderIdMigrationService.PersistAsync(series, cancellationToken).ConfigureAwait(false);
+                this.Log("已在剧集图片获取前迁移官方 TMDb provider id. name: {0}", series.Name);
+            }
+
             var sid = item.GetProviderId(DoubanProviderId);
             var tmdbId = item.GetTmdbId();
             var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
