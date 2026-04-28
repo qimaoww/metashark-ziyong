@@ -34,6 +34,7 @@ namespace Jellyfin.Plugin.MetaShark
             }
 
             serviceCollection.AddHostedService<BoxSetManager>();
+            serviceCollection.AddHostedService<SeriesTmdbProviderIdMigrationWorker>();
             serviceCollection.AddHostedService<TvMissingImageRefillItemUpdatedWorker>();
             serviceCollection.AddHostedService<PersonMissingImageRefillItemUpdatedWorker>();
             serviceCollection.AddHostedService<EpisodeTitleBackfillItemUpdatedWorker>();
@@ -65,6 +66,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<IMissingMetadataSearchService, MissingMetadataSearchService>();
             serviceCollection.AddSingleton<MetaSharkOrdinaryItemLibraryCapabilityResolver>();
             serviceCollection.AddSingleton<MetaSharkSharedEntityLibraryCapabilityResolver>();
+            serviceCollection.AddSingleton<SeriesTmdbProviderIdMigrationService>();
             serviceCollection.AddSingleton<IMovieSeriesPeopleOverwriteRefreshCandidateStore>((_) => InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared);
             serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore, InMemoryEpisodeTitleBackfillCandidateStore>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPendingResolver, EpisodeTitleBackfillPendingResolver>();
