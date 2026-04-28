@@ -94,7 +94,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     tmdbId,
                     NormalizeLanguage(language),
                     GetImageLanguagesParam(imageLanguages),
-                    MovieMethods.Credits | MovieMethods.Releases | MovieMethods.Images | MovieMethods.Keywords | MovieMethods.Videos,
+                    MovieMethods.Credits | MovieMethods.Releases | MovieMethods.Images | MovieMethods.Keywords,
                     cancellationToken).ConfigureAwait(false);
 
                 if (movie != null)
@@ -236,7 +236,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     tmdbId,
                     language: NormalizeLanguage(language),
                     includeImageLanguage: GetImageLanguagesParam(imageLanguages),
-                    extraMethods: TvShowMethods.Credits | TvShowMethods.Images | TvShowMethods.Keywords | TvShowMethods.ExternalIds | TvShowMethods.Videos | TvShowMethods.ContentRatings | TvShowMethods.EpisodeGroups,
+                    extraMethods: TvShowMethods.Credits | TvShowMethods.Images | TvShowMethods.Keywords | TvShowMethods.ExternalIds | TvShowMethods.ContentRatings | TvShowMethods.EpisodeGroups,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 if (series != null && series.AggregateCredits == null)
@@ -484,7 +484,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     seasonNumber,
                     language: NormalizeLanguage(language),
                     includeImageLanguage: GetImageLanguagesParam(imageLanguages),
-                    extraMethods: TvSeasonMethods.Credits | TvSeasonMethods.Images | TvSeasonMethods.ExternalIds | TvSeasonMethods.Videos,
+                    extraMethods: TvSeasonMethods.Credits | TvSeasonMethods.Images | TvSeasonMethods.ExternalIds,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 this.memoryCache.Set(key, season, TimeSpan.FromHours(CacheDurationInHours));
@@ -544,7 +544,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     episodeNumber,
                     language: NormalizeLanguage(language),
                     includeImageLanguage: GetImageLanguagesParam(imageLanguages),
-                    extraMethods: TvEpisodeMethods.Credits | TvEpisodeMethods.Images | TvEpisodeMethods.ExternalIds | TvEpisodeMethods.Videos,
+                    extraMethods: TvEpisodeMethods.Credits | TvEpisodeMethods.Images | TvEpisodeMethods.ExternalIds,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 episode = await this.EnsureEpisodeStillImagesAsync(episode, tvShowId, seasonNumber, episodeNumber, language, imageLanguages, cancellationToken)
