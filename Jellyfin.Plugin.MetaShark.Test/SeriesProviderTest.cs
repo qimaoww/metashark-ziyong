@@ -541,8 +541,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = method!.Invoke(provider, new object[] { searchResult }) as RemoteSearchResult;
             Assert.IsNotNull(result);
             Assert.IsNotNull(result!.ProviderIds);
-            Assert.AreEqual(2, result.ProviderIds.Count);
-            Assert.AreEqual("261780", result.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual(1, result.ProviderIds.Count);
+            Assert.IsFalse(result.ProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString()), "TMDb 搜索结果不应再暴露官方 TMDb provider id，避免触发 Jellyfin 内置 TMDb 图片 provider。 ");
+            Assert.IsTrue(result.ProviderIds.TryGetTmdbId(out var resolvedTmdbId));
+            Assert.AreEqual("261780", resolvedTmdbId);
             Assert.AreEqual("Tmdb_261780", result.ProviderIds[MetaSharkPlugin.ProviderId]);
             Assert.AreEqual("[TMDB]示例剧集", result.Name);
             Assert.AreEqual(tmdbApi.GetPosterUrl(searchResult.PosterPath)?.ToString(), result.ImageUrl);
@@ -595,7 +597,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Assert.IsTrue(result.HasMetadata);
                     Assert.IsFalse(string.IsNullOrWhiteSpace(result.Item.Name));
 
-                    if (string.IsNullOrEmpty(result.Item.GetProviderId(MetadataProvider.Tmdb)))
+                    if (string.IsNullOrEmpty(result.Item.GetTmdbId()))
                     {
                         Assert.AreEqual("命运/冠位指定嘉年华 公元2020奥林匹亚英灵限界大祭", result.Item.Name);
                         Assert.AreEqual("Fate/Grand Carnival", result.Item.OriginalTitle);
@@ -641,7 +643,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new SeriesProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var result = await provider.GetMetadata(info, CancellationToken.None);
                     Assert.IsNotNull(result.Item);
-                    Assert.AreEqual("45247", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.AreEqual("45247", result.Item.GetTmdbId());
+                    Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb), "剧集元数据结果不应再暴露官方 TMDb provider id。 ");
                     Assert.IsTrue(result.HasMetadata);
                 }
                 catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests
@@ -683,9 +686,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var resultList = results.ToList();
                     Assert.IsTrue(resultList.Count >= 1, "Expected at least one result when TMDb provider id is present");
 
-                    var tmdbResult = resultList.FirstOrDefault(r => r.ProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString()));
+                    var tmdbResult = resultList.FirstOrDefault(r => r.ProviderIds.TryGetTmdbId(out _));
                     Assert.IsNotNull(tmdbResult, "Expected a result with TMDb provider id");
-                    Assert.AreEqual("261780", tmdbResult.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+                    Assert.IsTrue(tmdbResult!.ProviderIds.TryGetTmdbId(out var resolvedTmdbId));
+                    Assert.AreEqual("261780", resolvedTmdbId);
                 }
                 catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests
                     || ex.Message.Contains("429", StringComparison.Ordinal))
@@ -752,7 +756,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         var resultList = results.ToList();
                         Assert.IsTrue(resultList.Count >= 1, "Expected at least one result even when EnableTmdbSearch is false and a title is present.");
 
-                        var tmdbResult = resultList.FirstOrDefault(r => r.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var id) && id == tmdbId.ToString());
+                        var tmdbResult = resultList.FirstOrDefault(r => r.ProviderIds.TryGetTmdbId(out var id) && id == tmdbId.ToString());
                         Assert.IsNotNull(tmdbResult, "Expected explicit TMDb ID fast path to still return the TMDb match when EnableTmdbSearch is false and a title is present.");
                     }
                     catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests
@@ -977,7 +981,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                         var provider = new SeriesProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
                         var results = (await provider.GetSearchResults(info, CancellationToken.None)).ToList();
-                        Assert.AreEqual(1, results.Count(r => r.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var id) && id == "261780"));
+                        Assert.AreEqual(1, results.Count(r => r.ProviderIds.TryGetTmdbId(out var id) && id == "261780"));
                     }
                     catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests
                         || ex.Message.Contains("429", StringComparison.Ordinal))
@@ -1037,8 +1041,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         var results = (await provider.GetSearchResults(info, CancellationToken.None)).ToList();
 
                         Assert.IsTrue(
-                            results.Any(r => r.ProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString())),
-                            "Expected TMDb title-search results to remain available when no explicit TMDb provider id is supplied.");
+                            results.Any(r => r.ProviderIds.TryGetTmdbId(out _)),
+                            "Expected TMDb title-search results to remain available without exposing the official TMDb provider id.");
                     }
                     catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests
                         || ex.Message.Contains("429", StringComparison.Ordinal))
@@ -1106,7 +1110,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                     Assert.IsNotNull(result.Item, "tmdb-only 自动剧集链路在存在有效 TMDb 路由时应改道到 TMDb。");
                     Assert.IsTrue(result.HasMetadata);
-                    Assert.AreEqual("45247", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.AreEqual("45247", result.Item.GetTmdbId());
+                    Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb), "tmdb-only 自动剧集链路不应再暴露官方 TMDb provider id。 ");
                     Assert.AreEqual("花牌情缘", result.Item.Name);
                 }).GetAwaiter().GetResult();
             }
@@ -1166,7 +1171,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                     Assert.IsNotNull(result.Item, "tmdb-only 自动剧集链路在存在有效 TMDb 路由时应继续改道到 TMDb。 ");
                     Assert.IsTrue(result.HasMetadata);
-                    Assert.AreEqual("45247", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.AreEqual("45247", result.Item.GetTmdbId());
+                    Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb), "tmdb-only 自动剧集链路不应再暴露官方 TMDb provider id。 ");
                     Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "文件名中的 Douban hint 不应被视为 tmdb-only 自动链路的豁免条件。");
                     Assert.AreEqual("花牌情缘", result.Item.Name);
                 }).GetAwaiter().GetResult();
@@ -1180,7 +1186,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualIdentifyAllowsDoubanUnderTmdbOnly()
+        public void ManualIdentifyBlocksDoubanUnderTmdbOnly()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -1206,8 +1212,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     HttpContext = null,
                 };
-                var doubanApi = new DoubanApi(loggerFactory);
-                DoubanApiTestHelper.SeedTvSearchResult(doubanApi, info.Name!, "1291841", "老友记", 1994);
+                var doubanApi = CreateThrowingDoubanApi(loggerFactory, "tmdb-only 手动剧集搜索不应访问 Douban。");
                 var tmdbApi = new TmdbApi(loggerFactory);
                 var omdbApi = new OmdbApi(loggerFactory);
                 var imdbApi = new ImdbApi(loggerFactory);
@@ -1217,7 +1222,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new SeriesProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var results = (await provider.GetSearchResults(info, CancellationToken.None)).ToList();
 
-                    Assert.IsTrue(results.Any(r => r.ProviderIds.TryGetValue(BaseProvider.DoubanProviderId, out var sid) && sid == "1291841"), "tmdb-only 不应误伤手动 Identify 的 Douban 搜索结果。");
+                    Assert.AreEqual(0, results.Count, "关闭 TMDb 搜索且 tmdb-only 禁止 Douban 时，手动剧集搜索应返回空集合。");
+                    Assert.IsFalse(results.Any(r => r.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId)), "tmdb-only 下手动剧集搜索不应返回 Douban 候选。");
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -1228,7 +1234,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualMatchAllowsDoubanUnderTmdbOnly()
+        public void ManualMatchBlocksDoubanUnderTmdbOnly()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -1259,21 +1265,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var httpContextAccessor = CreateManualMatchContextAccessor();
-                var doubanApi = new DoubanApi(loggerFactory);
-                SeedDoubanSubject(
-                    doubanApi,
-                    new DoubanSubject
-                    {
-                        Sid = "1291841",
-                        Name = "老友记",
-                        OriginalName = "Friends",
-                        Year = 1994,
-                        Category = "电视剧",
-                        Genre = "喜剧 / 爱情",
-                        Intro = "豆瓣手动匹配详情",
-                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
-                        Screen = "1994-09-22",
-                    });
+                var doubanApi = CreateThrowingDoubanApi(loggerFactory, "tmdb-only 手动剧集匹配不应访问 Douban。");
                 var tmdbApi = new TmdbApi(loggerFactory);
                 var omdbApi = new OmdbApi(loggerFactory);
                 var imdbApi = new ImdbApi(loggerFactory);
@@ -1283,10 +1275,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new SeriesProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var result = await provider.GetMetadata(info, CancellationToken.None);
 
-                    Assert.IsNotNull(result.Item, "显式手动匹配语义下仍应允许使用 Douban 剧集详情。");
-                    Assert.IsTrue(result.HasMetadata);
-                    Assert.AreEqual("1291841", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
-                    Assert.AreEqual("老友记", result.Item.Name);
+                    Assert.IsFalse(result.HasMetadata, "tmdb-only 下手动剧集匹配也不应使用 Douban 详情。");
+                    Assert.IsNull(result.Item);
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -1467,7 +1457,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("Douban Sample Series", result.Item.OriginalTitle);
             Assert.AreEqual("豆瓣剧集简介", result.Item.Overview);
             Assert.IsTrue(result.Item.CommunityRating > 8.0f && result.Item.CommunityRating < 8.2f, "Douban 主分支的评分不应被 TMDb people 回填改变。 ");
-            Assert.AreEqual("9102", result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("9102", result.Item.GetTmdbId());
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb), "Douban 分支解析出的 TMDb id 应只保存在 MetaShark 私有 provider id。 ");
             Assert.IsNotNull(result.People);
             Assert.AreEqual(1, result.People.Count, "Douban 路径一旦解析出 tmdbId，应额外复用 TMDb 剧集演员结果。 ");
             Assert.AreEqual("剧集演员中文名", GetPersonByTmdbId(result.People, 3101).Name);

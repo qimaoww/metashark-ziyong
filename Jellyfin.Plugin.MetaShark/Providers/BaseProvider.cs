@@ -50,6 +50,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         /// </summary>
         public const string TmdbProviderName = "TheMovieDb";
 
+        /// <summary>
+        /// MetaShark-private TMDb provider id. This keeps MetaShark TMDb fallbacks usable
+        /// without exposing the official TMDb id to Jellyfin built-in TMDb providers.
+        /// </summary>
+        public const string MetaSharkTmdbProviderId = "MetaSharkTmdbID";
+
         private const string MetaSharkLogPrefix = "[MetaShark]";
 
         private static readonly Action<ILogger, string, Exception?> LogMetaSharkInfo =

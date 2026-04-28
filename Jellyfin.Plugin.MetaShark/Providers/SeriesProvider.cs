@@ -51,7 +51,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             if (Config.EnableTmdb)
             {
-                var tmdbIdStr = searchInfo.GetProviderId(MetadataProvider.Tmdb);
+                var tmdbIdStr = searchInfo.GetTmdbId();
                 var formattedTmdbId = FormatProviderIdForLog(tmdbIdStr);
                 if (string.IsNullOrWhiteSpace(tmdbIdStr))
                 {
@@ -87,18 +87,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // 从douban搜索
-            var res = await this.DoubanApi.SearchTVAsync(searchInfo.Name, cancellationToken).ConfigureAwait(false);
-            result.AddRange(res.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x =>
+            if (IsDoubanAllowed(DefaultScraperSemantic.ManualSearch))
             {
-                return new RemoteSearchResult
+                var res = await this.DoubanApi.SearchTVAsync(searchInfo.Name, cancellationToken).ConfigureAwait(false);
+                result.AddRange(res.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x =>
                 {
-                    // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了和电影保持一致并唯一
-                    ProviderIds = new Dictionary<string, string> { { DoubanProviderId, x.Sid }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_{x.Sid}" } },
-                    ImageUrl = this.GetProxyImageUrl(new Uri(x.Img, UriKind.Absolute)).ToString(),
-                    ProductionYear = x.Year,
-                    Name = x.Name,
-                };
-            }));
+                    return new RemoteSearchResult
+                    {
+                        // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了和电影保持一致并唯一
+                        ProviderIds = new Dictionary<string, string> { { DoubanProviderId, x.Sid }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_{x.Sid}" } },
+                        ImageUrl = this.GetProxyImageUrl(new Uri(x.Img, UriKind.Absolute)).ToString(),
+                        ProductionYear = x.Year,
+                        Name = x.Name,
+                    };
+                }));
+            }
 
             // 尝试从tmdb搜索
             if (Config.EnableTmdbSearch)
@@ -132,7 +135,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var doubanAllowed = IsDoubanAllowed(semantic);
 
             var sid = info.GetProviderId(DoubanProviderId);
-            var tmdbId = info.GetProviderId(MetadataProvider.Tmdb);
+            var tmdbId = info.GetTmdbId();
             var metaSource = info.GetMetaSource(MetaSharkPlugin.ProviderId);
 
             // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
@@ -199,7 +202,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 if (!string.IsNullOrEmpty(newTmdbId))
                 {
                     tmdbId = newTmdbId;
-                    item.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+                    item.SetProviderId(MetaSharkTmdbProviderId, tmdbId);
                 }
 
                 if (!string.IsNullOrEmpty(tmdbId))
@@ -352,7 +355,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了和电影保持一致并唯一
                 ProviderIds = new Dictionary<string, string>
                 {
-                    { MetadataProvider.Tmdb.ToString(), tmdbId.ToString(CultureInfo.InvariantCulture) },
                     { MetaSharkPlugin.ProviderId, $"Tmdb_{tmdbId}" },
                 },
                 Name = string.Format(CultureInfo.InvariantCulture, "[TMDB]{0}", name ?? originalName),
@@ -545,7 +547,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 OriginalTitle = seriesResult.OriginalName,
             };
 
-            series.SetProviderId(MetadataProvider.Tmdb, seriesResult.Id.ToString(CultureInfo.InvariantCulture));
+            series.SetProviderId(MetaSharkTmdbProviderId, seriesResult.Id.ToString(CultureInfo.InvariantCulture));
 
             series.CommunityRating = (float)System.Math.Round(seriesResult.VoteAverage, 2);
 
