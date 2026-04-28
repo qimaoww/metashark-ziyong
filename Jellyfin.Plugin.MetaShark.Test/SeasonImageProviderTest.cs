@@ -285,7 +285,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualIdentifyApplyMetadata_WithDoubanSelected_ReturnsDoubanSeasonImage()
+        public void ManualIdentifyApplyMetadata_TmdbOnlyBlocksDoubanSeasonImage()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -309,21 +309,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Assert.IsNotNull(httpContextAccessor.HttpContext, "测试前提失败：必须构造手动 Apply 的 HttpContext。 ");
                 Assert.AreEqual(HttpMethods.Post, httpContextAccessor.HttpContext!.Request.Method, "测试前提失败：必须走 POST /Items/RemoteSearch/Apply/{id}。 ");
                 Assert.AreEqual($"/Items/RemoteSearch/Apply/{manualApplyItemId}", httpContextAccessor.HttpContext.Request.Path.Value, "测试前提失败：必须模拟 series 手动 Identify/Apply 的请求路径。 ");
-                Assert.AreEqual("season-douban", info.GetProviderId(BaseProvider.DoubanProviderId), "测试前提失败：season 必须保留 DoubanId，才能验证手动选 Douban 时季图仍跟随 Douban。 ");
+                Assert.AreEqual("season-douban", info.GetProviderId(BaseProvider.DoubanProviderId), "测试前提失败：season 必须保留 DoubanId，才能验证 tmdb-only 不被残留 DoubanId 绕过。 ");
 
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                SeedDoubanSubject(doubanApi, new DoubanSubject
-                {
-                    Sid = "season-douban",
-                    Name = "辛普森一家 第1季",
-                    Category = "电视剧",
-                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p1234567890.webp",
-                });
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 手动季图片 follow-up 不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 ConfigureTmdbImageConfig(tmdbApi);
                 SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
                 var expectedTmdbUrl = tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString();
-                Assert.IsFalse(string.IsNullOrEmpty(expectedTmdbUrl), "测试前提失败：必须成功种入 TMDb season 图，才能证明最终图源确实跟随 Douban。 ");
+                Assert.IsFalse(string.IsNullOrEmpty(expectedTmdbUrl), "测试前提失败：必须成功种入 TMDb season 图，才能证明 tmdb-only 可回退到 TMDb。 ");
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 
@@ -339,9 +332,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                         var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
 
-                        Assert.AreEqual(1, images.Count, "series 手动 Identify/Apply 元数据后的 follow-up season image 路径应返回唯一的季主图。 ");
-                        Assert.IsFalse(images[0].Url?.Contains("image.tmdb.org", StringComparison.OrdinalIgnoreCase) == true, "series 手动 Identify/Apply 明确选了 Douban 时，season image 不应落回 TMDb。\n实际 URL: " + images[0].Url + "\nTMDb fallback URL: " + expectedTmdbUrl);
-                        Assert.IsTrue(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "series 手动 Identify/Apply 明确选了 Douban 时，season image 必须跟随 Douban，而不是因为 tmdb-only 或 TMDb fallback 返回 TMDb 图。\n实际 URL: " + images[0].Url);
+                        Assert.AreEqual(1, images.Count, "tmdb-only 下 series 手动 Identify/Apply 的 follow-up season image 路径应返回唯一的 TMDb 季主图。 ");
+                        Assert.AreEqual(expectedTmdbUrl, images[0].Url, "tmdb-only 下即使手动 Apply 选过 Douban，season image 也不应访问或返回 Douban 图。\n实际 URL: " + images[0].Url);
+                        Assert.IsFalse(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "tmdb-only 下手动季图 follow-up 不应返回 Douban 图片。 ");
                     }).GetAwaiter().GetResult();
                 });
             }
@@ -449,7 +442,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualRemoteImageSearch_TmdbOnly_ReturnsDoubanSeasonImage()
+        public void ManualRemoteImageSearch_TmdbOnly_ReturnsTmdbSeasonImage()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -468,17 +461,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-douban", "series-douban", "34860", MetaSource.Tmdb);
                 var httpContextAccessor = CreateManualRemoteImageContextAccessor();
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                SeedDoubanSubject(doubanApi, new DoubanSubject
-                {
-                    Sid = "season-douban",
-                    Name = "辛普森一家 第1季",
-                    Category = "电视剧",
-                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p1234567890.webp",
-                });
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 手动季远程图片搜索不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 ConfigureTmdbImageConfig(tmdbApi);
                 SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
+                var expectedTmdbUrl = tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString();
+                Assert.IsFalse(string.IsNullOrEmpty(expectedTmdbUrl), "测试前提失败：必须成功种入 TMDb season 图。 ");
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 
@@ -489,9 +477,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                         var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
 
-                        Assert.AreEqual(1, images.Count, "手动 RemoteImages 搜索路径应返回唯一的季主图。");
-                        Assert.IsFalse(images[0].Url?.Contains("image.tmdb.org", StringComparison.OrdinalIgnoreCase) == true, "tmdb-only 下的手动季图搜索不应因为父级 series meta-source=TMDb 而错误回退到 TMDb URL。");
-                        Assert.IsTrue(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "手动 RemoteImages 搜索路径在 tmdb-only 下仍应返回 Douban 季图。当前失败说明 Douban 手动链路被误伤。\n实际 URL: " + images[0].Url);
+                        Assert.AreEqual(1, images.Count, "tmdb-only 手动 RemoteImages 搜索路径应返回唯一的 TMDb 季主图。");
+                        Assert.AreEqual(expectedTmdbUrl, images[0].Url, "tmdb-only 下的手动季图搜索不应返回 Douban URL。\n实际 URL: " + images[0].Url);
+                        Assert.IsFalse(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "tmdb-only 下手动季图搜索不应返回 Douban 图片。 ");
                     }).GetAwaiter().GetResult();
                 });
             }
@@ -522,7 +510,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
             if (!string.IsNullOrEmpty(seriesTmdbId))
             {
-                series.SetProviderId(MetadataProvider.Tmdb, seriesTmdbId);
+                series.SetProviderId(BaseProvider.MetaSharkTmdbProviderId, seriesTmdbId);
             }
 
             libraryManagerStub.Setup(x => x.GetItemById(series.Id)).Returns((BaseItem)series);

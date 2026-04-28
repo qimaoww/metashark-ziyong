@@ -52,13 +52,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var imageSemantic = this.ResolveImageSemantic();
             var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
-            var allowManualDoubanForSeasonImage = this.ShouldAllowDoubanForManualSeasonImageRequest(season, metaSource, imageSemantic);
 
             // get image from douban
             var sid = item.GetProviderId(DoubanProviderId);
             var shouldUseDoubanImage = !string.IsNullOrEmpty(sid)
-                && (allowManualDoubanForSeasonImage
-                    || (doubanAllowed && metaSource != MetaSource.Tmdb));
+                && doubanAllowed
+                && metaSource != MetaSource.Tmdb;
             if (shouldUseDoubanImage)
             {
                 var primary = await this.DoubanApi.GetMovieAsync(sid!, cancellationToken).ConfigureAwait(false);
@@ -79,8 +78,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // get image form TMDB
-            var seriesTmdbId = Convert.ToInt32(series?.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
-            if (seriesTmdbId <= 0 || season?.IndexNumber == null)
+            var parsedSeriesTmdbId = int.TryParse(series?.GetTmdbId(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var seriesTmdbId);
+            if (!parsedSeriesTmdbId || seriesTmdbId <= 0 || season?.IndexNumber == null)
             {
                 return Enumerable.Empty<RemoteImageInfo>();
             }
@@ -115,23 +114,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return isManualImageRequest
                 ? remoteImages.FilterManualRemoteImagesByLanguage()
                 : remoteImages.OrderByLanguageDescending(language);
-        }
-
-        private bool ShouldAllowDoubanForManualSeasonImageRequest(Season season, MetaSource metaSource, DefaultScraperSemantic imageSemantic)
-        {
-            ArgumentNullException.ThrowIfNull(season);
-
-            if (string.IsNullOrEmpty(season.GetProviderId(DoubanProviderId)))
-            {
-                return false;
-            }
-
-            if (imageSemantic == DefaultScraperSemantic.ManualSearch)
-            {
-                return true;
-            }
-
-            return this.IsManualMatchRequest() && metaSource == MetaSource.Douban;
         }
     }
 }

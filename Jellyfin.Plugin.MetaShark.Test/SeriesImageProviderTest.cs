@@ -66,7 +66,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 Name = "花牌情缘",
                 PreferredMetadataLanguage = "zh",
-                ProviderIds = new Dictionary<string, string> { { BaseProvider.DoubanProviderId, "6439459" }, { MetadataProvider.Tmdb.ToString(), "45247" } }
+                ProviderIds = new Dictionary<string, string> { { BaseProvider.DoubanProviderId, "6439459" }, { BaseProvider.MetaSharkTmdbProviderId, "45247" } }
             };
             var httpClientFactory = new DefaultHttpClientFactory();
             var libraryManagerStub = new Mock<ILibraryManager>();
@@ -102,7 +102,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var info = new MediaBrowser.Controller.Entities.TV.Series()
             {
                 PreferredMetadataLanguage = "zh",
-                ProviderIds = new Dictionary<string, string> { { MetadataProvider.Tmdb.ToString(), "67534" }, { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() } }
+                ProviderIds = new Dictionary<string, string> { { BaseProvider.MetaSharkTmdbProviderId, "67534" }, { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() } }
             };
             var httpClientFactory = new DefaultHttpClientFactory();
             var libraryManagerStub = new Mock<ILibraryManager>();
@@ -133,7 +133,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 ProviderIds = new Dictionary<string, string>
                 {
                     { BaseProvider.DoubanProviderId, "6439459" },
-                    { MetadataProvider.Tmdb.ToString(), "45247" },
+                    { BaseProvider.MetaSharkTmdbProviderId, "45247" },
                 },
             };
             var httpClientFactory = new DefaultHttpClientFactory();
@@ -184,7 +184,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ProviderIds = new Dictionary<string, string>
                     {
                         { BaseProvider.DoubanProviderId, "6439459" },
-                        { MetadataProvider.Tmdb.ToString(), "45247" },
+                        { BaseProvider.MetaSharkTmdbProviderId, "45247" },
                     },
                 };
                 var httpClientFactory = new DefaultHttpClientFactory();
@@ -283,7 +283,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     PreferredMetadataLanguage = preferredLanguage,
                     ProviderIds = new Dictionary<string, string>
                     {
-                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
+                        { BaseProvider.MetaSharkTmdbProviderId, tmdbId.ToString() },
                         { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
                     },
                 };
@@ -379,7 +379,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     PreferredMetadataLanguage = "zh",
                     ProviderIds = new Dictionary<string, string>
                     {
-                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
+                        { BaseProvider.MetaSharkTmdbProviderId, tmdbId.ToString() },
                         { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
                     },
                 };
@@ -462,7 +462,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ProviderIds = new Dictionary<string, string>
                     {
                         { BaseProvider.DoubanProviderId, sid },
-                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
+                        { BaseProvider.MetaSharkTmdbProviderId, tmdbId.ToString() },
                     },
                 };
                 var httpClientFactory = new DefaultHttpClientFactory();
@@ -558,7 +558,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     PreferredMetadataLanguage = "zh",
                     ProviderIds = new Dictionary<string, string>
                     {
-                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString() },
+                        { BaseProvider.MetaSharkTmdbProviderId, tmdbId.ToString() },
                         { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
                     },
                 };

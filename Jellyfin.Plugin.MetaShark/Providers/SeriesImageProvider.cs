@@ -50,7 +50,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(item);
             var sid = item.GetProviderId(DoubanProviderId);
-            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
+            var tmdbId = item.GetTmdbId();
             var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
             var imageSemantic = this.ResolveImageSemantic();
             var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
@@ -191,7 +191,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private async Task<IEnumerable<RemoteImageInfo>> GetBackdrop(BaseItem item, string alternativeImageLanguage, bool doubanAllowed, CancellationToken cancellationToken, bool includeTmdbFallback = true)
         {
             var sid = item.GetProviderId(DoubanProviderId);
-            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
+            var tmdbId = item.GetTmdbId();
             var list = new List<RemoteImageInfo>();
 
             // 从豆瓣获取背景图
@@ -255,7 +255,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private async Task<IEnumerable<RemoteImageInfo>> GetLogos(BaseItem item, string alternativeImageLanguage, CancellationToken cancellationToken)
         {
-            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
+            var tmdbId = item.GetTmdbId();
             var language = item.GetPreferredMetadataLanguage();
             var list = new List<RemoteImageInfo>();
             if (Config.EnableTmdbLogo && !string.IsNullOrEmpty(tmdbId))
