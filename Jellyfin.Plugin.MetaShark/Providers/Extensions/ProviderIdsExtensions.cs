@@ -30,12 +30,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(instance);
 
-            if (TryNormalizeTmdbId(instance.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Tmdb), out tmdbId))
+            if (TryNormalizeTmdbId(instance.GetProviderId(BaseProvider.MetaSharkTmdbProviderId), out tmdbId))
             {
                 return true;
             }
 
-            if (TryNormalizeTmdbId(instance.GetProviderId(BaseProvider.MetaSharkTmdbProviderId), out tmdbId))
+            if (TryNormalizeTmdbId(instance.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Tmdb), out tmdbId))
             {
                 return true;
             }
@@ -51,14 +51,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return false;
             }
 
-            if (providerIds.TryGetValue(MediaBrowser.Model.Entities.MetadataProvider.Tmdb.ToString(), out var officialTmdbId)
-                && TryNormalizeTmdbId(officialTmdbId, out tmdbId))
+            if (providerIds.TryGetValue(BaseProvider.MetaSharkTmdbProviderId, out var privateTmdbId)
+                && TryNormalizeTmdbId(privateTmdbId, out tmdbId))
             {
                 return true;
             }
 
-            if (providerIds.TryGetValue(BaseProvider.MetaSharkTmdbProviderId, out var privateTmdbId)
-                && TryNormalizeTmdbId(privateTmdbId, out tmdbId))
+            if (providerIds.TryGetValue(MediaBrowser.Model.Entities.MetadataProvider.Tmdb.ToString(), out var officialTmdbId)
+                && TryNormalizeTmdbId(officialTmdbId, out tmdbId))
             {
                 return true;
             }
