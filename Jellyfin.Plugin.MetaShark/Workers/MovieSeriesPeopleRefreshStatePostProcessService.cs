@@ -13,6 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Core;
+    using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
@@ -124,7 +125,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(item.GetProviderId(MetadataProvider.Tmdb)))
+            if (!item.TryGetTmdbId(out _))
             {
                 this.LogSkip("MissingTmdbProviderId", triggerName, item, e.UpdateReason, null);
                 return;

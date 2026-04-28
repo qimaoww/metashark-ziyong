@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
+using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities;
@@ -196,7 +197,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Overview = "queued series overview",
             };
 
-            series.SetProviderId(MetadataProvider.Tmdb, "654321");
+            series.SetProviderId(BaseProvider.MetaSharkTmdbProviderId, "654321");
             series.SetSimulatedPeople(Array.Empty<PersonInfo>());
 
             var authoritativePeople = CreateAuthoritativePeopleSet();
@@ -411,7 +412,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Path = "/library/tv/disabled-series",
                 Overview = "disabled series overview",
             };
-            disabledSeries.SetProviderId(MetadataProvider.Tmdb, "654321");
+            disabledSeries.SetProviderId(BaseProvider.MetaSharkTmdbProviderId, "654321");
             disabledSeries.SetSimulatedPeople(new[] { CreatePerson("777", "Actor", "角色A", "Actor A") });
 
             var libraryManagerStub = new Mock<ILibraryManager>();
@@ -468,7 +469,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(state);
             Assert.AreEqual(item.Id, state!.ItemId);
             Assert.AreEqual(item is Movie ? nameof(Movie) : nameof(Series), state.ItemType);
-            Assert.AreEqual(item.GetProviderId(MetadataProvider.Tmdb), state.TmdbId);
+            Assert.AreEqual(item.GetTmdbId(), state.TmdbId);
             Assert.AreEqual(PeopleRefreshState.CurrentVersion, state.Version);
             Assert.AreNotEqual(default, state.UpdatedAtUtc);
             Assert.AreEqual(expectedMetadataChangedCallCount, item.MetadataChangedCallCount, "metadata changed 调用次数与预期不一致。 ");
@@ -605,7 +606,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             return TmdbAuthoritativePeopleSnapshot.Create(
                 item is Movie ? nameof(Movie) : nameof(Series),
-                item.GetProviderId(MetadataProvider.Tmdb) ?? throw new InvalidOperationException("测试前提：item 必须带有 TMDb provider id。 "),
+                item.GetTmdbId() ?? throw new InvalidOperationException("测试前提：item 必须带有 TMDb provider id。 "),
                 people);
         }
 
@@ -744,7 +745,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Overview = "series overview",
                 };
 
-                series.SetProviderId(MetadataProvider.Tmdb, "654321");
+            series.SetProviderId(BaseProvider.MetaSharkTmdbProviderId, "654321");
                 series.SetImagePath(ImageType.Primary, "https://example.com/series.jpg");
                 var harness = new FlowHarness<TrackingSeries>(series);
                 if (!string.IsNullOrWhiteSpace(stateVersion))

@@ -5,10 +5,10 @@
 namespace Jellyfin.Plugin.MetaShark.Core
 {
     using System;
+    using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
-    using MediaBrowser.Model.Entities;
 
     public class PeopleRefreshState
     {
@@ -136,7 +136,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return false;
             }
 
-            tmdbId = item.GetProviderId(MetadataProvider.Tmdb) ?? string.Empty;
+            tmdbId = item.GetTmdbId() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(tmdbId))
             {
                 tmdbId = string.Empty;

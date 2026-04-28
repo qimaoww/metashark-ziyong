@@ -14,12 +14,12 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
     using Jellyfin.Plugin.MetaShark.Model;
+    using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Common.Extensions;
     using MediaBrowser.Common.Net;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
-    using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.IO;
     using MediaBrowser.Model.Providers;
     using Microsoft.AspNetCore.Authorization;
@@ -158,7 +158,6 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
-                HasTmdbId = true,
             });
 
             var refreshOptions = new MetadataRefreshOptions(new DirectoryService(this.fileSystem))
@@ -172,7 +171,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
             var queued = 0;
             foreach (var item in items)
             {
-                if (!item.ProviderIds.TryGetValue(MediaBrowser.Model.Entities.MetadataProvider.Tmdb.ToString(), out var tmdbId))
+                if (!item.TryGetTmdbId(out var tmdbId))
                 {
                     continue;
                 }

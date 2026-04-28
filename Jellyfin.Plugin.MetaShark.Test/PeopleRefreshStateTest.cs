@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
+using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -388,7 +389,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             if (includeTmdb)
             {
-                item.SetProviderId(MetadataProvider.Tmdb, "123456");
+                item.SetProviderId(item is Series ? BaseProvider.MetaSharkTmdbProviderId : MetadataProvider.Tmdb.ToString(), "123456");
             }
 
             return item;
@@ -421,7 +422,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             if (includeTmdb)
             {
-                series.SetProviderId(MetadataProvider.Tmdb, "123456");
+                series.SetProviderId(BaseProvider.MetaSharkTmdbProviderId, "123456");
             }
 
             series.SetSimulatedPeople(people);
@@ -485,7 +486,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 throw new InvalidOperationException("Cannot create legacy people refresh state for a non-movie/series item.");
             }
 
-            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
+            var tmdbId = item.GetTmdbId();
             if (item.Id == Guid.Empty || string.IsNullOrWhiteSpace(tmdbId))
             {
                 throw new InvalidOperationException("Cannot create legacy people refresh state without item identity.");

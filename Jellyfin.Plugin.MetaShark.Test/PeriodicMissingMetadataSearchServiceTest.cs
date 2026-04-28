@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
+using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -775,7 +776,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             if (includeProviderIds)
             {
-                item.SetProviderId(MetadataProvider.Tmdb, $"{typeof(T).Name}-tmdb-1");
+                item.SetProviderId(
+                    item is Series ? BaseProvider.MetaSharkTmdbProviderId : MetadataProvider.Tmdb.ToString(),
+                    $"{typeof(T).Name}-tmdb-1");
             }
 
             if (includeOverview)
@@ -820,7 +823,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private static TmdbAuthoritativePeopleSnapshot CreateAuthoritativePeopleSnapshot(BaseItem item, IEnumerable<PersonInfo> people)
         {
-            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
+            var tmdbId = item.GetTmdbId();
             Assert.IsFalse(string.IsNullOrWhiteSpace(tmdbId), "测试前提：authoritative item 必须带 TMDb provider id。 ");
 
             return TmdbAuthoritativePeopleSnapshot.Create(item is Series ? nameof(Series) : nameof(Movie), tmdbId!, people);

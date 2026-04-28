@@ -4,6 +4,7 @@ using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Controllers;
 using Jellyfin.Plugin.MetaShark.Model;
+using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
@@ -11,7 +12,6 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
-using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Providers;
 using MediaBrowser.Model.Serialization;
@@ -198,7 +198,7 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 Name = name,
                 ProviderIds = new Dictionary<string, string>
                 {
-                    [MetadataProvider.Tmdb.ToString()] = tmdbId,
+                    [BaseProvider.MetaSharkTmdbProviderId] = tmdbId,
                 },
             };
         }

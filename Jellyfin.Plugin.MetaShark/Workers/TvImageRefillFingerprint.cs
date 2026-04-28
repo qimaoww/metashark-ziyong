@@ -6,9 +6,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
     using System.Globalization;
+    using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.TV;
-    using MediaBrowser.Model.Entities;
 
     public static class TvImageRefillFingerprint
     {
@@ -23,18 +23,18 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 Episode episode => string.Join(
                     "|",
                     path,
-                    episode.Series?.GetProviderId(MetadataProvider.Tmdb) ?? string.Empty,
+                    episode.Series?.GetTmdbId() ?? string.Empty,
                     episode.ParentIndexNumber?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
                     episode.IndexNumber?.ToString(CultureInfo.InvariantCulture) ?? string.Empty),
                 Season season => string.Join(
                     "|",
                     path,
-                    season.Series?.GetProviderId(MetadataProvider.Tmdb) ?? string.Empty,
+                    season.Series?.GetTmdbId() ?? string.Empty,
                     season.IndexNumber?.ToString(CultureInfo.InvariantCulture) ?? string.Empty),
                 Series series => string.Join(
                     "|",
                     path,
-                    series.GetProviderId(MetadataProvider.Tmdb) ?? string.Empty),
+                    series.GetTmdbId() ?? string.Empty),
                 _ => path,
             };
         }

@@ -1,5 +1,6 @@
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
+using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities;
@@ -516,7 +517,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(ItemUpdateType.MetadataEdit, series.LastUpdateReason);
             Assert.IsFalse(series.ProviderIds?.ContainsKey("MetaSharkPeopleRefreshState") ?? false);
             Assert.AreEqual(1, series.ProviderIds?.Count ?? 0);
-            CollectionAssert.AreEquivalent(new[] { MetadataProvider.Tmdb.ToString() }, new List<string>(series.ProviderIds!.Keys));
+            CollectionAssert.AreEquivalent(new[] { BaseProvider.MetaSharkTmdbProviderId }, new List<string>(series.ProviderIds!.Keys));
         }
 
         [TestMethod]
@@ -759,7 +760,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             if (includeTmdb)
             {
-                item.SetProviderId(MetadataProvider.Tmdb, "123456");
+                item.SetProviderId(item is Series ? BaseProvider.MetaSharkTmdbProviderId : MetadataProvider.Tmdb.ToString(), "123456");
             }
         }
 
