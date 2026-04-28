@@ -199,7 +199,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualSearchAllowsDoubanUnderTmdbOnly()
+        public void ManualSearchBlocksDoubanUnderTmdbOnly()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -215,13 +215,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                SeedDoubanCelebritySearchResult(doubanApi, "周迅", new DoubanCelebrity
-                {
-                    Id = "27257290",
-                    Name = "周迅",
-                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
-                });
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 手动人物搜索不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
@@ -231,7 +225,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new PersonProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var results = (await provider.GetSearchResults(new PersonLookupInfo { Name = "周迅", MetadataLanguage = "zh" }, CancellationToken.None)).ToList();
 
-                    Assert.IsTrue(results.Any(result => result.ProviderIds.TryGetValue(BaseProvider.DoubanProviderId, out var value) && value == "27257290"), "tmdb-only 不应误伤真正的手动人物搜索路径。");
+                    Assert.AreEqual(0, results.Count, "tmdb-only 禁止 Douban 时，手动人物搜索应返回空集合。");
+                    Assert.IsFalse(results.Any(result => result.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId)), "tmdb-only 下手动人物搜索不应返回 Douban 候选。");
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -241,7 +236,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualMatchAllowsDoubanUnderTmdbOnly()
+        public void ManualMatchBlocksDoubanUnderTmdbOnly()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -267,16 +262,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var httpContextAccessor = CreateManualMatchContextAccessor();
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                SeedDoubanCelebrity(
-                    doubanApi,
-                    new DoubanCelebrity
-                    {
-                        Id = "27257290",
-                        Name = "周迅",
-                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
-                        Intro = "豆瓣人物详情",
-                    });
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 手动人物匹配不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
@@ -286,10 +272,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new PersonProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var result = await provider.GetMetadata(info, CancellationToken.None);
 
-                    Assert.IsTrue(result.HasMetadata, "显式手动匹配语义下仍应允许使用 Douban 人物详情。");
-                    Assert.IsNotNull(result.Item);
-                    Assert.AreEqual("27257290", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
-                    Assert.IsTrue(result.Item.GetImagePath(ImageType.Primary, 0)?.Contains("img9.doubanio.com", StringComparison.Ordinal) == true, "Douban 人物元数据路径应直接把主图 URL 写回人物主图。 ");
+                    Assert.IsFalse(result.HasMetadata, "tmdb-only 下手动人物匹配也不应使用 Douban 详情。");
+                    Assert.IsNull(result.Item);
                 }).GetAwaiter().GetResult();
             }
             finally

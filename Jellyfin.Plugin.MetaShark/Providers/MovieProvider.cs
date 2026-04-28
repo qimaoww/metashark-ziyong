@@ -52,19 +52,22 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // 从douban搜索
-            var res = await this.DoubanApi.SearchMovieAsync(searchInfo.Name, cancellationToken).ConfigureAwait(false);
-            result.AddRange(res.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x =>
+            if (IsDoubanAllowed(DefaultScraperSemantic.ManualSearch))
             {
-                return new RemoteSearchResult
+                var res = await this.DoubanApi.SearchMovieAsync(searchInfo.Name, cancellationToken).ConfigureAwait(false);
+                result.AddRange(res.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x =>
                 {
-                    // 注意：jellyfin 会判断电影所有 provider id 是否有相同的，有相同的值就会认为是同一影片，会被合并不返回，必须保持 provider id 的唯一性
-                    // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了保持唯一
-                    ProviderIds = new Dictionary<string, string> { { DoubanProviderId, x.Sid }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_{x.Sid}" } },
-                    ImageUrl = this.GetProxyImageUrl(new Uri(x.Img, UriKind.Absolute)).ToString(),
-                    ProductionYear = x.Year,
-                    Name = x.Name,
-                };
-            }));
+                    return new RemoteSearchResult
+                    {
+                        // 注意：jellyfin 会判断电影所有 provider id 是否有相同的，有相同的值就会认为是同一影片，会被合并不返回，必须保持 provider id 的唯一性
+                        // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了保持唯一
+                        ProviderIds = new Dictionary<string, string> { { DoubanProviderId, x.Sid }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_{x.Sid}" } },
+                        ImageUrl = this.GetProxyImageUrl(new Uri(x.Img, UriKind.Absolute)).ToString(),
+                        ProductionYear = x.Year,
+                        Name = x.Name,
+                    };
+                }));
+            }
 
             // 从tmdb搜索
             if (Config.EnableTmdbSearch)

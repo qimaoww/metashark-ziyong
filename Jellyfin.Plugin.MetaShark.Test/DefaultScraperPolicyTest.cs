@@ -40,19 +40,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [DataTestMethod]
         [DataRow("ManualSearch")]
         [DataRow("ManualMatch")]
-        public void ManualPathsAllowDoubanUnderTmdbOnly(string semanticName)
-        {
-            var configuration = CreateConfiguration(PluginConfiguration.DefaultScraperModeTmdbOnly);
-
-            var result = InvokeIsDoubanAllowed(configuration, semanticName);
-
-            Assert.IsTrue(result, $"tmdb-only 模式下应保留 {semanticName} 的 Douban 手动豁免。");
-        }
-
-        [DataTestMethod]
         [DataRow("UserRefresh")]
         [DataRow("AutomaticRefresh")]
-        public void AutomaticPathsBlockDoubanUnderTmdbOnly(string semanticName)
+        public void TmdbOnlyBlocksDoubanForAllSemantics(string semanticName)
         {
             var configuration = CreateConfiguration(PluginConfiguration.DefaultScraperModeTmdbOnly);
 
@@ -87,7 +77,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var manualResult = InvokeIsDoubanAllowed(configuration, "ManualMatch");
 
             Assert.IsFalse(automaticResult, "tmdb-only + EnableTmdbMatch=false 时，自动链路仍不应回落到 Douban。");
-            Assert.IsTrue(manualResult, "tmdb-only + EnableTmdbMatch=false 不应误伤手动匹配的 Douban 显式语义。");
+            Assert.IsFalse(manualResult, "tmdb-only + EnableTmdbMatch=false 时，手动链路也不应回落到 Douban。");
         }
 
         [TestMethod]

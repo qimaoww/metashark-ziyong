@@ -837,7 +837,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualIdentifyAllowsDoubanUnderTmdbOnly()
+        public void ManualIdentifyBlocksDoubanUnderTmdbOnly()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -858,20 +858,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     HttpContext = null,
                 };
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                DoubanApiTestHelper.SeedSearchResult(
-                    doubanApi,
-                    "秒速5厘米",
-                    new DoubanSubject
-                    {
-                        Sid = "2043546",
-                        Name = "秒速5厘米",
-                        OriginalName = "秒速5センチメートル",
-                        Year = 2007,
-                        Category = "电影",
-                        Genre = "动画",
-                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
-                    });
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 手动电影搜索不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
@@ -881,7 +868,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var results = (await provider.GetSearchResults(new MovieInfo { Name = "秒速5厘米", MetadataLanguage = "zh" }, CancellationToken.None)).ToList();
 
-                    Assert.IsTrue(results.Any(r => r.ProviderIds.TryGetValue(BaseProvider.DoubanProviderId, out var sid) && sid == "2043546"), "tmdb-only 不应误伤手动搜索返回 Douban 候选。");
+                    Assert.AreEqual(0, results.Count, "关闭 TMDb 搜索且 tmdb-only 禁止 Douban 时，手动电影搜索应返回空集合。");
+                    Assert.IsFalse(results.Any(r => r.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId)), "tmdb-only 下手动电影搜索不应返回 Douban 候选。");
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -892,7 +880,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualMatchAllowsDoubanUnderTmdbOnly()
+        public void ManualMatchBlocksDoubanUnderTmdbOnly()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -923,21 +911,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var httpContextAccessor = CreateManualMatchContextAccessor();
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                SeedDoubanSubject(
-                    doubanApi,
-                    new DoubanSubject
-                    {
-                        Sid = "2043546",
-                        Name = "秒速5厘米",
-                        OriginalName = "秒速5センチメートル",
-                        Year = 2007,
-                        Category = "电影",
-                        Genre = "动画",
-                        Intro = "豆瓣手动匹配详情",
-                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
-                        Screen = "2007-03-03",
-                    });
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 手动电影匹配不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
@@ -947,10 +921,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var result = await provider.GetMetadata(info, CancellationToken.None);
 
-                    Assert.IsNotNull(result.Item, "显式手动匹配语义下仍应允许使用 Douban 详情。" );
-                    Assert.IsTrue(result.HasMetadata);
-                    Assert.AreEqual("2043546", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
-                    Assert.AreEqual("秒速5厘米", result.Item.Name);
+                    Assert.IsFalse(result.HasMetadata, "tmdb-only 下手动电影匹配也不应使用 Douban 详情。");
+                    Assert.IsNull(result.Item);
                 }).GetAwaiter().GetResult();
             }
             finally

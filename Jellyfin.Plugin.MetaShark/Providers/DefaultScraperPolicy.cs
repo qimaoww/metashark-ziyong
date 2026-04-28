@@ -34,7 +34,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             return mode switch
             {
-                PluginConfiguration.DefaultScraperModeTmdbOnly => semantic is DefaultScraperSemantic.ManualSearch or DefaultScraperSemantic.ManualMatch,
+                PluginConfiguration.DefaultScraperModeTmdbOnly => false,
                 _ => true,
             };
         }

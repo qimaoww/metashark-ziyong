@@ -153,7 +153,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ManualRemoteImageSearchAllowsDoubanUnderTmdbOnly()
+        public void ManualRemoteImageSearchBlocksDoubanUnderTmdbOnly()
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -178,30 +178,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var httpContextAccessor = CreateManualRemoteImageContextAccessor();
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                SeedDoubanCelebrity(doubanApi, new DoubanCelebrity
-                {
-                    Id = "27257290",
-                    Name = "周迅",
-                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
-                });
-                SeedDoubanCelebrityPhotos(
-                    doubanApi,
-                    "27257290",
-                    new DoubanPhoto
-                    {
-                        Id = "1",
-                        Raw = "https://img9.doubanio.com/view/photo/raw/public/p0000000001.jpg",
-                        Width = 800,
-                        Height = 1200,
-                    },
-                    new DoubanPhoto
-                    {
-                        Id = "2",
-                        Raw = "https://img9.doubanio.com/view/photo/raw/public/p0000000002.jpg",
-                        Width = 800,
-                        Height = 800,
-                    });
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 手动人物图片搜索不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 ConfigureTmdbImageConfig(tmdbApi);
                 var omdbApi = new OmdbApi(this.loggerFactory);
@@ -212,8 +189,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new PersonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
 
-                    Assert.AreEqual(2, images.Count, "手动远程图片搜索路径下应保留 Douban 主图和合格的人物竖图。");
-                    Assert.IsTrue(images.All(image => image.Url?.Contains("douban", StringComparison.OrdinalIgnoreCase) == true), "手动远程图片搜索路径不应被 tmdb-only 误伤。");
+                    Assert.AreEqual(0, images.Count, "tmdb-only 下手动人物远程图片搜索不应返回 Douban 图片。 ");
+                    Assert.IsFalse(images.Any(image => image.Url?.Contains("douban", StringComparison.OrdinalIgnoreCase) == true), "tmdb-only 下手动人物远程图片搜索不应返回 Douban 图片。 ");
                 }).GetAwaiter().GetResult();
             }
             finally
