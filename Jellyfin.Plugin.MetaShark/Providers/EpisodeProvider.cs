@@ -126,7 +126,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             info = this.FixParseInfo(info);
 
             // 剧集信息只有tmdb有
-            info.SeriesProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var seriesTmdbId);
+            info.SeriesProviderIds.TryGetTmdbId(out var seriesTmdbId);
             var seasonNumber = info.ParentIndexNumber;
             var episodeNumber = info.IndexNumber;
             result.HasMetadata = true;

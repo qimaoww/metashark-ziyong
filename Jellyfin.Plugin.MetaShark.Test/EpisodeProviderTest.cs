@@ -182,7 +182,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Path = "/test/Spice and Wolf/S00/[VCB-Studio] Spice and Wolf II [01][Hi444pp_1080p][x264_flac].mkv",
                     MetadataLanguage = "zh",
                     ParentIndexNumber = 0,
-                    SeriesProviderIds = new Dictionary<string, string>() { { MetadataProvider.Tmdb.ToString(), "26707" } },
+                    SeriesProviderIds = new Dictionary<string, string>() { { BaseProvider.MetaSharkTmdbProviderId, "26707" } },
                     IsAutomated = false,
                 };
                 var provider = new EpisodeProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi, tvdbApi);
@@ -265,7 +265,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         MetadataLanguage = "zh-CN",
                         ParentIndexNumber = 1,
                         IndexNumber = 1,
-                        SeriesProviderIds = new Dictionary<string, string>() { { MetadataProvider.Tmdb.ToString(), "26707" } },
+                        SeriesProviderIds = new Dictionary<string, string>() { { BaseProvider.MetaSharkTmdbProviderId, "26707" } },
                         IsAutomated = true,
                     };
 
@@ -314,7 +314,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 MetadataLanguage = "zh-CN",
                 ParentIndexNumber = 1,
                 IndexNumber = 1,
-                SeriesProviderIds = new Dictionary<string, string>() { { MetadataProvider.Tmdb.ToString(), "26707" } },
+                SeriesProviderIds = new Dictionary<string, string>() { { BaseProvider.MetaSharkTmdbProviderId, "26707" } },
                 IsAutomated = true,
             };
 

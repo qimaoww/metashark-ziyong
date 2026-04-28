@@ -61,10 +61,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 series = null;
             }
 
-            var seriesTmdbIdText = series?.GetProviderId(MetadataProvider.Tmdb);
+            var seriesTmdbIdText = series?.GetTmdbId();
             if (string.IsNullOrWhiteSpace(seriesTmdbIdText))
             {
-                seriesTmdbIdText = item.GetProviderId(MetadataProvider.Tmdb);
+                seriesTmdbIdText = item.GetTmdbId();
             }
 
             var parsedTmdbId = int.TryParse(seriesTmdbIdText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seriesTmdbId);

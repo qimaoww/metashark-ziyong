@@ -219,7 +219,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestMethod]
         public void TestGetMetadata()
         {
-            var info = new SeasonInfo() { Name = "第 18 季", IndexNumber = 18, SeriesProviderIds = new Dictionary<string, string>() { { BaseProvider.DoubanProviderId, "2059529" }, { MetadataProvider.Tmdb.ToString(), "34860" } } };
+            var info = new SeasonInfo() { Name = "第 18 季", IndexNumber = 18, SeriesProviderIds = new Dictionary<string, string>() { { BaseProvider.DoubanProviderId, "2059529" }, { BaseProvider.MetaSharkTmdbProviderId, "34860" } } };
             var httpClientFactory = new DefaultHttpClientFactory();
             var libraryManagerStub = new Mock<ILibraryManager>();
             var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
@@ -378,7 +378,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     SeriesProviderIds = new Dictionary<string, string>
                     {
                         { BaseProvider.DoubanProviderId, "2059529" },
-                        { MetadataProvider.Tmdb.ToString(), "34860" },
+                        { BaseProvider.MetaSharkTmdbProviderId, "34860" },
                     },
                 };
                 var httpClientFactory = new DefaultHttpClientFactory();

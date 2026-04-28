@@ -64,7 +64,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         PreferredMetadataLanguage = "zh",
                         ProviderIds = new Dictionary<string, string>
                         {
-                            { MetadataProvider.Tmdb.ToString(), "26707" },
+                            { BaseProvider.MetaSharkTmdbProviderId, "26707" },
                         },
                     });
 
@@ -149,7 +149,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         PreferredMetadataLanguage = "zh",
                         ProviderIds = new Dictionary<string, string>
                         {
-                            { MetadataProvider.Tmdb.ToString(), "26707" },
+                            { BaseProvider.MetaSharkTmdbProviderId, "26707" },
                         },
                     });
 
@@ -203,7 +203,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         PreferredMetadataLanguage = "zh",
                         ProviderIds = new Dictionary<string, string>
                         {
-                            { MetadataProvider.Tmdb.ToString(), "273467" },
+                            { BaseProvider.MetaSharkTmdbProviderId, "273467" },
                         },
                     });
 
@@ -251,7 +251,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         PreferredMetadataLanguage = "zh",
                         ProviderIds = new Dictionary<string, string>
                         {
-                            { MetadataProvider.Tmdb.ToString(), "273467" },
+                            { BaseProvider.MetaSharkTmdbProviderId, "273467" },
                         },
                     });
 
@@ -309,7 +309,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         PreferredMetadataLanguage = "zh",
                         ProviderIds = new Dictionary<string, string>
                         {
-                            { MetadataProvider.Tmdb.ToString(), "273467" },
+                            { BaseProvider.MetaSharkTmdbProviderId, "273467" },
                         },
                     });
 
@@ -377,7 +377,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         PreferredMetadataLanguage = "zh",
                         ProviderIds = new Dictionary<string, string>
                         {
-                            { MetadataProvider.Tmdb.ToString(), "273467" },
+                            { BaseProvider.MetaSharkTmdbProviderId, "273467" },
                         },
                     });
 
