@@ -45,55 +45,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(item);
             var list = new List<RemoteImageInfo>();
-            var cid = item.GetProviderId(DoubanProviderId);
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
-            var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
             var language = item.GetPreferredMetadataLanguage();
             var imageSemantic = this.ResolveImageSemantic();
             var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
-            var doubanAllowed = IsDoubanAllowed(imageSemantic);
-            var usedDouban = false;
-            this.Log("开始获取人物图片. name: {0} metaSource: {1}", item.Name, metaSource);
-            if (doubanAllowed && !string.IsNullOrEmpty(cid))
-            {
-                var celebrity = await this.DoubanApi.GetCelebrityAsync(cid, cancellationToken).ConfigureAwait(false);
-                if (celebrity != null && !string.IsNullOrEmpty(celebrity.Img))
-                {
-                    usedDouban = true;
-                    list.Add(new RemoteImageInfo
-                    {
-                        ProviderName = this.Name,
-                        Url = this.GetProxyImageUrl(new Uri(celebrity.Img, UriKind.Absolute)).ToString(),
-                        Type = ImageType.Primary,
-                        Language = "zh",
-                    });
-                }
-            }
+            this.Log("开始获取人物图片. name: {0} tmdbId: {1}", item.Name, tmdbId);
 
-            if (usedDouban && !string.IsNullOrEmpty(cid))
-            {
-                var photos = await this.DoubanApi.GetCelebrityPhotosAsync(cid, cancellationToken).ConfigureAwait(false);
-                photos.ForEach(x =>
-                {
-                    // 过滤不是竖图
-                    if (x.Width < 400 || x.Height < x.Width * 1.3)
-                    {
-                        return;
-                    }
-
-                    list.Add(new RemoteImageInfo
-                    {
-                        ProviderName = this.Name,
-                        Url = this.GetProxyImageUrl(new Uri(x.Raw, UriKind.Absolute)).ToString(),
-                        Width = x.Width,
-                        Height = x.Height,
-                        Type = ImageType.Primary,
-                        Language = "zh",
-                    });
-                });
-            }
-
-            if (list.Count == 0 && !string.IsNullOrEmpty(tmdbId))
+            if (!string.IsNullOrEmpty(tmdbId))
             {
                 var person = await this.TmdbApi.GetPersonAsync(tmdbId.ToInt(), cancellationToken).ConfigureAwait(false);
                 var profiles = person?.Images?.Profiles;
