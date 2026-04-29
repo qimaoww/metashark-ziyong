@@ -23,6 +23,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TMDbLib.Objects.Configuration;
 using TMDbLib.Objects.General;
+using TMDbLib.Objects.Search;
 using TmdbPerson = TMDbLib.Objects.People.Person;
 
 namespace Jellyfin.Plugin.MetaShark.Test
@@ -34,6 +35,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private static readonly string PluginTestRootPath = Path.Combine(Path.GetTempPath(), "metashark-person-provider-tests");
         private static readonly string PluginsPath = Path.Combine(PluginTestRootPath, "plugins");
         private static readonly string PluginConfigurationsPath = Path.Combine(PluginTestRootPath, "configurations");
+        private const string AutomaticMetadataRequest = "automatic";
+        private const string UserMetadataRequest = "user";
+        private const string OverwriteMetadataRequest = "overwrite";
+        private const string ManualMatchMetadataRequest = "manual-match";
 
         private readonly ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
             builder.AddSimpleConsole(options =>
@@ -101,8 +106,16 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }).GetAwaiter().GetResult();
         }
 
-        [TestMethod]
-        public void DefaultScraperPolicy_TmdbOnlyAutomaticMetadataSkipsDoubanAndUsesTmdbFallback()
+        [DataTestMethod]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault, AutomaticMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault, UserMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault, OverwriteMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault, ManualMatchMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly, AutomaticMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly, UserMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly, OverwriteMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly, ManualMatchMetadataRequest)]
+        public void PersonMetadataUsesOfficialTmdbAndSkipsDouban(string defaultScraperMode, string metadataRequestKind)
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -113,13 +126,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             try
             {
-                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.DefaultScraperMode = defaultScraperMode;
 
                 var info = new PersonLookupInfo
                 {
                     Name = "周迅",
                     MetadataLanguage = "zh",
-                    IsAutomated = true,
+                    IsAutomated = IsAutomatedMetadataRequest(metadataRequestKind),
                     ProviderIds = new Dictionary<string, string>
                     {
                         { BaseProvider.DoubanProviderId, "27257290" },
@@ -128,8 +141,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 };
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
-                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
-                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动人物元数据链路不应再访问 Douban。");
+                var httpContextAccessor = CreateMetadataRequestContextAccessor(metadataRequestKind);
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "人物元数据链路不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 SeedTmdbPerson(tmdbApi, 287);
                 var omdbApi = new OmdbApi(this.loggerFactory);
@@ -140,9 +153,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new PersonProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var result = await provider.GetMetadata(info, CancellationToken.None);
 
-                    Assert.IsTrue(result.HasMetadata, "tmdb-only 自动人物元数据链路在存在有效 TMDb id 时应改道到 TMDb。");
+                    Assert.IsTrue(result.HasMetadata, "人物元数据在存在官方 TMDb id 时应只使用 TMDb。 mode=" + defaultScraperMode + ", request=" + metadataRequestKind);
                     Assert.IsNotNull(result.Item);
                     Assert.AreEqual("287", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "人物元数据不应写回 Douban ProviderId。 ");
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -151,8 +165,16 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
-        [TestMethod]
-        public void DefaultScraperPolicy_TmdbOnlyAutomaticMetadataReturnsEmptyWithoutTmdbFallback()
+        [DataTestMethod]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault, AutomaticMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault, UserMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault, OverwriteMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault, ManualMatchMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly, AutomaticMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly, UserMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly, OverwriteMetadataRequest)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly, ManualMatchMetadataRequest)]
+        public void PersonMetadataReturnsEmptyWithoutOfficialTmdbAndSkipsDouban(string defaultScraperMode, string metadataRequestKind)
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -163,13 +185,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             try
             {
-                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.DefaultScraperMode = defaultScraperMode;
 
                 var info = new PersonLookupInfo
                 {
                     Name = "周迅",
                     MetadataLanguage = "zh",
-                    IsAutomated = true,
+                    IsAutomated = IsAutomatedMetadataRequest(metadataRequestKind),
                     ProviderIds = new Dictionary<string, string>
                     {
                         { BaseProvider.DoubanProviderId, "27257290" },
@@ -177,8 +199,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 };
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
-                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
-                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动人物元数据链路在没有 TMDb fallback 时也不应访问 Douban。");
+                var httpContextAccessor = CreateMetadataRequestContextAccessor(metadataRequestKind);
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "没有官方 TMDb id 的人物元数据链路也不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
@@ -188,7 +210,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     var provider = new PersonProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                     var result = await provider.GetMetadata(info, CancellationToken.None);
 
-                    Assert.IsFalse(result.HasMetadata, "tmdb-only 自动人物元数据链路在没有插件内 TMDb fallback 时应直接返回空结果。");
+                    Assert.IsFalse(result.HasMetadata, "没有官方 TMDb id 的人物元数据应直接返回空结果。 mode=" + defaultScraperMode + ", request=" + metadataRequestKind);
                     Assert.IsNull(result.Item);
                 }).GetAwaiter().GetResult();
             }
@@ -198,8 +220,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
-        [TestMethod]
-        public void ManualSearchAllowsDoubanUnderTmdbOnly()
+        [DataTestMethod]
+        [DataRow(PluginConfiguration.DefaultScraperModeDefault)]
+        [DataRow(PluginConfiguration.DefaultScraperModeTmdbOnly)]
+        public void ManualSearchUsesTmdbAndSkipsDouban(string defaultScraperMode)
         {
             EnsurePluginInstance();
             var plugin = MetaSharkPlugin.Instance;
@@ -210,86 +234,41 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             try
             {
-                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.DefaultScraperMode = defaultScraperMode;
 
                 var httpClientFactory = new DefaultHttpClientFactory();
                 var libraryManagerStub = new Mock<ILibraryManager>();
                 var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                SeedDoubanCelebritySearchResult(doubanApi, "周迅", new DoubanCelebrity
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "手动人物搜索链路不应访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbPersonSearchResult(tmdbApi, "周迅", new SearchPerson
                 {
-                    Id = "27257290",
+                    Id = 287,
                     Name = "周迅",
-                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
+                    ProfilePath = "/person-profile.jpg",
                 });
-                var tmdbApi = new TmdbApi(this.loggerFactory);
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 
                 Task.Run(async () =>
                 {
                     var provider = new PersonProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
-                    var results = (await provider.GetSearchResults(new PersonLookupInfo { Name = "周迅", MetadataLanguage = "zh" }, CancellationToken.None)).ToList();
-
-                    Assert.IsTrue(results.Any(result => result.ProviderIds.TryGetValue(BaseProvider.DoubanProviderId, out var value) && value == "27257290"), "tmdb-only 不应误伤真正的手动人物搜索路径。");
-                }).GetAwaiter().GetResult();
-            }
-            finally
-            {
-                plugin.Configuration.DefaultScraperMode = originalMode;
-            }
-        }
-
-        [TestMethod]
-        public void ManualMatchAllowsDoubanUnderTmdbOnly()
-        {
-            EnsurePluginInstance();
-            var plugin = MetaSharkPlugin.Instance;
-            Assert.IsNotNull(plugin);
-            Assert.IsNotNull(plugin!.Configuration);
-
-            var originalMode = plugin.Configuration.DefaultScraperMode;
-
-            try
-            {
-                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
-
-                var info = new PersonLookupInfo
-                {
-                    Name = "周迅",
-                    MetadataLanguage = "zh",
-                    IsAutomated = true,
-                    ProviderIds = new Dictionary<string, string>
+                    var results = (await provider.GetSearchResults(new PersonLookupInfo
                     {
-                        { BaseProvider.DoubanProviderId, "27257290" },
-                    },
-                };
-                var httpClientFactory = new DefaultHttpClientFactory();
-                var libraryManagerStub = new Mock<ILibraryManager>();
-                var httpContextAccessor = CreateManualMatchContextAccessor();
-                var doubanApi = new DoubanApi(this.loggerFactory);
-                SeedDoubanCelebrity(
-                    doubanApi,
-                    new DoubanCelebrity
-                    {
-                        Id = "27257290",
                         Name = "周迅",
-                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000000.webp",
-                        Intro = "豆瓣人物详情",
-                    });
-                var tmdbApi = new TmdbApi(this.loggerFactory);
-                var omdbApi = new OmdbApi(this.loggerFactory);
-                var imdbApi = new ImdbApi(this.loggerFactory);
+                        MetadataLanguage = "zh",
+                        ProviderIds = new Dictionary<string, string>
+                        {
+                            { BaseProvider.DoubanProviderId, "27257290" },
+                        },
+                    }, CancellationToken.None)).ToList();
 
-                Task.Run(async () =>
-                {
-                    var provider = new PersonProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
-                    var result = await provider.GetMetadata(info, CancellationToken.None);
-
-                    Assert.IsTrue(result.HasMetadata, "显式手动匹配语义下仍应允许使用 Douban 人物详情。");
-                    Assert.IsNotNull(result.Item);
-                    Assert.AreEqual("27257290", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
-                    Assert.IsTrue(result.Item.GetImagePath(ImageType.Primary, 0)?.Contains("img9.doubanio.com", StringComparison.Ordinal) == true, "Douban 人物元数据路径应直接把主图 URL 写回人物主图。 ");
+                    Assert.AreEqual(1, results.Count, "手动人物搜索应返回 TMDb 候选。 mode=" + defaultScraperMode);
+                    Assert.AreEqual(BaseProvider.TmdbProviderName, results[0].SearchProviderName);
+                    Assert.IsTrue(results[0].ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var tmdbProviderId) && tmdbProviderId == "287", "手动人物搜索应写入 TMDb ProviderId。 ");
+                    Assert.IsFalse(results[0].ProviderIds.ContainsKey(BaseProvider.DoubanProviderId), "手动人物搜索不应返回 Douban ProviderId。 ");
+                    Assert.AreEqual(tmdbApi.GetProfileUrl("/person-profile.jpg")?.ToString(), results[0].ImageUrl);
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -618,6 +597,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 TimeSpan.FromMinutes(5));
         }
 
+        private static void SeedTmdbPersonSearchResult(TmdbApi tmdbApi, string keyword, params SearchPerson[] people)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"searchperson-{keyword}",
+                new SearchContainer<SearchPerson>
+                {
+                    Results = people.ToList(),
+                },
+                TimeSpan.FromMinutes(5));
+        }
+
         private static void SeedTmdbPersonTranslations(TmdbApi tmdbApi, int tmdbId, params Translation[] translations)
         {
             GetTmdbMemoryCache(tmdbApi).Set(
@@ -649,6 +639,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 HttpContext = context,
             };
+        }
+
+        private static IHttpContextAccessor CreateMetadataRequestContextAccessor(string metadataRequestKind)
+        {
+            return metadataRequestKind switch
+            {
+                ManualMatchMetadataRequest => CreateManualMatchContextAccessor(),
+                OverwriteMetadataRequest => CreateOverwriteRefreshContextAccessor(),
+                _ => new HttpContextAccessor { HttpContext = null },
+            };
+        }
+
+        private static IHttpContextAccessor CreateOverwriteRefreshContextAccessor()
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = "/Items/11111111-1111-1111-1111-111111111111/Refresh";
+            context.Request.QueryString = new QueryString("?metadataRefreshMode=FullRefresh&replaceAllMetadata=true");
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
+            };
+        }
+
+        private static bool IsAutomatedMetadataRequest(string metadataRequestKind)
+        {
+            return !string.Equals(metadataRequestKind, UserMetadataRequest, StringComparison.Ordinal);
         }
 
         private static string GetTmdbPersonCacheKey(int tmdbId, string language, string? countryCode)

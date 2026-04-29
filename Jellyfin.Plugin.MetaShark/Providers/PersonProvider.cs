@@ -20,7 +20,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using MediaBrowser.Model.Providers;
     using Microsoft.AspNetCore.Http;
     using Microsoft.Extensions.Logging;
-    using TMDbLib.Objects.Find;
 
     /// <summary>
     /// OddbPersonProvider.
@@ -49,38 +48,38 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             this.Log("开始搜索人物候选. name: {0}", searchInfo.Name);
 
             var result = new List<RemoteSearchResult>();
-            if (!IsDoubanAllowed(DefaultScraperSemantic.ManualSearch))
+            var personTmdbId = searchInfo.GetProviderId(MetadataProvider.Tmdb);
+            if (!string.IsNullOrEmpty(personTmdbId))
+            {
+                var person = await this.TmdbApi.GetPersonAsync(personTmdbId.ToInt(), cancellationToken).ConfigureAwait(false);
+                if (person != null)
+                {
+                    result.Add(new RemoteSearchResult
+                    {
+                        SearchProviderName = TmdbProviderName,
+                        ProviderIds = new Dictionary<string, string> { { MetadataProvider.Tmdb.ToString(), person.Id.ToString(CultureInfo.InvariantCulture) } },
+                        ImageUrl = this.TmdbApi.GetProfileUrl(person.ProfilePath)?.ToString(),
+                        Name = person.Name,
+                    });
+                }
+
+                return result;
+            }
+
+            if (string.IsNullOrWhiteSpace(searchInfo.Name))
             {
                 return result;
             }
 
-            var cid = searchInfo.GetProviderId(DoubanProviderId);
-            if (!string.IsNullOrEmpty(cid))
-            {
-                var celebrity = await this.DoubanApi.GetCelebrityAsync(cid, cancellationToken).ConfigureAwait(false);
-                if (celebrity != null)
-                {
-                    result.Add(new RemoteSearchResult
-                    {
-                        SearchProviderName = DoubanProviderName,
-                        ProviderIds = new Dictionary<string, string> { { DoubanProviderId, celebrity.Id } },
-                        ImageUrl = this.GetProxyImageUrl(new Uri(celebrity.Img, UriKind.Absolute)).ToString(),
-                        Name = celebrity.Name,
-                    });
-
-                    return result;
-                }
-            }
-
-            var res = await this.DoubanApi.SearchCelebrityAsync(searchInfo.Name, cancellationToken).ConfigureAwait(false);
-            result.AddRange(res.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x =>
+            var searchResults = await this.TmdbApi.SearchPersonAsync(searchInfo.Name, cancellationToken).ConfigureAwait(false);
+            result.AddRange(searchResults.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(person =>
             {
                 return new RemoteSearchResult
                 {
-                    SearchProviderName = DoubanProviderName,
-                    ProviderIds = new Dictionary<string, string> { { DoubanProviderId, x.Id } },
-                    ImageUrl = this.GetProxyImageUrl(new Uri(x.Img, UriKind.Absolute)).ToString(),
-                    Name = x.Name,
+                    SearchProviderName = TmdbProviderName,
+                    ProviderIds = new Dictionary<string, string> { { MetadataProvider.Tmdb.ToString(), person.Id.ToString(CultureInfo.InvariantCulture) } },
+                    ImageUrl = this.TmdbApi.GetProfileUrl(person.ProfilePath)?.ToString(),
+                    Name = person.Name,
                 };
             }));
 
@@ -92,74 +91,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(info);
             var result = new MetadataResult<Person>();
-            var semantic = this.ResolveMetadataSemantic(info);
-            var doubanAllowed = IsDoubanAllowed(semantic);
-
-            var cid = info.GetProviderId(DoubanProviderId);
-            this.Log("开始获取人物元数据. name: {0} cid: {1}", info.Name, cid);
-            if (doubanAllowed && !string.IsNullOrEmpty(cid))
-            {
-                var c = await this.DoubanApi.GetCelebrityAsync(cid, cancellationToken).ConfigureAwait(false);
-                if (c != null)
-                {
-                    var item = new Person
-                    {
-                        // Name = c.Name.Trim(),  // 名称需保持和info.Name一致，不然会导致关联不到影片，自动被删除
-                        OriginalTitle = c.DisplayOriginalName,  // 外国人显示英文名
-                        HomePageUrl = c.Site,
-                        Overview = c.Intro,
-                    };
-                    if (DateTime.TryParseExact(c.Birthdate, "yyyy年MM月dd日", null, DateTimeStyles.None, out var premiereDate))
-                    {
-                        item.PremiereDate = premiereDate;
-                        item.ProductionYear = premiereDate.Year;
-                    }
-
-                    if (DateTime.TryParseExact(c.Enddate, "yyyy年MM月dd日", null, DateTimeStyles.None, out var endDate))
-                    {
-                        item.EndDate = endDate;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(c.Birthplace))
-                    {
-                        item.ProductionLocations = new[] { c.Birthplace };
-                    }
-
-                    if (Uri.TryCreate(c.Img, UriKind.Absolute, out var doubanImageUri))
-                    {
-                        item.SetImagePath(ImageType.Primary, this.GetProxyImageUrl(doubanImageUri).ToString());
-                    }
-
-                    item.SetProviderId(DoubanProviderId, c.Id);
-                    if (!string.IsNullOrEmpty(c.Imdb))
-                    {
-                        var newImdbId = await this.ImdbApi.CheckPersonNewIDAsync(c.Imdb, cancellationToken).ConfigureAwait(false);
-                        if (!string.IsNullOrEmpty(newImdbId))
-                        {
-                            c.Imdb = newImdbId;
-                        }
-
-                        item.SetProviderId(MetadataProvider.Imdb, c.Imdb);
-
-                        // 通过imdb获取TMDB id
-                        var findResult = await this.TmdbApi.FindByExternalIdAsync(c.Imdb, FindExternalSource.Imdb, info.MetadataLanguage, cancellationToken).ConfigureAwait(false);
-                        if (findResult?.PersonResults != null && findResult.PersonResults.Count > 0)
-                        {
-                            var foundTmdbId = findResult.PersonResults.First().Id.ToString(CultureInfo.InvariantCulture);
-                            this.Log("已找到人物 TMDb id. tmdbId: {0}", foundTmdbId);
-                            item.SetProviderId(MetadataProvider.Tmdb, $"{foundTmdbId}");
-                        }
-                    }
-
-                    result.QueriedById = true;
-                    result.HasMetadata = true;
-                    result.Item = item;
-
-                    return result;
-                }
-            }
-
-            // jellyfin强制最后一定使用默认的TheMovieDb插件获取一次，这里不太必要（除了使用自己的域名）
             var personTmdbId = info.GetProviderId(MetadataProvider.Tmdb);
             this.Log("通过 TMDb 获取人物元数据. personTmdbId: {0}", personTmdbId);
             if (!string.IsNullOrEmpty(personTmdbId))
