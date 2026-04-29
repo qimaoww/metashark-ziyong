@@ -198,6 +198,64 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+        [DataTestMethod]
+        [DataRow("AutomaticRefresh", true, false)]
+        [DataRow("UserRefresh", false, false)]
+        [DataRow("OverwriteRefresh", false, true)]
+        public void TmdbOnlyNonManualRoutesIgnoreDoubanPersonProviderIds(string routeName, bool isAutomated, bool overwriteRefresh)
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+
+                var info = new PersonLookupInfo
+                {
+                    Name = "周迅",
+                    MetadataLanguage = "zh",
+                    IsAutomated = isAutomated,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "27257290" },
+                        { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_27257290" },
+                        { MetadataProvider.Tmdb.ToString(), "287" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = overwriteRefresh
+                    ? CreateOverwriteRefreshContextAccessor()
+                    : new HttpContextAccessor { HttpContext = null };
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, $"tmdb-only {routeName} 人物元数据链路不应访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                SeedTmdbPerson(tmdbApi, 287);
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new PersonProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var result = await provider.GetMetadata(info, CancellationToken.None);
+
+                    Assert.IsTrue(result.HasMetadata, $"{routeName} 应使用官方 TMDb id 完成人物元数据获取。 ");
+                    Assert.IsNotNull(result.Item);
+                    Assert.AreEqual("287", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), $"{routeName} 不应把历史 Douban id 写回结果。 ");
+                    Assert.IsNull(result.Item.GetProviderId("MetaSharkTmdbID"));
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+            }
+        }
+
         [TestMethod]
         public void ManualSearchAllowsDoubanUnderTmdbOnly()
         {
@@ -645,6 +703,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var context = new DefaultHttpContext();
             context.Request.Method = HttpMethods.Post;
             context.Request.Path = $"/Items/RemoteSearch/Apply/{itemId}";
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
+            };
+        }
+
+        private static IHttpContextAccessor CreateOverwriteRefreshContextAccessor()
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/{Guid.NewGuid():N}/Refresh";
+            context.Request.QueryString = new QueryString("?metadataRefreshMode=FullRefresh&replaceAllMetadata=true");
             return new HttpContextAccessor
             {
                 HttpContext = context,
