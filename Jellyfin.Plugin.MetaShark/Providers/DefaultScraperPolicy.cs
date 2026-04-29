@@ -15,6 +15,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         ManualMatch,
         UserRefresh,
         AutomaticRefresh,
+        OverwriteRefresh,
     }
 
     /// <summary>
