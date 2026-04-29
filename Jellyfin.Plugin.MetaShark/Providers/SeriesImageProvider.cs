@@ -56,19 +56,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
             this.Log("开始获取剧集图片. name: {0} lang: {1} metaSource: {2}", item.Name, item.GetPreferredMetadataLanguage(), metaSource);
-            if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
+            if (doubanAllowed && !string.IsNullOrEmpty(sid))
             {
                 var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
-                if (primary == null || string.IsNullOrEmpty(primary.Img))
-                {
-                    if (string.IsNullOrEmpty(tmdbId))
-                    {
-                        return Enumerable.Empty<RemoteImageInfo>();
-                    }
-
-                    metaSource = MetaSource.Tmdb;
-                }
-                else
+                if (primary != null && !string.IsNullOrEmpty(primary.Img))
                 {
                     var res = new List<RemoteImageInfo>
                     {
@@ -110,7 +101,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
             }
 
-            if (!string.IsNullOrEmpty(tmdbId) && (metaSource == MetaSource.Tmdb || !doubanAllowed))
+            if (!string.IsNullOrEmpty(tmdbId))
             {
                 var language = item.GetPreferredMetadataLanguage();
 

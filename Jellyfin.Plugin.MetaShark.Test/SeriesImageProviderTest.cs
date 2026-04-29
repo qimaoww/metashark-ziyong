@@ -162,6 +162,184 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void DefaultScraperPolicy_DefaultAutomaticImagesPreferDoubanBeforeTmdb()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                plugin.Configuration.EnableTmdb = true;
+
+                var tmdbId = 45247;
+                var sid = "series-default-douban-first";
+                var info = new MediaBrowser.Controller.Entities.TV.Series()
+                {
+                    Name = "默认剧集图片",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, sid },
+                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                        { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanSubject(doubanApi, new DoubanSubject
+                {
+                    Sid = sid,
+                    Name = "默认剧集图片",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p452470001.jpg",
+                    Language = "日语",
+                });
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeriesDetails(tmdbApi, tmdbId, "zh");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                    var primaryImages = images.Where(image => image.Type == ImageType.Primary).ToList();
+
+                    Assert.IsTrue(primaryImages.Any(), "default 自动剧集图片应至少返回一张主图。");
+                    Assert.IsTrue(primaryImages[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "default 自动剧集图片即使存在 metaSource=Tmdb，也必须先返回 Douban 主图。实际 URL: " + primaryImages[0].Url);
+                    Assert.IsFalse(primaryImages.Any(image => image.Url == tmdbApi.GetPosterUrl("/series-poster.jpg")?.ToString()), "Douban 主图可用时，TMDb 剧集海报不能覆盖 Douban 主图。 ");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public void DefaultScraperPolicy_DefaultAutomaticImagesFallbackToTmdbWhenDoubanPosterMissing()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                plugin.Configuration.EnableTmdb = true;
+
+                var tmdbId = 45248;
+                var sid = "series-default-missing-poster";
+                var info = new MediaBrowser.Controller.Entities.TV.Series()
+                {
+                    Name = "缺豆瓣剧集图片",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, sid },
+                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanSubject(doubanApi, new DoubanSubject
+                {
+                    Sid = sid,
+                    Name = "缺豆瓣剧集图片",
+                    Img = string.Empty,
+                });
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeriesDetails(tmdbApi, tmdbId, "zh");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                    Assert.IsTrue(images.Any(image => image.Type == ImageType.Primary && image.Url == tmdbApi.GetPosterUrl("/series-poster.jpg")?.ToString()), "default 自动剧集图片在 Douban subject 缺主图时应回退到 TMDb 海报。 ");
+                    Assert.IsFalse(images.Any(image => image.Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true), "Douban 主图缺失时不应返回空的 Douban 图片 URL。 ");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public void DefaultScraperPolicy_TmdbOnlyManualRemoteImagesAllowDoubanSeries()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+
+                var sid = "series-manual-douban-under-tmdb-only";
+                var info = new MediaBrowser.Controller.Entities.TV.Series()
+                {
+                    Name = "手动豆瓣剧集图片",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, sid },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = CreateManualRemoteImageContextAccessor("series-id");
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanSubject(doubanApi, new DoubanSubject
+                {
+                    Sid = sid,
+                    Name = "手动豆瓣剧集图片",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p452470002.jpg",
+                });
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                    Assert.AreEqual(1, images.Count, "tmdb-only 下手动 RemoteImages 应保留显式 Douban 剧集图片入口。 ");
+                    Assert.IsTrue(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "tmdb-only 下手动 RemoteImages 应能返回 Douban 剧集主图。实际 URL: " + images[0].Url);
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+            }
+        }
+
+        [TestMethod]
         public void DefaultScraperPolicy_TmdbOnlyAutomaticImagesSkipDoubanAndUseTmdbFallback()
         {
             EnsurePluginInstance();
