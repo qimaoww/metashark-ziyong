@@ -459,13 +459,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return DefaultScraperSemantic.ManualMatch;
             }
 
+            if (OverwriteMetadataRefreshClassifier.IsOverwriteMetadataRefresh(this.HttpContextAccessor.HttpContext))
+            {
+                return DefaultScraperSemantic.OverwriteRefresh;
+            }
+
             return info.IsAutomated ? DefaultScraperSemantic.AutomaticRefresh : DefaultScraperSemantic.UserRefresh;
         }
 
 #pragma warning disable SA1204
         protected static bool SupportsSearchMissingMetadataOverwriteCandidate(DefaultScraperSemantic semantic)
         {
-            return semantic == DefaultScraperSemantic.ManualMatch;
+            return semantic is DefaultScraperSemantic.ManualMatch or DefaultScraperSemantic.OverwriteRefresh;
         }
 
         protected static TmdbAuthoritativePeopleSnapshot? CreateTmdbAuthoritativePeopleSnapshot(string itemType, string? tmdbId, IEnumerable<PersonInfo>? people)
