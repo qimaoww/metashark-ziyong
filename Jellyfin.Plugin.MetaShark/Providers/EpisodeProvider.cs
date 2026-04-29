@@ -144,6 +144,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var episodeItem = this.LibraryManager.FindByPath(info.Path, false) as Episode;
+            var httpContext = this.HttpContextAccessor.HttpContext;
+            var metadataRefreshMode = httpContext?.Request.Query["metadataRefreshMode"].ToString();
+            var replaceAllMetadata = httpContext?.Request.Query["replaceAllMetadata"].ToString();
+            if (string.IsNullOrWhiteSpace(replaceAllMetadata))
+            {
+                replaceAllMetadata = httpContext?.Request.Query["ReplaceAllMetadata"].ToString();
+            }
+
             var requestedMetadataLanguage = info.MetadataLanguage ?? episodeItem?.GetPreferredMetadataLanguage();
             var titleMetadataLanguage = ResolveEpisodeTargetMetadataLanguage(requestedMetadataLanguage);
 
@@ -263,9 +271,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             item.Name = ResolveEpisodeTitlePersistence(originalMetadataTitle, effectiveProviderTitle);
             item.CommunityRating = (float)System.Math.Round(episodeResult.VoteAverage, 1);
 
-            var httpContext = this.HttpContextAccessor.HttpContext;
-            var metadataRefreshMode = httpContext?.Request.Query["metadataRefreshMode"].ToString();
-            var replaceAllMetadata = httpContext?.Request.Query["replaceAllMetadata"].ToString();
             var hasExplicitSearchMissingMetadataQuery = EpisodeTitleBackfillRefreshClassifier.HasSearchMissingMetadataRefreshQuery(httpContext);
             var isImplicitSearchMissingMetadataFallback = !hasExplicitSearchMissingMetadataQuery
                 && EpisodeTitleBackfillRefreshClassifier.ShouldFallbackSearchMissingMetadataRefresh(originalMetadataTitle, episodeItem?.Name);
