@@ -391,6 +391,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
+        private static IHttpContextAccessor CreateOverwriteRefreshContextAccessor()
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/{Guid.NewGuid():N}/Refresh";
+            context.Request.QueryString = new QueryString("?metadataRefreshMode=FullRefresh&replaceAllMetadata=true");
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
+            };
+        }
+
         private static DoubanApi CreateThrowingDoubanApi(ILoggerFactory loggerFactory, string message)
         {
             var api = new DoubanApi(loggerFactory);
@@ -1179,6 +1191,72 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+        [DataTestMethod]
+        [DataRow("AutomaticRefresh", true, false)]
+        [DataRow("UserRefresh", false, false)]
+        [DataRow("OverwriteRefresh", false, true)]
+        public void TmdbOnlyNonManualRoutesIgnoreDoubanProviderIdsMetaSourceAndFilenameHints(string routeName, bool isAutomated, bool overwriteRefresh)
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+            var originalEnableTmdbMatch = plugin.Configuration.EnableTmdbMatch;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+                plugin.Configuration.EnableTmdbMatch = false;
+
+                var info = new SeriesInfo
+                {
+                    Name = "花牌情缘",
+                    Path = "/test/[douban-6439459] 花牌情缘",
+                    MetadataLanguage = "zh",
+                    IsAutomated = isAutomated,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "6439459" },
+                        { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_6439459" },
+                        { MetadataProvider.Tmdb.ToString(), "45247" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = overwriteRefresh
+                    ? CreateOverwriteRefreshContextAccessor()
+                    : new HttpContextAccessor { HttpContext = null };
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, $"tmdb-only {routeName} 剧集元数据链路不应访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                SeedTmdbSeries(tmdbApi, 45247, "zh", "花牌情缘");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeriesProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var result = await provider.GetMetadata(info, CancellationToken.None);
+
+                    Assert.IsNotNull(result.Item, $"{routeName} 应使用官方 TMDb id 完成剧集元数据获取。 ");
+                    Assert.IsTrue(result.HasMetadata);
+                    Assert.AreEqual("45247", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.AreEqual("Tmdb_45247", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                    Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), $"{routeName} 不应把历史 Douban id 或文件名 hint 写回结果。 ");
+                    Assert.IsNull(result.Item.GetProviderId("MetaSharkTmdbID"));
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+                plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
         [TestMethod]
         public void ManualIdentifyAllowsDoubanUnderTmdbOnly()
         {
@@ -1434,9 +1512,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Name = "TMDb 不应覆盖 Douban 主标题",
                 OriginalName = "TMDb Ignored Original Title",
                 Overview = "TMDb 不应覆盖 Douban 简介",
-                FirstAirDate = new DateTime(2024, 1, 1),
+                FirstAirDate = new DateTime(1999, 1, 1),
                 VoteAverage = 7.1,
                 EpisodeRunTime = new List<int>(),
+                Genres = new List<TMDbLib.Objects.General.Genre>
+                {
+                    new TMDbLib.Objects.General.Genre { Name = "TMDb 类型" },
+                },
                 ContentRatings = new ResultContainer<ContentRating>
                 {
                     Results = new List<ContentRating>(),
@@ -1466,6 +1548,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("豆瓣示例剧集", result.Item.Name, "Douban 主字段不应被 TMDb people 回填覆盖。 ");
             Assert.AreEqual("Douban Sample Series", result.Item.OriginalTitle);
             Assert.AreEqual("豆瓣剧集简介", result.Item.Overview);
+            Assert.AreEqual(2024, result.Item.ProductionYear);
+            CollectionAssert.AreEqual(new[] { "剧情", "动画" }, result.Item.Genres);
+            Assert.AreEqual(new DateTime(2024, 4, 4), result.Item.PremiereDate?.Date);
             Assert.IsTrue(result.Item.CommunityRating > 8.0f && result.Item.CommunityRating < 8.2f, "Douban 主分支的评分不应被 TMDb people 回填改变。 ");
             Assert.AreEqual("9102", result.Item.GetProviderId(MetadataProvider.Tmdb));
             Assert.IsNotNull(result.People);
@@ -1976,7 +2061,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 new DefaultHttpClientFactory(),
                 providerLoggerFactory.Object,
                 new Mock<ILibraryManager>().Object,
-                new Mock<IHttpContextAccessor>().Object,
+                CreateManualMatchContextAccessor(),
                 new DoubanApi(apiLoggerFactory),
                 tmdbApi,
                 new OmdbApi(apiLoggerFactory),

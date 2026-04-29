@@ -134,10 +134,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var sid = info.GetProviderId(DoubanProviderId);
             var tmdbId = info.GetProviderId(MetadataProvider.Tmdb);
             var metaSource = info.GetMetaSource(MetaSharkPlugin.ProviderId);
+            if (metaSource == MetaSource.Tmdb && string.IsNullOrWhiteSpace(tmdbId))
+            {
+                metaSource = MetaSource.None;
+            }
+
+            var effectiveSid = doubanAllowed ? sid : null;
+
+            var tmdbSourceIsPrimary = metaSource == MetaSource.Tmdb && (!doubanAllowed || semantic == DefaultScraperSemantic.ManualMatch);
 
             // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
-            var hasTmdbMeta = metaSource == MetaSource.Tmdb && !string.IsNullOrEmpty(tmdbId);
-            var hasDoubanMeta = doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid);
+            var hasTmdbMeta = !string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary);
+            var hasDoubanMeta = !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid);
             this.Log("开始获取剧集元数据. name: {0} fileName: {1} metaSource: {2} enableTmdb: {3}", info.Name, fileName, metaSource, Config.EnableTmdb);
             if (!hasDoubanMeta && !hasTmdbMeta)
             {
@@ -145,9 +153,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 if (doubanAllowed)
                 {
                     sid = await this.GuessByDoubanAsync(info, cancellationToken).ConfigureAwait(false);
+                    effectiveSid = sid;
                 }
 
-                if (string.IsNullOrEmpty(sid) && Config.EnableTmdbMatch)
+                if (string.IsNullOrEmpty(effectiveSid) && string.IsNullOrEmpty(tmdbId) && Config.EnableTmdbMatch)
                 {
                     tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
                     if (!string.IsNullOrEmpty(tmdbId))
@@ -157,12 +166,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
             }
 
-            if (doubanAllowed && metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
+            if (!tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid))
             {
-                this.Log("通过 Douban 获取剧集元数据. sid: {0}", sid);
-                var subject = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
+                this.Log("通过 Douban 获取剧集元数据. sid: {0}", effectiveSid);
+                var subject = await this.DoubanApi.GetMovieAsync(effectiveSid, cancellationToken).ConfigureAwait(false);
                 if (subject == null)
                 {
+                    if (string.IsNullOrEmpty(tmdbId) && Config.EnableTmdbMatch)
+                    {
+                        tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
+                    }
+
                     if (!string.IsNullOrEmpty(tmdbId))
                     {
                         return await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
@@ -185,6 +199,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     PremiereDate = subject.ScreenTime,
                     Tagline = string.Empty,
                 };
+
+                if (!string.IsNullOrEmpty(tmdbId))
+                {
+                    item.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+                }
 
                 // 设置imdb元数据
                 if (!string.IsNullOrEmpty(subject.Imdb))
@@ -230,7 +249,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return result;
             }
 
-            if (!string.IsNullOrEmpty(tmdbId) && (metaSource == MetaSource.Tmdb || !doubanAllowed))
+            if (!string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid)))
             {
                 return await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
             }
@@ -280,9 +299,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return false;
             }
 
-            if (httpContext.Request.Query.TryGetValue("ReplaceAllMetadata", out var replaceAllMetadataValues)
-                && bool.TryParse(replaceAllMetadataValues.ToString(), out var replaceAllMetadata)
-                && replaceAllMetadata)
+            if (OverwriteMetadataRefreshClassifier.IsOverwriteMetadataRefresh(httpContext, expectedItemId))
             {
                 return false;
             }
@@ -295,6 +312,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (semantic == DefaultScraperSemantic.ManualMatch)
             {
                 return true;
+            }
+
+            if (semantic == DefaultScraperSemantic.OverwriteRefresh)
+            {
+                return false;
             }
 
             if (semantic != DefaultScraperSemantic.UserRefresh)
