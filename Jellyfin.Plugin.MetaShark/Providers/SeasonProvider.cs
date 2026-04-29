@@ -52,6 +52,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 使用刷新元数据时，之前识别的 seasonNumber 会保留，不会被覆盖
             info.SeriesProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var seriesTmdbId);
             info.SeriesProviderIds.TryGetMetaSource(MetaSharkPlugin.ProviderId, out var metaSource);
+            if (metaSource == MetaSource.Tmdb && string.IsNullOrWhiteSpace(seriesTmdbId))
+            {
+                metaSource = MetaSource.None;
+            }
+
             info.SeriesProviderIds.TryGetValue(DoubanProviderId, out var sid);
             var seasonNumber = info.IndexNumber; // S00/Season 00特典目录会为0
             var seasonSid = info.GetProviderId(DoubanProviderId);
@@ -67,18 +72,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return result;
             }
 
-            if (metaSource != MetaSource.Tmdb && !string.IsNullOrEmpty(sid))
+            // seasonNumber 为 null 有三种情况：
+            // 1. 没有季文件夹时，即虚拟季，info.Path 为空
+            // 2. 一般不规范文件夹命名，没法被 EpisodeResolver 解析的，info.Path 不为空，如：摇曳露营△
+            // 3. 特殊不规范文件夹命名，能被 EpisodeResolver 错误解析，这时被当成了视频文件，相当于没有季文件夹，info.Path 为空，如：冰与火之歌 S02.列王的纷争.2012.1080p.Blu-ray.x265.10bit.AC3
+            //    相关代码：https://github.com/jellyfin/jellyfin/blob/dc2eca9f2ca259b46c7b53f59251794903c730a4/Emby.Server.Implementations/Library/Resolvers/TV/SeasonResolver.cs#L70
+            if (seasonNumber is null)
             {
-                // seasonNumber 为 null 有三种情况：
-                // 1. 没有季文件夹时，即虚拟季，info.Path 为空
-                // 2. 一般不规范文件夹命名，没法被 EpisodeResolver 解析的，info.Path 不为空，如：摇曳露营△
-                // 3. 特殊不规范文件夹命名，能被 EpisodeResolver 错误解析，这时被当成了视频文件，相当于没有季文件夹，info.Path 为空，如：冰与火之歌 S02.列王的纷争.2012.1080p.Blu-ray.x265.10bit.AC3
-                //    相关代码：https://github.com/jellyfin/jellyfin/blob/dc2eca9f2ca259b46c7b53f59251794903c730a4/Emby.Server.Implementations/Library/Resolvers/TV/SeasonResolver.cs#L70
-                if (seasonNumber is null)
-                {
-                    seasonNumber = this.GuessSeasonNumberByDirectoryName(info.Path);
-                }
+                seasonNumber = this.GuessSeasonNumberByDirectoryName(info.Path);
+            }
 
+            if (!string.IsNullOrEmpty(sid))
+            {
                 // 搜索豆瓣季 id
                 if (string.IsNullOrEmpty(seasonSid))
                 {
@@ -108,33 +113,30 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         this.Log("已找到季 Douban sid. name: {0} sid: {1}", info.Name, seasonSid);
                         return result;
                     }
+
+                    this.Log("季 Douban 数据为空. name: {0} sid: {1}", info.Name, seasonSid);
                 }
                 else
                 {
                     this.Log("未找到季 Douban id. name: {0}", info.Name);
                 }
-
-                // 豆瓣找不到季数据，尝试获取tmdb的季数据
-                if (string.IsNullOrEmpty(seasonSid) && !string.IsNullOrWhiteSpace(seriesTmdbId) && seasonNumber.HasValue && seasonNumber >= 0)
-                {
-                    var tmdbResult = await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber.Value, cancellationToken).ConfigureAwait(false);
-                    if (tmdbResult != null)
-                    {
-                        return tmdbResult;
-                    }
-                }
-
-                // 从豆瓣获取不到季信息
-                return result;
             }
-
-            // series使用TMDB元数据来源
-            // tmdb季级没有对应id，只通过indexNumber区分
-            if (metaSource == MetaSource.Tmdb && !string.IsNullOrEmpty(seriesTmdbId))
+            else
             {
-                return await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber, cancellationToken).ConfigureAwait(false);
+                this.Log("剧集 Douban id 为空，跳过季 Douban 元数据. name: {0}", info.Name);
             }
 
+            // 豆瓣找不到季数据，尝试获取tmdb的季数据
+            if (!string.IsNullOrWhiteSpace(seriesTmdbId) && seasonNumber.HasValue && seasonNumber >= 0)
+            {
+                var tmdbResult = await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber.Value, cancellationToken).ConfigureAwait(false);
+                if (tmdbResult != null)
+                {
+                    return tmdbResult;
+                }
+            }
+
+            // 从豆瓣获取不到季信息
             return result;
         }
 

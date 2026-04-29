@@ -175,6 +175,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
             cache.Set($"celebrities_{subject.Sid}", new List<DoubanCelebrity>(), TimeSpan.FromMinutes(5));
         }
 
+        private static void SeedMissingDoubanSubject(DoubanApi doubanApi, string sid)
+        {
+            var cache = GetDoubanMemoryCache(doubanApi);
+            cache.Set<DoubanSubject?>($"movie_{sid}", null, TimeSpan.FromMinutes(5));
+            cache.Set($"celebrities_{sid}", new List<DoubanCelebrity>(), TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedDoubanSearchResults(DoubanApi doubanApi, string keyword, IReadOnlyCollection<DoubanSubject> subjects)
+        {
+            GetDoubanMemoryCache(doubanApi).Set(
+                $"search_{keyword}",
+                subjects.ToList(),
+                TimeSpan.FromMinutes(5));
+        }
+
         private static void SeedTmdbSeason(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, string language, string seasonName)
         {
             GetTmdbMemoryCache(tmdbApi).Set(
@@ -199,6 +214,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             originalClient.Dispose();
 
             return api;
+        }
+
+        private static IHttpContextAccessor CreateOverwriteRefreshContextAccessor()
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/{Guid.NewGuid():N}/Refresh";
+            context.Request.QueryString = new QueryString("?metadataRefreshMode=FullRefresh&replaceAllMetadata=true");
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
+            };
         }
 
         private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
@@ -403,6 +430,289 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Assert.AreEqual("Season 18", result.Item.Name, "普通 TMDb season 路径应继续直接采用 GetSeasonAsync(...) 的英文季名，不受显式剧集组英文保护影响。 ");
                     Assert.AreEqual(18, result.Item.IndexNumber);
                 }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("AutomaticRefresh", true, false)]
+        [DataRow("UserRefresh", false, false)]
+        [DataRow("OverwriteRefresh", false, true)]
+        public void TmdbOnlyNonManualRoutesIgnoreDoubanSeasonProviderIdsMetaSourceAndFilenameHints(string routeName, bool isAutomated, bool overwriteRefresh)
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+
+                var info = new SeasonInfo
+                {
+                    Name = "当前中文标题",
+                    Path = "/library/[douban-2059529]/Season 18",
+                    IndexNumber = 18,
+                    MetadataLanguage = "zh",
+                    IsAutomated = isAutomated,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "season-douban-18" },
+                    },
+                    SeriesProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "2059529" },
+                        { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_2059529" },
+                        { MetadataProvider.Tmdb.ToString(), "34860" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = overwriteRefresh
+                    ? CreateOverwriteRefreshContextAccessor()
+                    : new HttpContextAccessor { HttpContext = null };
+                var doubanApi = CreateThrowingDoubanApi(loggerFactory, $"tmdb-only {routeName} 季元数据链路不应访问 Douban。");
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbSeason(tmdbApi, 34860, 18, "zh", "Season 18");
+                var omdbApi = new OmdbApi(loggerFactory);
+                var imdbApi = new ImdbApi(loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeasonProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var result = await provider.GetMetadata(info, CancellationToken.None);
+
+                    Assert.IsNotNull(result.Item, $"{routeName} 应使用官方 Series TMDb id 完成季元数据获取。 ");
+                    Assert.IsTrue(result.HasMetadata);
+                    Assert.AreEqual("Season 18", result.Item.Name);
+                    Assert.AreEqual(18, result.Item.IndexNumber);
+                    Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), $"{routeName} 不应把历史季级 Douban id 或文件名 hint 写回结果。 ");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public async Task DefaultModeOverwriteRefreshGuessesSeasonDoubanBeforeTmdb_WhenParentMetaSourceIsTmdb()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                plugin.Configuration.EnableTmdb = true;
+
+                var info = new SeasonInfo
+                {
+                    Name = "第1季",
+                    Path = "/library/tv/默认覆盖剧集/Season 1",
+                    IndexNumber = 1,
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    SeriesProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "series-douban-overwrite-parent" },
+                        { MetaSharkPlugin.ProviderId, "Tmdb_9501" },
+                        { MetadataProvider.Tmdb.ToString(), "9501" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = CreateOverwriteRefreshContextAccessor();
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedDoubanSubject(
+                    doubanApi,
+                    new DoubanSubject
+                    {
+                        Sid = "series-douban-overwrite-parent",
+                        Name = "默认覆盖剧集",
+                        OriginalName = "Default Overwrite Series",
+                        Year = 2024,
+                        Category = "电视剧",
+                        Rating = 8.0f,
+                        Genre = "剧情 / 动画",
+                        Intro = "豆瓣父级剧集简介",
+                        Screen = "2024-01-01",
+                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000801.webp",
+                    });
+                var seasonSearchSubject = new DoubanSubject
+                {
+                    Sid = "season-douban-overwrite-guessed",
+                    Name = "默认覆盖剧集 第1季",
+                    OriginalName = "Default Overwrite Series Season 1",
+                    Year = 2015,
+                    Category = "电视剧",
+                    Rating = 8.9f,
+                    Genre = "剧情 / 动画",
+                    Intro = "豆瓣覆盖刷新季简介",
+                    Screen = "2015-02-01",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000802.webp",
+                };
+                SeedDoubanSearchResults(doubanApi, "默认覆盖剧集", new[] { seasonSearchSubject });
+                SeedDoubanSubject(doubanApi, seasonSearchSubject);
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbSeason(tmdbApi, 9501, 1, "zh-CN", "TMDb 不应主导第1季");
+                var omdbApi = new OmdbApi(loggerFactory);
+                var imdbApi = new ImdbApi(loggerFactory);
+
+                var provider = new SeasonProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "default + overwrite refresh 不应因父级 MetaSharkID=Tmdb_* 跳过季级 Douban 查找。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("默认覆盖剧集 第1季", result.Item.Name);
+                Assert.AreEqual("豆瓣覆盖刷新季简介", result.Item.Overview);
+                Assert.AreEqual("season-douban-overwrite-guessed", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreNotEqual("TMDb 不应主导第1季", result.Item.Name);
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public async Task DefaultModeFallsBackToTmdbWhenDoubanSeasonSubjectIsMissing()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                plugin.Configuration.EnableTmdb = true;
+
+                var info = new SeasonInfo
+                {
+                    Name = "第18季",
+                    IndexNumber = 18,
+                    MetadataLanguage = "zh",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "season-douban-missing-default" },
+                    },
+                    SeriesProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "2059529" },
+                        { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_2059529" },
+                        { MetadataProvider.Tmdb.ToString(), "34860" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedMissingDoubanSubject(doubanApi, "season-douban-missing-default");
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbSeason(tmdbApi, 34860, 18, "zh", "TMDb fallback season");
+                var omdbApi = new OmdbApi(loggerFactory);
+                var imdbApi = new ImdbApi(loggerFactory);
+
+                var provider = new SeasonProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "default 下季级 Douban 数据缺失时应使用官方 Series TMDb id 兜底。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("TMDb fallback season", result.Item.Name);
+                Assert.AreEqual(18, result.Item.IndexNumber);
+                Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "TMDb 兜底结果不应沿用缺失的季级 Douban id。 ");
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public async Task DefaultModeIgnoresLegacyTmdbMetaSourceWithoutOfficialSeriesTmdbId()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                plugin.Configuration.EnableTmdb = true;
+
+                var info = new SeasonInfo
+                {
+                    Name = "第1季",
+                    IndexNumber = 1,
+                    MetadataLanguage = "zh",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "season-douban-legacy-tmdb-source" },
+                    },
+                    SeriesProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "series-douban-legacy-tmdb-source" },
+                        { MetaSharkPlugin.ProviderId, "Tmdb_65942" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedDoubanSubject(
+                    doubanApi,
+                    new DoubanSubject
+                    {
+                        Sid = "season-douban-legacy-tmdb-source",
+                        Name = "豆瓣 legacy 来源季",
+                        Year = 2024,
+                        Rating = 8.2f,
+                        Genre = "动画 / 剧情",
+                        Intro = "豆瓣季简介应保留",
+                        Screen = "2024-04-01",
+                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000011.webp",
+                    });
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbSeason(tmdbApi, 65942, 1, "zh", "TMDb legacy key must not be parsed");
+                var omdbApi = new OmdbApi(loggerFactory);
+                var imdbApi = new ImdbApi(loggerFactory);
+
+                var provider = new SeasonProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "default 下 legacy Tmdb_* 来源但缺官方 Series TMDb id 时，仍应进入 Douban-first 分支。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("豆瓣 legacy 来源季", result.Item.Name);
+                Assert.AreEqual("豆瓣季简介应保留", result.Item.Overview);
+                Assert.AreEqual("season-douban-legacy-tmdb-source", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreNotEqual("TMDb legacy key must not be parsed", result.Item.Name, "Season 不得从 MetaSharkPlugin.ProviderId=Tmdb_65942 解析出 TMDb id。 ");
             }
             finally
             {
