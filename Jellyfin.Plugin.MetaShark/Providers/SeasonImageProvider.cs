@@ -58,7 +58,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var sid = item.GetProviderId(DoubanProviderId);
             var shouldUseDoubanImage = !string.IsNullOrEmpty(sid)
                 && (allowManualDoubanForSeasonImage
-                    || (doubanAllowed && metaSource != MetaSource.Tmdb));
+                    || doubanAllowed);
             if (shouldUseDoubanImage)
             {
                 var primary = await this.DoubanApi.GetMovieAsync(sid!, cancellationToken).ConfigureAwait(false);

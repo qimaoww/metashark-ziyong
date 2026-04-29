@@ -85,6 +85,112 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void DefaultScraperPolicy_DefaultAutomaticImagesPreferDoubanBeforeTmdb()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                plugin.Configuration.EnableTmdb = true;
+
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-default-douban-first", "series-douban", "34860", MetaSource.Tmdb);
+                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanSubject(doubanApi, new DoubanSubject
+                {
+                    Sid = "season-default-douban-first",
+                    Name = "辛普森一家 第1季",
+                    Category = "电视剧",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p348600001.jpg",
+                });
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                WithLibraryManager(libraryManagerStub.Object, () =>
+                {
+                    Task.Run(async () =>
+                    {
+                        var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                        var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                        Assert.AreEqual(1, images.Count, "default 自动季图片应返回唯一主图。 ");
+                        Assert.IsTrue(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "default 自动季图片即使 parent metaSource=Tmdb，也必须先返回 Douban 主图。实际 URL: " + images[0].Url);
+                    }).GetAwaiter().GetResult();
+                });
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
+        public void DefaultScraperPolicy_DefaultAutomaticImagesFallbackToTmdbWhenDoubanPosterMissing()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                plugin.Configuration.EnableTmdb = true;
+
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var info = CreateSeason(libraryManagerStub, "第1季", 1, "season-default-missing-poster", "series-douban", "34860");
+                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanSubject(doubanApi, new DoubanSubject
+                {
+                    Sid = "season-default-missing-poster",
+                    Name = "辛普森一家 第1季",
+                    Category = "电视剧",
+                    Img = string.Empty,
+                });
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbSeasonImages(tmdbApi, 34860, 1, string.Empty, "第1季");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                WithLibraryManager(libraryManagerStub.Object, () =>
+                {
+                    Task.Run(async () =>
+                    {
+                        var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                        var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                        Assert.AreEqual(1, images.Count, "default 自动季图片在 Douban subject 缺主图时应回退到 TMDb 季图。 ");
+                        Assert.AreEqual(tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString(), images[0].Url);
+                    }).GetAwaiter().GetResult();
+                });
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+            }
+        }
+
+        [TestMethod]
         public void DefaultScraperPolicy_TmdbOnlyAutomaticImagesSkipDoubanAndUseTmdbFallback()
         {
             EnsurePluginInstance();

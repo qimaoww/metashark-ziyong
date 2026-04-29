@@ -57,6 +57,124 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void DefaultScraperPolicy_DefaultAutomaticImagesPreferDoubanBeforeTmdb()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+
+                var doubanId = "person-default-douban-first";
+                var tmdbId = 287;
+                var info = new Person
+                {
+                    Name = "默认人物图片",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, doubanId },
+                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                        { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanCelebrity(doubanApi, new DoubanCelebrity
+                {
+                    Id = doubanId,
+                    Name = "默认人物图片",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p287000001.webp",
+                });
+                SeedDoubanCelebrityPhotos(doubanApi, doubanId);
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbPersonProfiles(tmdbApi, tmdbId);
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new PersonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                    Assert.AreEqual(1, images.Count, "default 自动人物图片在 Douban 头像可用时不应落回 TMDb。 ");
+                    Assert.IsTrue(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "default 自动人物图片应先返回 Douban 头像。实际 URL: " + images[0].Url);
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+            }
+        }
+
+        [TestMethod]
+        public void DefaultScraperPolicy_DefaultAutomaticImagesFallbackToTmdbWhenDoubanPortraitMissing()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+
+                var doubanId = "person-default-missing-portrait";
+                var tmdbId = 288;
+                var info = new Person
+                {
+                    Name = "缺豆瓣人物图片",
+                    PreferredMetadataLanguage = "zh",
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, doubanId },
+                        { MetadataProvider.Tmdb.ToString(), tmdbId.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+                var doubanApi = new DoubanApi(this.loggerFactory);
+                SeedDoubanCelebrity(doubanApi, new DoubanCelebrity
+                {
+                    Id = doubanId,
+                    Name = "缺豆瓣人物图片",
+                    Img = string.Empty,
+                });
+                SeedDoubanCelebrityPhotos(doubanApi, doubanId);
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                ConfigureTmdbImageConfig(tmdbApi);
+                SeedTmdbPersonProfiles(tmdbApi, tmdbId);
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new PersonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                    Assert.AreEqual(1, images.Count, "default 自动人物图片在 Douban 头像 URL 缺失时应回退到 TMDb。 ");
+                    Assert.AreEqual(tmdbApi.GetProfileUrl("/person-profile.jpg")?.ToString(), images[0].Url);
+                    Assert.IsFalse(images[0].Url?.Contains("douban", StringComparison.OrdinalIgnoreCase) == true, "Douban 头像 URL 缺失时不应返回 Douban 图片。 ");
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+            }
+        }
+
+        [TestMethod]
         public void DefaultScraperPolicy_TmdbOnlyAutomaticImagesSkipDoubanAndUseTmdbFallback()
         {
             EnsurePluginInstance();

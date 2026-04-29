@@ -57,7 +57,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (doubanAllowed && !string.IsNullOrEmpty(cid))
             {
                 var celebrity = await this.DoubanApi.GetCelebrityAsync(cid, cancellationToken).ConfigureAwait(false);
-                if (celebrity != null)
+                if (celebrity != null && !string.IsNullOrEmpty(celebrity.Img))
                 {
                     usedDouban = true;
                     list.Add(new RemoteImageInfo
