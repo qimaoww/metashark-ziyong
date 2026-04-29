@@ -418,6 +418,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
+        private static IHttpContextAccessor CreateOverwriteRefreshContextAccessor()
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/{Guid.NewGuid():N}/Refresh";
+            context.Request.QueryString = new QueryString("?metadataRefreshMode=FullRefresh&replaceAllMetadata=true");
+            return new HttpContextAccessor
+            {
+                HttpContext = context,
+            };
+        }
+
         private static DoubanApi CreateThrowingDoubanApi(ILoggerFactory loggerFactory, string message)
         {
             var api = new DoubanApi(loggerFactory);
@@ -595,7 +607,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var info = new MovieInfo() { Name = "人生大事", MetadataLanguage = "zh", ProviderIds = new Dictionary<string, string> { { MetaSharkPlugin.ProviderId, MetaSource.Tmdb.ToString() }, { MetadataProvider.Tmdb.ToString(), "945664" } } };
             var httpClientFactory = new DefaultHttpClientFactory();
             var libraryManagerStub = new Mock<ILibraryManager>();
-            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var httpContextAccessor = CreateManualMatchContextAccessor();
             var doubanApi = new DoubanApi(loggerFactory);
             var tmdbApi = new TmdbApi(loggerFactory);
             var omdbApi = new OmdbApi(loggerFactory);
@@ -603,7 +615,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Task.Run(async () =>
             {
-                var provider = new MovieProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+                var provider = new MovieProvider(httpClientFactory, loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
                 var result = await provider.GetMetadata(info, CancellationToken.None);
                 Assert.IsNotNull(result.Item);
 
@@ -633,7 +645,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             var httpClientFactory = new DefaultHttpClientFactory();
             var libraryManagerStub = new Mock<ILibraryManager>();
-            var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
+            var httpContextAccessor = CreateManualMatchContextAccessor();
             var doubanApi = new DoubanApi(this.loggerFactory);
             var tmdbApi = new TmdbApi(this.loggerFactory);
             ConfigureTmdbImageConfig(tmdbApi);
@@ -657,7 +669,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var omdbApi = new OmdbApi(this.loggerFactory);
             var imdbApi = new ImdbApi(this.loggerFactory);
 
-            var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessorStub.Object, doubanApi, tmdbApi, omdbApi, imdbApi);
+            var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.IsNotNull(result.Item);
@@ -826,6 +838,72 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Assert.AreEqual("38142", result.Item.GetProviderId(MetadataProvider.Tmdb));
                     Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "文件名中的 Douban hint 不应被视为 tmdb-only 自动链路的豁免条件。");
                     Assert.AreEqual("秒速5厘米", result.Item.Name);
+                }).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                plugin.Configuration.DefaultScraperMode = originalMode;
+                plugin.Configuration.EnableTmdb = originalEnableTmdb;
+                plugin.Configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("AutomaticRefresh", true, false)]
+        [DataRow("UserRefresh", false, false)]
+        [DataRow("OverwriteRefresh", false, true)]
+        public void TmdbOnlyNonManualRoutesIgnoreDoubanProviderIdsMetaSourceAndFilenameHints(string routeName, bool isAutomated, bool overwriteRefresh)
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+            var originalEnableTmdb = plugin.Configuration.EnableTmdb;
+            var originalEnableTmdbMatch = plugin.Configuration.EnableTmdbMatch;
+
+            try
+            {
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                plugin.Configuration.EnableTmdb = true;
+                plugin.Configuration.EnableTmdbMatch = false;
+
+                var info = new MovieInfo
+                {
+                    Name = "秒速5厘米",
+                    Path = "/test/[douban-2043546] 秒速5厘米.mkv",
+                    MetadataLanguage = "zh",
+                    IsAutomated = isAutomated,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        { BaseProvider.DoubanProviderId, "2043546" },
+                        { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_2043546" },
+                        { MetadataProvider.Tmdb.ToString(), "38142" },
+                    },
+                };
+                var httpClientFactory = new DefaultHttpClientFactory();
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                var httpContextAccessor = overwriteRefresh
+                    ? CreateOverwriteRefreshContextAccessor()
+                    : new HttpContextAccessor { HttpContext = null };
+                var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, $"tmdb-only {routeName} 电影元数据链路不应访问 Douban。");
+                var tmdbApi = new TmdbApi(this.loggerFactory);
+                SeedTmdbMovie(tmdbApi, 38142, "zh", "秒速5厘米");
+                var omdbApi = new OmdbApi(this.loggerFactory);
+                var imdbApi = new ImdbApi(this.loggerFactory);
+
+                Task.Run(async () =>
+                {
+                    var provider = new MovieProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var result = await provider.GetMetadata(info, CancellationToken.None);
+
+                    Assert.IsNotNull(result.Item, $"{routeName} 应使用官方 TMDb id 完成电影元数据获取。 ");
+                    Assert.IsTrue(result.HasMetadata);
+                    Assert.AreEqual("38142", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                    Assert.AreEqual("Tmdb_38142", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                    Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), $"{routeName} 不应把历史 Douban id 或文件名 hint 写回结果。 ");
+                    Assert.IsNull(result.Item.GetProviderId("MetaSharkTmdbID"));
                 }).GetAwaiter().GetResult();
             }
             finally
@@ -1021,10 +1099,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Title = "TMDb 占位电影",
                 OriginalTitle = "TMDb Placeholder Movie",
                 Overview = "TMDb seeded movie overview",
-                ReleaseDate = new DateTime(2024, 3, 3),
+                ReleaseDate = new DateTime(1999, 1, 1),
                 VoteAverage = 7.1,
                 ProductionCountries = new List<ProductionCountry>(),
-                Genres = new List<TmdbGenre>(),
+                Genres = new List<TmdbGenre>
+                {
+                    new TmdbGenre { Name = "TMDb 类型" },
+                },
             };
             SetTmdbMovieCredits(
                 seededMovie,
@@ -1055,6 +1136,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("Douban Sample Movie", result.Item.OriginalTitle);
             Assert.AreEqual("豆瓣电影简介", result.Item.Overview);
             Assert.AreEqual(2024, result.Item.ProductionYear);
+            CollectionAssert.AreEqual(new[] { "剧情", "动画" }, result.Item.Genres);
+            Assert.AreEqual(new DateTime(2024, 3, 3), result.Item.PremiereDate?.Date);
             Assert.IsTrue(result.Item.CommunityRating > 8.5f && result.Item.CommunityRating < 8.7f, "Douban 路径仍应保留评分等非 people 元数据。 ");
             Assert.AreEqual("movie-douban-100", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.IsNotNull(result.People);

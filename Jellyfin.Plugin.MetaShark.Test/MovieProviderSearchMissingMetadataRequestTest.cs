@@ -28,6 +28,7 @@ using TmdbPerson = TMDbLib.Objects.People.Person;
 using TmdbTranslationData = TMDbLib.Objects.General.TranslationData;
 using TMDbLib.Client;
 using TMDbLib.Objects.General;
+using TMDbLib.Objects.Search;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -242,6 +243,963 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_ShouldUseTmdbOnlySearchDuringOverwriteRefresh_WhenOldDoubanIdExistsWithoutTmdbId()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovieSearchResults(
+                    tmdbApi,
+                    "覆盖刷新电影",
+                    0,
+                    "zh-CN",
+                    new SearchMovie
+                    {
+                        Id = 9303,
+                        Title = "覆盖刷新电影",
+                        OriginalTitle = "Overwrite Refresh Movie",
+                        ReleaseDate = new DateTime(2024, 5, 1),
+                    });
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9303,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9303,
+                        Title = "TMDb 覆盖刷新电影",
+                        OriginalTitle = "TMDb Overwrite Refresh Movie",
+                        ImdbId = "tt0009303",
+                        Overview = "TMDb 覆盖刷新简介",
+                        Tagline = "TMDb overwrite refresh tagline",
+                        ReleaseDate = new DateTime(2024, 5, 1),
+                        VoteAverage = 7.9,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "覆盖刷新电影",
+                    Path = "/library/movies/覆盖刷新电影/覆盖刷新电影.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        [MetaSharkPlugin.ProviderId] = "Douban_old-movie-sid",
+                        [BaseProvider.DoubanProviderId] = "old-movie-sid",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var doubanApi = CreateThrowingDoubanApi(loggerFactory, "tmdb-only 覆盖刷新电影链路不应访问 Douban。");
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: true) },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "tmdb-only + overwrite refresh 不应让旧 Douban sid 阻止 TMDb 搜索匹配。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("9303", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+                Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "tmdb-only 结果不应携带旧 Douban provider id。 ");
+                Assert.AreEqual("TMDb 覆盖刷新电影", result.Item.Name);
+                Assert.AreEqual("TMDb 覆盖刷新简介", result.Item.Overview);
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldUseExistingTmdbIdDuringTmdbOnlyOverwriteRefresh_WhenOldDoubanIdExists()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9306,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9306,
+                        Title = "TMDb 已有 ID 覆盖电影",
+                        OriginalTitle = "TMDb Existing Id Overwrite Movie",
+                        ImdbId = "tt0009306",
+                        Overview = "TMDb 已有 ID 覆盖电影简介",
+                        Tagline = "TMDb existing id overwrite tagline",
+                        ReleaseDate = new DateTime(2024, 5, 4),
+                        VoteAverage = 8.0,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "已有 ID 覆盖电影",
+                    Path = "/library/movies/已有 ID 覆盖电影/已有 ID 覆盖电影.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        [MetaSharkPlugin.ProviderId] = "Douban_old-movie-with-tmdb",
+                        [BaseProvider.DoubanProviderId] = "old-movie-with-tmdb",
+                        [MetadataProvider.Tmdb.ToString()] = "9306",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var doubanApi = CreateThrowingDoubanApi(loggerFactory, "tmdb-only 已有 TMDb id 的电影覆盖刷新不应访问 Douban。");
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: true) },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "tmdb-only + overwrite refresh 已有 TMDb id 时应直达 TMDb。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("9306", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual("Tmdb_9306", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "tmdb-only 已有 TMDb id 结果不应携带旧 Douban provider id。 ");
+                Assert.AreEqual("TMDb 已有 ID 覆盖电影", result.Item.Name);
+                Assert.AreEqual("TMDb 已有 ID 覆盖电影简介", result.Item.Overview);
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldKeepDoubanPrimaryInDefaultOverwriteRefresh_WhenDoubanSubjectExists()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedDoubanSubject(
+                    doubanApi,
+                    new DoubanSubject
+                    {
+                        Sid = "movie-douban-default-primary",
+                        Name = "豆瓣默认主电影",
+                        OriginalName = "Douban Default Primary Movie",
+                        Year = 2024,
+                        Rating = 8.2f,
+                        Genre = "剧情 / 动画",
+                        Intro = "豆瓣默认主电影简介",
+                        Screen = "2024-05-02",
+                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000201.webp",
+                    });
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9304,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9304,
+                        Title = "TMDb 不应主导电影",
+                        OriginalTitle = "TMDb Should Not Be Primary Movie",
+                        ImdbId = "tt0009304",
+                        Overview = "TMDb 不应覆盖豆瓣简介",
+                        Tagline = "TMDb default-mode tagline",
+                        ReleaseDate = new DateTime(2024, 5, 2),
+                        VoteAverage = 6.1,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "豆瓣默认主电影",
+                    Path = "/library/movies/豆瓣默认主电影/豆瓣默认主电影.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        [BaseProvider.DoubanProviderId] = "movie-douban-default-primary",
+                        [MetaSharkPlugin.ProviderId] = "Douban_movie-douban-default-primary",
+                        [MetadataProvider.Tmdb.ToString()] = "9304",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: true) },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item);
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("豆瓣默认主电影", result.Item!.Name);
+                Assert.AreEqual("豆瓣默认主电影简介", result.Item.Overview);
+                Assert.AreEqual("movie-douban-default-primary", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreEqual("Douban_movie-douban-default-primary", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldGuessDoubanInDefaultOverwriteRefresh_WhenExistingTmdbSourceAndIdHaveNoDoubanId()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var doubanApi = new DoubanApi(loggerFactory);
+                var doubanSubject = new DoubanSubject
+                {
+                    Sid = "movie-douban-guessed-overwrite",
+                    Name = "豆瓣覆盖电影甲",
+                    OriginalName = "Douban Overwrite Movie A",
+                    Year = 0,
+                    Category = "电影",
+                    Rating = 8.5f,
+                    Genre = "剧情 / 动画",
+                    Intro = "豆瓣覆盖电影甲简介",
+                    Screen = "2024-05-05",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000601.webp",
+                };
+                SeedDoubanSearchResults(doubanApi, "覆盖刷新电影甲", new[] { doubanSubject });
+                SeedDoubanSubject(doubanApi, doubanSubject);
+
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9308,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9308,
+                        Title = "TMDb 不应主导电影甲",
+                        OriginalTitle = "TMDb Should Not Lead Movie A",
+                        ImdbId = "tt0009308",
+                        Overview = "如果 default 覆盖刷新沿用历史 TMDb 来源就会得到这段简介",
+                        Tagline = "TMDb wrong primary tagline",
+                        ReleaseDate = new DateTime(2024, 5, 5),
+                        VoteAverage = 6.1,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "覆盖刷新电影甲",
+                    Path = "/library/movies/覆盖刷新电影甲/覆盖刷新电影甲.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        [MetaSharkPlugin.ProviderId] = "Tmdb_9308",
+                        [MetadataProvider.Tmdb.ToString()] = "9308",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: true) },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "default + overwrite refresh 即使已有 TMDb 来源，也应先按标题猜测 Douban。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("movie-douban-guessed-overwrite", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreEqual("Douban_movie-douban-guessed-overwrite", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.AreEqual("9308", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual("豆瓣覆盖电影甲", result.Item.Name);
+                Assert.AreEqual("豆瓣覆盖电影甲简介", result.Item.Overview);
+                Assert.AreNotEqual("TMDb 不应主导电影甲", result.Item.Name);
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldUseDoubanProviderIdInDefaultOverwriteRefresh_WhenExistingTmdbSourceAndIdAlsoHaveDoubanId()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedDoubanSubject(
+                    doubanApi,
+                    new DoubanSubject
+                    {
+                        Sid = "movie-douban-existing-overwrite",
+                        Name = "豆瓣覆盖电影乙",
+                        OriginalName = "Douban Overwrite Movie B",
+                        Year = 2024,
+                        Category = "电影",
+                        Rating = 8.6f,
+                        Genre = "剧情 / 悬疑",
+                        Intro = "豆瓣覆盖电影乙简介",
+                        Screen = "2024-05-06",
+                        Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000602.webp",
+                    });
+
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9309,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9309,
+                        Title = "TMDb 不应主导电影乙",
+                        OriginalTitle = "TMDb Should Not Lead Movie B",
+                        ImdbId = "tt0009309",
+                        Overview = "如果已有 Douban id 仍被 Tmdb_* 抢先就会得到这段简介",
+                        Tagline = "TMDb wrong primary tagline B",
+                        ReleaseDate = new DateTime(2024, 5, 6),
+                        VoteAverage = 6.2,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "覆盖刷新电影乙",
+                    Path = "/library/movies/覆盖刷新电影乙/覆盖刷新电影乙.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        [BaseProvider.DoubanProviderId] = "movie-douban-existing-overwrite",
+                        [MetaSharkPlugin.ProviderId] = "Tmdb_9309",
+                        [MetadataProvider.Tmdb.ToString()] = "9309",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: true) },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "default + overwrite refresh 同时有 Douban/TMDb id 时不得让 Tmdb_* 成为主来源。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("movie-douban-existing-overwrite", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreEqual("Douban_movie-douban-existing-overwrite", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.AreEqual("9309", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual("豆瓣覆盖电影乙", result.Item.Name);
+                Assert.AreEqual("豆瓣覆盖电影乙简介", result.Item.Overview);
+                Assert.AreNotEqual("TMDb 不应主导电影乙", result.Item.Name);
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldUseTmdbPrimaryFallbackInDefaultOverwriteRefresh_WhenDoubanSubjectIsMissingAndTmdbIdExists()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedMissingDoubanSubject(doubanApi, "movie-douban-missing-default");
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9305,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9305,
+                        Title = "TMDb 默认兜底电影",
+                        OriginalTitle = "TMDb Default Fallback Movie",
+                        ImdbId = "tt0009305",
+                        Overview = "TMDb 默认兜底简介",
+                        Tagline = "TMDb default fallback tagline",
+                        ReleaseDate = new DateTime(2024, 5, 3),
+                        VoteAverage = 7.4,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "默认兜底电影",
+                    Path = "/library/movies/默认兜底电影/默认兜底电影.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        [BaseProvider.DoubanProviderId] = "movie-douban-missing-default",
+                        [MetaSharkPlugin.ProviderId] = "Douban_movie-douban-missing-default",
+                        [MetadataProvider.Tmdb.ToString()] = "9305",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = CreateRefreshRequestContext(currentMovie.Id, replaceAllMetadata: true) },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item);
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("9305", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual("Tmdb_9305", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "default 只有在 Douban subject 缺失时才允许 TMDb 成为主兜底。 ");
+                Assert.AreEqual("TMDb 默认兜底电影", result.Item.Name);
+                Assert.AreEqual("TMDb 默认兜底简介", result.Item.Overview);
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldSearchAndWriteStandardTmdbId_WhenOnlyLegacyMetaSharkProviderIdExists()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedDoubanSearchResults(doubanApi, "Legacy TMDb Movie", Array.Empty<DoubanSubject>());
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovieSearchResults(
+                    tmdbApi,
+                    "Legacy TMDb Movie",
+                    0,
+                    "zh-CN",
+                    new SearchMovie
+                    {
+                        Id = 9305,
+                        Title = "Legacy TMDb Movie",
+                        OriginalTitle = "TMDb Legacy MetaSharkID Movie",
+                        ReleaseDate = new DateTime(2024, 5, 3),
+                    });
+                SeedTmdbMovie(
+                    tmdbApi,
+                    1111,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 1111,
+                        Title = "错误 legacy MetaSharkID 电影",
+                        OriginalTitle = "Wrong Legacy MetaSharkID Movie",
+                        ImdbId = "tt0001111",
+                        Overview = "如果复用 MetaSharkID=Tmdb_1111 就会得到这段错误简介",
+                        Tagline = "wrong legacy MetaSharkID tagline",
+                        ReleaseDate = new DateTime(2024, 1, 1),
+                        VoteAverage = 1.1,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9305,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9305,
+                        Title = "TMDb legacy MetaSharkID 电影",
+                        OriginalTitle = "TMDb Legacy MetaSharkID Movie",
+                        ImdbId = "tt0009305",
+                        Overview = "TMDb legacy MetaSharkID 默认兜底简介",
+                        Tagline = "TMDb legacy MetaSharkID fallback tagline",
+                        ReleaseDate = new DateTime(2024, 5, 3),
+                        VoteAverage = 7.4,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "Legacy TMDb Movie",
+                    Path = "/library/movies/Legacy TMDb Movie/Legacy TMDb Movie.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        [MetaSharkPlugin.ProviderId] = "Tmdb_1111",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = null },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "default 下缺少官方 TMDb 时应先尝试 Douban；Douban 未命中后必须按标题搜索 TMDb，而不是复用 MetaSharkID=Tmdb_*。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("9305", result.Item!.GetProviderId(MetadataProvider.Tmdb), "旧 MetaSharkID=Tmdb_1111 不能作为有效 TMDb id；搜索命中的 9305 必须写成官方 TMDb provider id。 ");
+                Assert.AreEqual("Tmdb_9305", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "legacy TMDb 兜底不应把 default 变成沿用旧 Douban 元数据。 ");
+                Assert.AreEqual("TMDb legacy MetaSharkID 电影", result.Item.Name);
+                Assert.AreEqual("TMDb legacy MetaSharkID 默认兜底简介", result.Item.Overview);
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldSearchAndWriteStandardTmdbId_WhenOnlyHistoricalMetaSharkTmdbIdExists()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var doubanApi = new DoubanApi(loggerFactory);
+                SeedDoubanSearchResults(doubanApi, "Historical Legacy TMDb Movie", Array.Empty<DoubanSubject>());
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovieSearchResults(
+                    tmdbApi,
+                    "Historical Legacy TMDb Movie",
+                    0,
+                    "zh-CN",
+                    new SearchMovie
+                    {
+                        Id = 9307,
+                        Title = "Historical Legacy TMDb Movie",
+                        OriginalTitle = "TMDb Historical Legacy Movie",
+                        ReleaseDate = new DateTime(2024, 5, 4),
+                    });
+                SeedTmdbMovie(
+                    tmdbApi,
+                    2222,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 2222,
+                        Title = "错误 historical legacy 电影",
+                        OriginalTitle = "Wrong Historical Legacy Movie",
+                        ImdbId = "tt0002222",
+                        Overview = "如果复用 MetaSharkTmdbID=2222 就会得到这段错误简介",
+                        Tagline = "wrong historical legacy tagline",
+                        ReleaseDate = new DateTime(2024, 1, 2),
+                        VoteAverage = 1.2,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9307,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9307,
+                        Title = "TMDb historical legacy 电影",
+                        OriginalTitle = "TMDb Historical Legacy Movie",
+                        ImdbId = "tt0009307",
+                        Overview = "TMDb historical legacy 默认兜底简介",
+                        Tagline = "TMDb historical legacy fallback tagline",
+                        ReleaseDate = new DateTime(2024, 5, 4),
+                        VoteAverage = 7.5,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "Historical Legacy TMDb Movie",
+                    Path = "/library/movies/Historical Legacy TMDb Movie/Historical Legacy TMDb Movie.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        ["MetaSharkTmdbID"] = "2222",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = null },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "default 下缺少官方 TMDb 时应先尝试 Douban；Douban 未命中后必须按标题搜索 TMDb，而不是复用 MetaSharkTmdbID。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("9307", result.Item!.GetProviderId(MetadataProvider.Tmdb), "旧 MetaSharkTmdbID=2222 不能作为有效 TMDb id；搜索命中的 9307 必须写成官方 TMDb provider id。 ");
+                Assert.AreEqual("Tmdb_9307", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.IsNull(result.Item.GetProviderId("MetaSharkTmdbID"), "成功 TMDb 搜索匹配后不应写回旧 MetaSharkTmdbID。 ");
+                Assert.AreEqual("TMDb historical legacy 电影", result.Item.Name);
+                Assert.AreEqual("TMDb historical legacy 默认兜底简介", result.Item.Overview);
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ShouldKeepDoubanFirstInDefault_WhenLegacyMetaSharkProviderIdAndWrongDoubanCandidateExist()
+        {
+            EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
+
+            var configuration = plugin.Configuration;
+            var originalMode = configuration.DefaultScraperMode;
+            var originalEnableTmdb = configuration.EnableTmdb;
+            var originalEnableTmdbMatch = configuration.EnableTmdbMatch;
+
+            try
+            {
+                configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault;
+                configuration.EnableTmdb = true;
+                configuration.EnableTmdbMatch = true;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var doubanApi = new DoubanApi(loggerFactory);
+                var wrongDoubanSubject = new DoubanSubject
+                {
+                    Sid = "wrong-douban-legacy-tmdb-movie",
+                    Name = "错误豆瓣 legacy 电影",
+                    OriginalName = "Wrong Douban Legacy TMDb Movie",
+                    Year = 0,
+                    Category = "电影",
+                    Rating = 1.1f,
+                    Genre = "短片",
+                    Intro = "default 配置下应保留 Douban 先行，即使这个候选不理想",
+                    Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p0000000401.webp",
+                };
+                SeedDoubanSearchResults(doubanApi, "Legacy TMDb Movie", new[] { wrongDoubanSubject });
+                SeedDoubanSubject(doubanApi, wrongDoubanSubject);
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovieSearchResults(
+                    tmdbApi,
+                    "Legacy TMDb Movie",
+                    0,
+                    "zh-CN",
+                    new SearchMovie
+                    {
+                        Id = 9305,
+                        Title = "Legacy TMDb Movie",
+                        OriginalTitle = "TMDb Legacy MetaSharkID Movie",
+                        ReleaseDate = new DateTime(2024, 5, 3),
+                    });
+                SeedTmdbMovie(
+                    tmdbApi,
+                    9305,
+                    "zh-CN",
+                    new TmdbMovie
+                    {
+                        Id = 9305,
+                        Title = "TMDb legacy MetaSharkID 电影",
+                        OriginalTitle = "TMDb Legacy MetaSharkID Movie",
+                        ImdbId = "tt0009305",
+                        Overview = "如果绕过 Douban 就会得到这段 TMDb 简介",
+                        Tagline = "TMDb fallback tagline",
+                        ReleaseDate = new DateTime(2024, 5, 3),
+                        VoteAverage = 7.4,
+                        ProductionCountries = new List<ProductionCountry>(),
+                        Genres = new List<TmdbGenre>(),
+                    });
+
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = new MovieInfo
+                {
+                    Name = "Legacy TMDb Movie",
+                    Path = "/library/movies/Legacy TMDb Movie/Legacy TMDb Movie.mkv",
+                    MetadataLanguage = "zh-CN",
+                    IsAutomated = false,
+                    ProviderIds = new Dictionary<string, string>
+                    {
+                        [MetaSharkPlugin.ProviderId] = "Tmdb_1111",
+                    },
+                };
+                var currentMovie = new Movie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = null },
+                    tmdbApi,
+                    store,
+                    loggerFactory,
+                    doubanApi);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item, "default 配置必须保持 Douban-first，不应因 MetaSharkID=Tmdb_* 强制改走 TMDb。 ");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("wrong-douban-legacy-tmdb-movie", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreEqual("Douban_wrong-douban-legacy-tmdb-movie", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb), "MetaSharkID=Tmdb_1111 不能被解析成官方 TMDb id。 ");
+                Assert.AreEqual("错误豆瓣 legacy 电影", result.Item.Name);
+                Assert.AreEqual("default 配置下应保留 Douban 先行，即使这个候选不理想", result.Item.Overview);
+                Assert.AreNotEqual("TMDb legacy MetaSharkID 电影", result.Item.Name);
+            }
+            finally
+            {
+                configuration.DefaultScraperMode = originalMode;
+                configuration.EnableTmdb = originalEnableTmdb;
+                configuration.EnableTmdbMatch = originalEnableTmdbMatch;
+            }
+        }
+
+        [TestMethod]
         public async Task GetMetadata_ShouldSaveCandidate_WhenRequestIsManualMatch()
         {
             EnsurePluginInstance();
@@ -285,42 +1243,56 @@ namespace Jellyfin.Plugin.MetaShark.Test
         public async Task GetMetadata_ShouldNotSaveCandidate_WhenTmdbPeopleIsEmptyButCurrentMovieStillHasPeople()
         {
             EnsurePluginInstance();
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+            Assert.IsNotNull(plugin!.Configuration);
 
-            using var loggerFactory = LoggerFactory.Create(builder => { });
-            var tmdbApi = new TmdbApi(loggerFactory);
-            SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
-            var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
-            var info = CreateMovieInfo();
-            info.IsAutomated = false;
-            var currentMovie = new AuthoritativeTrackingMovie
+            var originalMode = plugin.Configuration.DefaultScraperMode;
+
+            try
             {
-                Id = Guid.NewGuid(),
-                Path = info.Path,
-            };
-            currentMovie.SetProviderId(MetadataProvider.Tmdb, "123");
-            currentMovie.SetSimulatedPeople(new[]
+                plugin.Configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+
+                using var loggerFactory = LoggerFactory.Create(builder => { });
+                var tmdbApi = new TmdbApi(loggerFactory);
+                SeedTmdbMovie(tmdbApi, 123, "zh-CN", "示例电影");
+                var store = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
+                var info = CreateMovieInfo();
+                info.IsAutomated = false;
+                var currentMovie = new AuthoritativeTrackingMovie
+                {
+                    Id = Guid.NewGuid(),
+                    Path = info.Path,
+                };
+                currentMovie.SetProviderId(MetadataProvider.Tmdb, "123");
+                currentMovie.SetSimulatedPeople(new[]
+                {
+                    CreateCurrentPerson("旧演员甲", "角色甲", PersonKind.Actor),
+                    CreateCurrentPerson("旧导演甲", "Director", PersonKind.Director),
+                });
+
+                var libraryManagerStub = new Mock<ILibraryManager>();
+                libraryManagerStub
+                    .Setup(x => x.FindByPath(info.Path, false))
+                    .Returns(currentMovie);
+
+                var provider = CreateProvider(
+                    libraryManagerStub.Object,
+                    new HttpContextAccessor { HttpContext = null },
+                    tmdbApi,
+                    store,
+                    loggerFactory);
+
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsNotNull(result.Item);
+                Assert.AreEqual(0, result.People?.Count ?? 0, "测试前提：TMDb authoritative 应为空。 ");
+                Assert.IsNull(store.Peek(currentMovie.Id), "tmdb-only UserRefresh 不应保存空 authoritative candidate。 ");
+            }
+            finally
             {
-                CreateCurrentPerson("旧演员甲", "角色甲", PersonKind.Actor),
-                CreateCurrentPerson("旧导演甲", "Director", PersonKind.Director),
-            });
-
-            var libraryManagerStub = new Mock<ILibraryManager>();
-            libraryManagerStub
-                .Setup(x => x.FindByPath(info.Path, false))
-                .Returns(currentMovie);
-
-            var provider = CreateProvider(
-                libraryManagerStub.Object,
-                new HttpContextAccessor { HttpContext = null },
-                tmdbApi,
-                store,
-                loggerFactory);
-
-            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
-
-            Assert.IsNotNull(result.Item);
-            Assert.AreEqual(0, result.People?.Count ?? 0, "测试前提：TMDb authoritative 应为空。 ");
-            Assert.IsNull(store.Peek(currentMovie.Id), "UserRefresh 不应保存空 authoritative candidate。 ");
+                plugin.Configuration.DefaultScraperMode = originalMode;
+            }
         }
 
         [TestMethod]
@@ -547,14 +1519,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             IHttpContextAccessor httpContextAccessor,
             TmdbApi tmdbApi,
             IMovieSeriesPeopleOverwriteRefreshCandidateStore store,
-            ILoggerFactory loggerFactory)
+            ILoggerFactory loggerFactory,
+            DoubanApi? doubanApi = null)
         {
             return new MovieProvider(
                 new DefaultHttpClientFactory(),
                 loggerFactory,
                 libraryManager,
                 httpContextAccessor,
-                new DoubanApi(loggerFactory),
+                doubanApi ?? new DoubanApi(loggerFactory),
                 tmdbApi,
                 new OmdbApi(loggerFactory),
                 new ImdbApi(loggerFactory),
@@ -652,6 +1625,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
             GetTmdbMemoryCache(tmdbApi).Set(
                 $"movie-{tmdbId}-{language}-{language}",
                 movie,
+                TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedTmdbMovieSearchResults(TmdbApi tmdbApi, string name, int year, string language, params SearchMovie[] results)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"moviesearch-{name}-{year}-{language}",
+                new SearchContainer<SearchMovie>
+                {
+                    Results = results.ToList(),
+                },
                 TimeSpan.FromMinutes(5));
         }
 
@@ -753,6 +1737,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
             cache.Set($"celebrities_{subject.Sid}", new List<DoubanCelebrity>(), TimeSpan.FromMinutes(5));
         }
 
+        private static void SeedMissingDoubanSubject(DoubanApi doubanApi, string sid)
+        {
+            var cache = GetDoubanMemoryCache(doubanApi);
+            cache.Set<DoubanSubject?>($"movie_{sid}", null, TimeSpan.FromMinutes(5));
+            cache.Set($"celebrities_{sid}", new List<DoubanCelebrity>(), TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedDoubanSearchResults(DoubanApi doubanApi, string keyword, IReadOnlyCollection<DoubanSubject> subjects)
+        {
+            GetDoubanMemoryCache(doubanApi).Set(
+                $"search_{keyword}",
+                subjects.ToList(),
+                TimeSpan.FromMinutes(5));
+        }
+
         private static MemoryCache GetDoubanMemoryCache(DoubanApi doubanApi)
         {
             var memoryCacheField = typeof(DoubanApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -835,6 +1834,34 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var memoryCache = memoryCacheField!.GetValue(tmdbApi) as MemoryCache;
             Assert.IsNotNull(memoryCache, "TmdbApi.memoryCache 不是有效的 MemoryCache");
             return memoryCache!;
+        }
+
+        private static DoubanApi CreateThrowingDoubanApi(ILoggerFactory loggerFactory, string message)
+        {
+            var api = new DoubanApi(loggerFactory);
+            var httpClientField = typeof(DoubanApi).GetField("httpClient", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(httpClientField, "DoubanApi.httpClient 未定义");
+
+            var originalClient = (HttpClient)httpClientField!.GetValue(api)!;
+            httpClientField.SetValue(api, new HttpClient(new ThrowingHttpMessageHandler(message), disposeHandler: true));
+            originalClient.Dispose();
+
+            return api;
+        }
+
+        private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
+        {
+            private readonly string message;
+
+            public ThrowingHttpMessageHandler(string message)
+            {
+                this.message = message;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                throw new InvalidOperationException(this.message + " Request: " + request.RequestUri);
+            }
         }
 
         private static void EnsurePluginInstance()
