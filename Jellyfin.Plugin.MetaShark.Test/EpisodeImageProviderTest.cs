@@ -1,3 +1,4 @@
+using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Model;
@@ -393,6 +394,54 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Assert.AreEqual(1, result!.Count);
                 Assert.AreEqual(ImageType.Primary, result[0].Type);
                 Assert.AreEqual("https://image.tmdb.org/t/p/w300/AgVyylbwMmSUW9Fp3wWKEPGT5vH.jpg", result[0].Url);
+            });
+        }
+
+        [TestMethod]
+        public void GetImages_ReportsMissingSeriesTmdbId_WhenOnlyLegacySeriesTmdbProviderIdExists()
+        {
+            RequireOutcomeReporterContract();
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var outcomeReporterStub = new Mock<ITvImageRefillOutcomeReporter>();
+
+            WithLibraryManager(libraryManagerStub.Object, () =>
+            {
+                var tmdbApi = CreateConfiguredTmdbApi();
+                SeedTmdbEpisode(tmdbApi, 65942, 1, 1, "zh", "/cKzunf5OUndOIwEjcfMtsZsBO3o.jpg", 6.0d, 2);
+                var provider = CreateProvider(libraryManagerStub.Object, outcomeReporterStub.Object, tmdbApi);
+                var info = new MediaBrowser.Controller.Entities.TV.Episode
+                {
+                    Name = "女骑士成了败北俘虏",
+                    PreferredMetadataLanguage = "zh",
+                    ParentIndexNumber = 1,
+                    IndexNumber = 1,
+                };
+                SetSeries(
+                    info,
+                    libraryManagerStub,
+                    new MediaBrowser.Controller.Entities.TV.Series
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "女骑士成为蛮族新娘",
+                        PreferredMetadataLanguage = "zh",
+                        ProviderIds = new Dictionary<string, string>
+                        {
+                            { MetaSharkPlugin.ProviderId, "Tmdb_65942" },
+                            { "MetaSharkTmdbID", "65942" },
+                        },
+                    });
+
+                List<RemoteImageInfo>? result = null;
+                Task.Run(async () =>
+                {
+                    result = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                }).GetAwaiter().GetResult();
+
+                outcomeReporterStub.Verify(x => x.ReportHardMiss(info, "MissingSeriesTmdbId"), Times.Once);
+                outcomeReporterStub.Verify(x => x.ReportSuccess(info), Times.Never);
+                Assert.IsNotNull(result);
+                Assert.AreEqual(0, result!.Count, "父级 Series 只有 MetaSharkID=Tmdb_* 或 MetaSharkTmdbID 时必须报告 MissingSeriesTmdbId，不能兼容解析旧 key。 ");
             });
         }
 

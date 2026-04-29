@@ -23,20 +23,25 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 Episode episode => string.Join(
                     "|",
                     path,
-                    episode.Series?.GetProviderId(MetadataProvider.Tmdb) ?? string.Empty,
+                    ResolveOfficialTmdbId(episode.Series),
                     episode.ParentIndexNumber?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
                     episode.IndexNumber?.ToString(CultureInfo.InvariantCulture) ?? string.Empty),
                 Season season => string.Join(
                     "|",
                     path,
-                    season.Series?.GetProviderId(MetadataProvider.Tmdb) ?? string.Empty,
+                    ResolveOfficialTmdbId(season.Series),
                     season.IndexNumber?.ToString(CultureInfo.InvariantCulture) ?? string.Empty),
                 Series series => string.Join(
                     "|",
                     path,
-                    series.GetProviderId(MetadataProvider.Tmdb) ?? string.Empty),
+                    ResolveOfficialTmdbId(series)),
                 _ => path,
             };
+        }
+
+        private static string ResolveOfficialTmdbId(BaseItem? item)
+        {
+            return item?.GetProviderId(MetadataProvider.Tmdb) ?? string.Empty;
         }
     }
 }
