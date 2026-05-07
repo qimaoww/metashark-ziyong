@@ -8,3 +8,5 @@ metashark/
 *.json
 .vscode
 .sisyphus/
+TestResults/
+AGENTS.md
