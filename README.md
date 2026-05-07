@@ -40,6 +40,10 @@ https://github.com/qimaoww/metashark-ziyong/releases/download/manifest/manifest.
 - `特别篇插入`：开启后可按 TVDB airs before/after 规则，将 Season 0 特别篇插入对应季内。
 - `缺失元数据回填`：用于在元数据缺失时补回剧集标题、简介等字段。
 - `图片补全与回填`：用于在图片缺失或部分来源不可用时继续补全相关图片信息。
+- `LLM 辅助刮削`：默认关闭，不是独立元数据源；只会在手动识别、手动刷新或搜索缺失元数据等需要重新查询元数据的流程中按配置尝试调用。
+- LLM 请求只发送相对媒体路径和必要摘要，不发送完整本地路径、API Key、cookie 或 token；启用前请自行评估费用、隐私和网络风险。
+- OpenAI 兼容 Base URL 需要填写到 `/v1` 级别，例如 `https://api.example.com/v1`。
+- `LLM 辅助建议 TMDb 剧集组映射`：默认关闭，只能从 TMDb 返回的候选剧集组中选择，不承诺一定匹配正确。
 
 ## 注意事项
 - 这是自用分支，是否适合你的媒体库、数据源和网络环境，需要你自行判断。
