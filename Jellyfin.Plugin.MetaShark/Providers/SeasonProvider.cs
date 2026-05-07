@@ -6,6 +6,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics.CodeAnalysis;
     using System.IO;
     using System.Linq;
     using System.Net.Http;
@@ -25,16 +26,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Microsoft.AspNetCore.Http;
     using Microsoft.Extensions.Logging;
 
+    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1202:Elements should be ordered by access", Justification = "Keep LLM helper methods near the flow they support.")]
+    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Keep provider orchestration helpers near the flow they support.")]
     public class SeasonProvider : BaseProvider, IRemoteMetadataProvider<Season, SeasonInfo>
     {
         private readonly ILlmMetadataAssistService? llmMetadataAssistService;
+        private readonly ILlmExternalIdResolutionService? llmExternalIdResolutionService;
         private readonly LlmAssistTriggerPolicy llmAssistTriggerPolicy = new LlmAssistTriggerPolicy();
         private readonly LlmMetadataMergePolicy llmMetadataMergePolicy = new LlmMetadataMergePolicy();
 
-        public SeasonProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILlmMetadataAssistService? llmMetadataAssistService = null)
+        public SeasonProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmExternalIdResolutionService? llmExternalIdResolutionService = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<SeasonProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.llmMetadataAssistService = llmMetadataAssistService;
+            this.llmExternalIdResolutionService = llmExternalIdResolutionService;
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -67,17 +72,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var seasonNumber = info.IndexNumber; // S00/Season 00特典目录会为0
             var seasonSid = info.GetProviderId(DoubanProviderId);
             var fileName = Path.GetFileName(info.Path);
+            var resolvedParentSeriesTmdbId = string.IsNullOrWhiteSpace(seriesTmdbId)
+                ? await this.TryResolveParentSeriesTmdbIdWithLlmAsync(info, seasonNumber, semantic, cancellationToken).ConfigureAwait(false)
+                : null;
+            var seriesTmdbIdForSeasonQuery = string.IsNullOrWhiteSpace(seriesTmdbId) ? resolvedParentSeriesTmdbId : seriesTmdbId;
             this.Log("开始获取季元数据. name: {0} fileName: {1} seasonNumber: {2} seriesTmdbId: {3} sid: {4} metaSource: {5} enableTmdb: {6}", info.Name, fileName, info.IndexNumber, seriesTmdbId, sid, metaSource, Config.EnableTmdb);
             if (!doubanAllowed)
             {
-                if (!string.IsNullOrWhiteSpace(seriesTmdbId))
+                if (!string.IsNullOrWhiteSpace(seriesTmdbIdForSeasonQuery))
                 {
-                    var tmdbOnlyResult = await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber, cancellationToken).ConfigureAwait(false);
+                    var tmdbOnlyResult = await this.GetMetadataByTmdb(info, seriesTmdbIdForSeasonQuery, seasonNumber, cancellationToken).ConfigureAwait(false);
                     if (tmdbOnlyResult.HasMetadata)
                     {
                         return tmdbOnlyResult;
                     }
-
                 }
 
                 return await this.TryGetLlmAssistedMetadataAsync(info, seasonNumber, semantic, result, cancellationToken).ConfigureAwait(false);
@@ -138,9 +146,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // 豆瓣找不到季数据，尝试获取tmdb的季数据
-            if (!string.IsNullOrWhiteSpace(seriesTmdbId) && seasonNumber.HasValue && seasonNumber >= 0)
+            if (!string.IsNullOrWhiteSpace(seriesTmdbIdForSeasonQuery) && seasonNumber.HasValue && seasonNumber >= 0)
             {
-                var tmdbResult = await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber.Value, cancellationToken).ConfigureAwait(false);
+                var tmdbResult = await this.GetMetadataByTmdb(info, seriesTmdbIdForSeasonQuery, seasonNumber.Value, cancellationToken).ConfigureAwait(false);
                 if (tmdbResult != null && tmdbResult.HasMetadata)
                 {
                     return tmdbResult;
@@ -149,6 +157,130 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             // 从豆瓣获取不到季信息
             return await this.TryGetLlmAssistedMetadataAsync(info, seasonNumber, semantic, result, cancellationToken).ConfigureAwait(false);
+        }
+
+        private static bool HasCompleteLlmConfiguration(Configuration.PluginConfiguration configuration)
+        {
+            return configuration.EnableLlmAssist
+                && !string.IsNullOrWhiteSpace(configuration.LlmBaseUrl)
+                && !string.IsNullOrWhiteSpace(configuration.LlmModel)
+                && !string.IsNullOrWhiteSpace(configuration.LlmApiKey);
+        }
+
+        private static SeasonInfo CreateSafeLlmExternalIdSeasonLookupInfo(SeasonInfo info, int? seasonNumber)
+        {
+            var safePath = Config.LlmAllowRelativePathContext
+                ? LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Season))
+                : string.Empty;
+            var parentProviderIds = CreatePublicProviderIdCopy(info.SeriesProviderIds);
+
+            return new SeasonInfo
+            {
+                Name = info.Name,
+                Path = safePath,
+                MetadataLanguage = info.MetadataLanguage,
+                MetadataCountryCode = info.MetadataCountryCode,
+                Year = info.Year,
+                ParentIndexNumber = seasonNumber,
+                ProviderIds = parentProviderIds,
+                SeriesProviderIds = parentProviderIds == null ? null : new Dictionary<string, string>(parentProviderIds, StringComparer.OrdinalIgnoreCase),
+            };
+        }
+
+        private static Dictionary<string, string>? CreatePublicProviderIdCopy(Dictionary<string, string>? providerIds)
+        {
+            if (providerIds == null)
+            {
+                return null;
+            }
+
+            var copy = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var providerId in providerIds)
+            {
+                if (TryNormalizePublicProviderIdKey(providerId.Key, out var key) && !string.IsNullOrWhiteSpace(providerId.Value))
+                {
+                    copy[key] = providerId.Value;
+                }
+            }
+
+            return copy;
+        }
+
+        private static bool TryNormalizePublicProviderIdKey(string key, out string normalizedKey)
+        {
+            if (string.Equals(key, MetadataProvider.Tmdb.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedKey = MetadataProvider.Tmdb.ToString();
+                return true;
+            }
+
+            if (string.Equals(key, MetadataProvider.Imdb.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedKey = MetadataProvider.Imdb.ToString();
+                return true;
+            }
+
+            if (string.Equals(key, MetadataProvider.Tvdb.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedKey = MetadataProvider.Tvdb.ToString();
+                return true;
+            }
+
+            if (string.Equals(key, DoubanProviderId, StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedKey = DoubanProviderId;
+                return true;
+            }
+
+            normalizedKey = string.Empty;
+            return false;
+        }
+
+        private static string? GetParentSeriesTmdbIdFromVerifiedCandidates(LlmExternalIdResolutionResult resolutionResult)
+        {
+            return resolutionResult.VerifiedCandidates
+                .FirstOrDefault(candidate => string.Equals(candidate.Provider, "TMDb", StringComparison.Ordinal)
+                    && string.Equals(candidate.MediaType, nameof(Series), StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(candidate.Id))
+                ?.Id;
+        }
+
+        private async Task<string?> TryResolveParentSeriesTmdbIdWithLlmAsync(SeasonInfo info, int? seasonNumber, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
+        {
+            if (this.llmExternalIdResolutionService == null || !HasCompleteLlmConfiguration(Config))
+            {
+                return null;
+            }
+
+            var triggerDecision = this.llmAssistTriggerPolicy.Evaluate(new LlmAssistTriggerContext
+            {
+                Configuration = Config,
+                Semantic = semantic,
+                MediaType = nameof(Season),
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+            });
+            if (!triggerDecision.ShouldTrigger)
+            {
+                return null;
+            }
+
+            var resolutionResult = await this.llmExternalIdResolutionService.ResolveAsync(
+                new LlmExternalIdResolutionRequest
+                {
+                    Configuration = Config,
+                    LookupInfo = CreateSafeLlmExternalIdSeasonLookupInfo(info, seasonNumber),
+                    MediaType = nameof(Season),
+                    Name = info.Name,
+                    Year = info.Year,
+                    Semantic = semantic,
+                    IsImageProvider = false,
+                    HttpContext = this.HttpContextAccessor.HttpContext,
+                    LibraryRoots = Array.Empty<string?>(),
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            return GetParentSeriesTmdbIdFromVerifiedCandidates(resolutionResult);
         }
 
         public async Task<string?> GuessDoubanSeasonId(string? sid, string? seriesTmdbId, int? seasonNumber, ItemLookupInfo info, CancellationToken cancellationToken)
@@ -271,11 +403,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 PremiereDate = seasonResult.AirDate,
                 ProductionYear = seasonResult.AirDate?.Year,
             };
-
-            if (!string.IsNullOrEmpty(seasonResult.ExternalIds?.TvdbId))
-            {
-                result.Item.SetProviderId(MetadataProvider.Tvdb, seasonResult.ExternalIds.TvdbId);
-            }
 
             return result;
         }

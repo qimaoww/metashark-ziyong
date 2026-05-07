@@ -245,11 +245,141 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(0, llm.Requests.Count);
         }
 
+        [TestMethod]
+        public async Task GetMetadata_WhenParentTmdbMissingAndResolverVerifiesSeriesTmdb_UsesTmdbSeasonOnlyForQuery()
+        {
+            var configuration = CreateBaseConfiguration();
+            configuration.EnableTmdb = true;
+            configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+            ReplacePluginConfiguration(configuration);
+            var llm = new LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService();
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueResult(CreateVerifiedParentSeriesTmdbResult("34860", includeUnsafeWrites: true));
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedTmdbSeason(tmdbApi, 34860, 2, "zh-CN", "解析父级 TMDb 季名", "解析父级 TMDb 简介");
+            var provider = this.CreateProvider(
+                LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString()),
+                llm,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateExternalMissingInfo();
+            info.SeriesProviderIds = new Dictionary<string, string>
+            {
+                { BaseProvider.DoubanProviderId, "series-douban-ctx" },
+                { MetadataProvider.Imdb.ToString(), "tt0133093" },
+                { MetadataProvider.Tvdb.ToString(), "81189" },
+                { MetaSharkPlugin.ProviderId, "Douban_series-douban-ctx" },
+                { "apiKey", "sk-test-secret" },
+            };
+            var seasonProviderIdsSnapshot = LlmProviderFlowTestHelpers.CloneProviderIds(info.ProviderIds);
+            var seriesProviderIdsSnapshot = LlmProviderFlowTestHelpers.CloneProviderIds(info.SeriesProviderIds);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("解析父级 TMDb 季名", result.Item!.Name);
+            Assert.AreEqual("解析父级 TMDb 简介", result.Item.Overview);
+            Assert.AreEqual(2, result.Item.IndexNumber);
+            AssertNoProviderIds(result.Item);
+            LlmProviderFlowTestHelpers.AssertProviderIdsUnchanged(seasonProviderIdsSnapshot, info.ProviderIds, "Season ProviderIds");
+            LlmProviderFlowTestHelpers.AssertProviderIdsUnchanged(seriesProviderIdsSnapshot, info.SeriesProviderIds, "SeriesProviderIds");
+            Assert.AreEqual(1, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, llm.Requests.Count);
+            AssertSeasonExternalIdRequestIsSafe(externalIdResolver.Requests[0]);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenResolverVerificationFails_KeepsTextFallbackWithoutWritingProviderIds()
+        {
+            var llm = new LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService();
+            llm.EnqueueResult(CreateSucceededLlmResult("失败后文本标题", "失败后文本简介", seasonNumber: 2));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueResult(LlmExternalIdResolutionResult.VerificationFailed("test unverified parent series"));
+            var provider = this.CreateProvider(
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(),
+                llm,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateExternalMissingInfo();
+            var seasonProviderIdsSnapshot = LlmProviderFlowTestHelpers.CloneProviderIds(info.ProviderIds);
+            var seriesProviderIdsSnapshot = LlmProviderFlowTestHelpers.CloneProviderIds(info.SeriesProviderIds);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            AssertLlmTextResult(result, expectedIndexNumber: 2);
+            Assert.AreEqual("失败后文本标题", result.Item!.Name);
+            AssertNoProviderIds(result.Item);
+            Assert.AreEqual(1, externalIdResolver.Requests.Count);
+            Assert.AreEqual(1, llm.Requests.Count);
+            LlmProviderFlowTestHelpers.AssertProviderIdsUnchanged(seasonProviderIdsSnapshot, info.ProviderIds, "Season ProviderIds");
+            LlmProviderFlowTestHelpers.AssertProviderIdsUnchanged(seriesProviderIdsSnapshot, info.SeriesProviderIds, "SeriesProviderIds");
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenAutomaticRefresh_DoesNotCallExternalIdResolverOrTextLlm()
+        {
+            var llm = new LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService();
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueResult(CreateVerifiedParentSeriesTmdbResult("34860"));
+            var provider = this.CreateProvider(
+                LlmProviderFlowTestHelpers.CreateAutomaticRefreshContextAccessor(),
+                llm,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateExternalMissingInfo();
+            info.IsAutomated = true;
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.HasMetadata);
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, llm.Requests.Count);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenUserRefreshHasNoHttpContext_DoesNotCallExternalIdResolverOrTextLlm()
+        {
+            var llm = new LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService();
+            llm.EnqueueResult(CreateSucceededLlmResult("空上下文不使用 LLM", "空上下文简介", seasonNumber: 2));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueResult(CreateVerifiedParentSeriesTmdbResult("34860"));
+            var provider = this.CreateProvider(
+                new HttpContextAccessor { HttpContext = null },
+                llm,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateExternalMissingInfo();
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.HasMetadata);
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, llm.Requests.Count);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenOverwriteRefresh_DoesNotCallExternalIdResolverOrTextLlm()
+        {
+            var llm = new LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService();
+            llm.EnqueueResult(CreateSucceededLlmResult("覆盖刷新不使用 LLM", "覆盖刷新简介", seasonNumber: 2));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueResult(CreateVerifiedParentSeriesTmdbResult("34860"));
+            var provider = this.CreateProvider(
+                LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString(), replaceAllMetadata: true),
+                llm,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateExternalMissingInfo();
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.HasMetadata);
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, llm.Requests.Count);
+        }
+
         private SeasonProvider CreateProvider(
             IHttpContextAccessor httpContextAccessor,
             LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService llm,
             DoubanApi? doubanApi = null,
-            TmdbApi? tmdbApi = null)
+            TmdbApi? tmdbApi = null,
+            ILlmExternalIdResolutionService? llmExternalIdResolutionService = null)
         {
             return new SeasonProvider(
                 new DefaultHttpClientFactory(),
@@ -260,7 +390,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 tmdbApi ?? new TmdbApi(this.loggerFactory),
                 new OmdbApi(this.loggerFactory),
                 new ImdbApi(this.loggerFactory),
-                llm);
+                llm,
+                llmExternalIdResolutionService);
         }
 
         private static SeasonInfo CreateExternalMissingInfo(int? indexNumber = 2)
@@ -329,6 +460,48 @@ namespace Jellyfin.Plugin.MetaShark.Test
             LlmProviderFlowTestHelpers.AssertNoSensitiveContent(request, null, request.LookupInfo.Path);
             Assert.AreEqual("present", request.LookupInfo.ProviderIds![MetadataProvider.Tvdb.ToString()]);
             Assert.IsFalse(request.LookupInfo.ProviderIds.ContainsValue("tvdb-season-existing"));
+        }
+
+        private static void AssertSeasonExternalIdRequestIsSafe(LlmExternalIdResolutionRequest request)
+        {
+            Assert.AreEqual("Season", request.MediaType);
+            Assert.AreEqual(DefaultScraperSemantic.UserRefresh, request.Semantic);
+            Assert.IsNotNull(request.LookupInfo);
+            var lookupInfo = request.LookupInfo as SeasonInfo;
+            Assert.IsNotNull(lookupInfo);
+            Assert.AreEqual("TV/示例剧/Season 02", lookupInfo!.Path);
+            Assert.AreEqual(2, lookupInfo.ParentIndexNumber);
+            Assert.IsNull(lookupInfo.IndexNumber);
+            var providerIds = lookupInfo.ProviderIds!;
+            Assert.AreEqual("series-douban-ctx", providerIds[BaseProvider.DoubanProviderId]);
+            Assert.AreEqual("tt0133093", providerIds[MetadataProvider.Imdb.ToString()]);
+            Assert.AreEqual("81189", providerIds[MetadataProvider.Tvdb.ToString()]);
+            Assert.IsFalse(providerIds.ContainsKey(MetaSharkPlugin.ProviderId));
+            Assert.IsFalse(providerIds.ContainsKey("apiKey"));
+            Assert.IsFalse(providerIds.ContainsValue("sk-test-secret"));
+            LlmProviderFlowTestHelpers.AssertNoSensitiveContent(request.LookupInfo.Path);
+        }
+
+        private static LlmExternalIdResolutionResult CreateVerifiedParentSeriesTmdbResult(string tmdbId, bool includeUnsafeWrites = false)
+        {
+            var candidate = new LlmExternalIdCandidate
+            {
+                Provider = "TMDb",
+                Id = tmdbId,
+                MediaType = nameof(Series),
+                Confidence = 0.95,
+                Reason = "test verified parent series",
+                Evidence = "test verified parent evidence",
+            };
+            var writes = includeUnsafeWrites
+                ? new[] { new LlmExternalIdProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", tmdbId, nameof(Season), candidate) }
+                : Array.Empty<LlmExternalIdProviderIdWrite>();
+
+            return LlmExternalIdResolutionResult.Succeeded(
+                new[] { candidate },
+                writes,
+                Array.Empty<LlmExternalIdProviderIdWrite>(),
+                "test verified parent");
         }
 
         private static PluginConfiguration CreateBaseConfiguration(bool enableLlmAssist = true)
