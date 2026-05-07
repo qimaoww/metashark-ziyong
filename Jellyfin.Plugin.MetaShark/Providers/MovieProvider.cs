@@ -29,20 +29,23 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Microsoft.Extensions.Logging;
     using TMDbLib.Objects.Search;
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Keep provider flow before helper methods.")]
     public class MovieProvider : BaseProvider, IRemoteMetadataProvider<Movie, MovieInfo>
     {
         private readonly ILlmMetadataAssistService? llmMetadataAssistService;
+        private readonly ILlmExternalIdResolutionService? llmExternalIdResolutionService;
         private readonly LlmAssistTriggerPolicy llmAssistTriggerPolicy = new LlmAssistTriggerPolicy();
         private readonly LlmMetadataMergePolicy llmMetadataMergePolicy = new LlmMetadataMergePolicy();
         private readonly LlmScrapeContextBuilder llmScrapeContextBuilder = new LlmScrapeContextBuilder();
         private readonly LlmScrapeMismatchDetector llmScrapeMismatchDetector = new LlmScrapeMismatchDetector();
         private readonly IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore;
 
-        public MovieProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null)
+        public MovieProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmExternalIdResolutionService? llmExternalIdResolutionService = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<MovieProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.movieSeriesPeopleOverwriteRefreshCandidateStore = movieSeriesPeopleOverwriteRefreshCandidateStore ?? InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared;
             this.llmMetadataAssistService = llmMetadataAssistService;
+            this.llmExternalIdResolutionService = llmExternalIdResolutionService;
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -121,6 +124,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var hasTmdbMeta = !string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary);
             var hasDoubanMeta = !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid);
             var llmAssistResult = LlmScrapingAssistResult.NotTriggered("AuthoritativeMetadataPresent");
+            var externalIdResolutionResult = LlmExternalIdResolutionResult.NotTriggered("AuthoritativeMetadataPresent");
             this.Log("开始获取电影元数据. name: {0} fileName: {1} metaSource: {2} enableTmdb: {3}", info.Name, fileName, metaSource, Config.EnableTmdb);
             if (!hasDoubanMeta && !hasTmdbMeta)
             {
@@ -180,6 +184,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
             }
 
+            if (string.IsNullOrWhiteSpace(tmdbId))
+            {
+                externalIdResolutionResult = await this.TryResolveMissingMovieProviderIdsWithLlmAsync(info, semantic, cancellationToken).ConfigureAwait(false);
+                tmdbId = GetProviderIdWriteValue(externalIdResolutionResult, MetadataProvider.Tmdb.ToString()) ?? tmdbId;
+                sid = GetProviderIdWriteValue(externalIdResolutionResult, DoubanProviderId) ?? sid;
+                effectiveSid = doubanAllowed ? sid : null;
+            }
+
             if (!tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid))
             {
                 this.Log("通过 Douban 获取电影元数据. sid: \"{0}\"", effectiveSid);
@@ -198,6 +210,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     if (!string.IsNullOrEmpty(tmdbId))
                     {
                         var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                        ApplyLlmExternalProviderIdWrites(tmdbFallbackResult, externalIdResolutionResult);
                         this.ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
                         return tmdbFallbackResult;
                     }
@@ -278,6 +291,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     }
                 }
 
+                ApplyLlmExternalProviderIdWrites(movie.ProviderIds, externalIdResolutionResult);
+
                 result.Item = movie;
                 result.QueriedById = true;
                 result.HasMetadata = true;
@@ -296,6 +311,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (!string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid)))
             {
                 var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                ApplyLlmExternalProviderIdWrites(tmdbResult, externalIdResolutionResult);
                 this.ApplyLlmTextCompletion(tmdbResult, llmAssistResult);
                 return tmdbResult;
             }
@@ -364,9 +380,102 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             };
         }
 
+        private static MovieInfo CreateSafeLlmExternalIdLookupInfo(MovieInfo info)
+        {
+            var safePath = Config.LlmAllowRelativePathContext
+                ? LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Movie))
+                : string.Empty;
+
+            return new MovieInfo
+            {
+                Name = info.Name,
+                Path = safePath,
+                MetadataLanguage = info.MetadataLanguage,
+                MetadataCountryCode = info.MetadataCountryCode,
+                Year = info.Year,
+                ParentIndexNumber = info.ParentIndexNumber,
+                IndexNumber = info.IndexNumber,
+                IsAutomated = info.IsAutomated,
+                ProviderIds = info.ProviderIds == null ? null : new Dictionary<string, string>(info.ProviderIds, StringComparer.OrdinalIgnoreCase),
+            };
+        }
+
+        private static string? GetProviderIdWriteValue(LlmExternalIdResolutionResult result, string providerIdKey)
+        {
+            return result.ProviderIdWrites
+                .Where(write => IsMovieProviderIdWriteAllowed(write) && string.Equals(write.ProviderIdKey, providerIdKey, StringComparison.OrdinalIgnoreCase))
+                .Select(write => write.ProviderIdValue)
+                .FirstOrDefault();
+        }
+
+        private static void ApplyLlmExternalProviderIdWrites(MetadataResult<Movie> result, LlmExternalIdResolutionResult externalIdResolutionResult)
+        {
+            if (result.Item == null)
+            {
+                return;
+            }
+
+            ApplyLlmExternalProviderIdWrites(result.Item.ProviderIds, externalIdResolutionResult);
+        }
+
+        private static void ApplyLlmExternalProviderIdWrites(Dictionary<string, string> providerIds, LlmExternalIdResolutionResult externalIdResolutionResult)
+        {
+            foreach (var write in externalIdResolutionResult.ProviderIdWrites.Where(IsMovieProviderIdWriteAllowed))
+            {
+                if (providerIds.TryGetValue(write.ProviderIdKey, out var existingValue) && !string.IsNullOrWhiteSpace(existingValue))
+                {
+                    continue;
+                }
+
+                providerIds[write.ProviderIdKey] = write.ProviderIdValue;
+            }
+        }
+
+        private static bool IsMovieProviderIdWriteAllowed(LlmExternalIdProviderIdWrite write)
+        {
+            return string.Equals(write.MediaType, nameof(Movie), StringComparison.Ordinal)
+                && !string.Equals(write.ProviderIdKey, MetadataProvider.Tvdb.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+
         private static Dictionary<string, string>? CreateProviderIdPresenceOnlyCopy(Dictionary<string, string>? providerIds)
         {
             return providerIds?.Keys.ToDictionary(key => key, _ => "present", StringComparer.OrdinalIgnoreCase);
+        }
+
+        private async Task<LlmExternalIdResolutionResult> TryResolveMissingMovieProviderIdsWithLlmAsync(MovieInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
+        {
+            if (this.llmExternalIdResolutionService == null || !HasCompleteLlmConfiguration(Config))
+            {
+                return LlmExternalIdResolutionResult.NotTriggered("LlmConfigurationMissing");
+            }
+
+            var triggerDecision = this.llmAssistTriggerPolicy.Evaluate(new LlmAssistTriggerContext
+            {
+                Configuration = Config,
+                Semantic = semantic,
+                MediaType = nameof(Movie),
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+            });
+            if (!triggerDecision.ShouldTrigger)
+            {
+                return LlmExternalIdResolutionResult.NotTriggered(triggerDecision.Reason);
+            }
+
+            return await this.llmExternalIdResolutionService.ResolveAsync(
+                new LlmExternalIdResolutionRequest
+                {
+                    Configuration = Config,
+                    LookupInfo = CreateSafeLlmExternalIdLookupInfo(info),
+                    MediaType = nameof(Movie),
+                    Name = info.Name,
+                    Year = info.Year,
+                    Semantic = semantic,
+                    IsImageProvider = false,
+                    HttpContext = this.HttpContextAccessor.HttpContext,
+                    LibraryRoots = Array.Empty<string?>(),
+                },
+                cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<LlmScrapingAssistResult> TryAssistMovieMetadataWithLlmAsync(MovieInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)

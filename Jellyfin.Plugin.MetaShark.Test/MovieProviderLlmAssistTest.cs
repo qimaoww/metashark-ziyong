@@ -287,12 +287,233 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("correct overview", result.Item.Overview);
         }
 
+
+        [TestMethod]
+        public async Task GetMetadata_WhenColdStartLlmTextHintsThenVerifiedTmdbCandidate_UsesVerifiedTmdbCandidate()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            SeedDoubanSearchResults(doubanApi, "Wrong Cold Movie", Array.Empty<DoubanSubject>());
+            SeedDoubanSearchResults(doubanApi, "Correct Cold Movie", Array.Empty<DoubanSubject>());
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovieSearchResults(tmdbApi, "Correct Cold Movie", 2029, "zh-CN", Array.Empty<SearchMovie>());
+            SeedTmdbMovie(tmdbApi, 6101, "zh-CN", CreateTmdbMovie(6101, "Verified Cold Movie", 2029, overview: "TMDb verified cold overview"));
+            var textLlm = CreateSuccessfulLlm("Correct Cold Movie", 2029);
+            var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "6101"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmMetadataAssistService: textLlm,
+                llmExternalIdResolutionService: externalIdResolver);
+
+            var result = await provider.GetMetadata(CreateMovieInfo("Wrong Cold Movie", "/mnt/media/Movies/Correct Cold Movie/Correct Cold Movie.mkv", 2029), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, textLlm.Requests.Count);
+            Assert.AreEqual(1, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("6101", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("Tmdb_6101", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.AreEqual("Verified Cold Movie", result.Item.Name);
+            Assert.AreEqual("TMDb verified cold overview", result.Item.Overview);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenDoubanExistsButTmdbMissing_UsesVerifiedLlmTmdbCandidate()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("douban-without-tmdb", "Douban Existing Movie", 2030);
+            SeedDoubanSubject(doubanApi, subject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 6201, "zh-CN", CreateTmdbMovie(6201, "TMDb Supplemental Movie", 2030));
+            var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "6201"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Douban Existing Movie", "/mnt/media/Movies/Douban Existing Movie/Douban Existing Movie.mkv", 2030);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "douban-without-tmdb",
+                [MetaSharkPlugin.ProviderId] = "Douban_douban-without-tmdb",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("douban-without-tmdb", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("6201", result.Item.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenResolverReturnsTvdbMovieWrite_IgnoresWriteAndKeepsProviderIdsStable()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("tvdb-ignored-douban", "TVDB Ignored Movie", 2031);
+            SeedDoubanSubject(doubanApi, subject);
+            var tvdbWrite = new LlmExternalIdProviderIdWrite(
+                MetadataProvider.Tvdb.ToString(),
+                "TVDB",
+                "81189",
+                "Movie",
+                CreateCandidate("TVDB", "81189", "Movie"));
+            var externalIdResolver = CreateExternalIdResolverWithWrites(tvdbWrite);
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("TVDB Ignored Movie", "/mnt/media/Movies/TVDB Ignored Movie/TVDB Ignored Movie.mkv", 2031);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "tvdb-ignored-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_tvdb-ignored-douban",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("tvdb-ignored-douban", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("Douban_tvdb-ignored-douban", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tvdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenExistingTmdbIdPresent_DoesNotCallExternalIdResolverOrOverwrite()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("existing-tmdb-douban", "Existing TMDb Movie", 2032);
+            SeedDoubanSubject(doubanApi, subject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 6301, "zh-CN", CreateTmdbMovie(6301, "Existing TMDb Supplemental Movie", 2032));
+            var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "9999"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Existing TMDb Movie", "/mnt/media/Movies/Existing TMDb Movie/Existing TMDb Movie.mkv", 2032);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "existing-tmdb-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_existing-tmdb-douban",
+                [MetadataProvider.Tmdb.ToString()] = "6301",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("6301", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("existing-tmdb-douban", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_DoesNotCallExternalIdResolver_WhenAutomaticRefresh()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("automatic-id-douban", "Automatic ID Movie", 2033);
+            SeedDoubanSubject(doubanApi, subject);
+            var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "6401"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateAutomaticRefreshContextAccessor(),
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Automatic ID Movie", "/mnt/media/Movies/Automatic ID Movie/Automatic ID Movie.mkv", 2033);
+            info.IsAutomated = true;
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "automatic-id-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_automatic-id-douban",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsNull(result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_DoesNotCallExternalIdResolver_WhenUserRefreshHasNoHttpContext()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("null-http-id-douban", "Null Http ID Movie", 2035);
+            SeedDoubanSubject(doubanApi, subject);
+            var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "6601"));
+            var provider = CreateProvider(
+                loggerFactory,
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Null Http ID Movie", "/mnt/media/Movies/Null Http ID Movie/Null Http ID Movie.mkv", 2035);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "null-http-id-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_null-http-id-douban",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("null-http-id-douban", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_DoesNotCallExternalIdResolver_WhenOverwriteRefresh()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("overwrite-id-douban", "Overwrite ID Movie", 2034);
+            SeedDoubanSubject(doubanApi, subject);
+            var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "6501"));
+            var itemId = Guid.NewGuid();
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(itemId.ToString("N", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Overwrite ID Movie", "/mnt/media/Movies/Overwrite ID Movie/Overwrite ID Movie.mkv", 2034);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "overwrite-id-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_overwrite-id-douban",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsNull(result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
         private static MovieProvider CreateProvider(
             ILoggerFactory loggerFactory,
             IHttpContextAccessor? httpContextAccessor = null,
             DoubanApi? doubanApi = null,
             TmdbApi? tmdbApi = null,
-            ILlmMetadataAssistService? llmMetadataAssistService = null)
+            ILlmMetadataAssistService? llmMetadataAssistService = null,
+            ILlmExternalIdResolutionService? llmExternalIdResolutionService = null)
         {
             var libraryManager = new Mock<ILibraryManager>();
             return new MovieProvider(
@@ -305,7 +526,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 new OmdbApi(loggerFactory),
                 new ImdbApi(loggerFactory),
                 new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore(),
-                llmMetadataAssistService);
+                llmMetadataAssistService,
+                llmExternalIdResolutionService);
         }
 
         private static MovieInfo CreateMovieInfo(string name, string path, int? year)
@@ -330,6 +552,40 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 LlmApiKey = "sk-test-secret",
                 LlmAllowTextCompletion = allowTextCompletion,
                 LlmConfidenceThreshold = 0.75,
+            };
+        }
+
+        private static LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService CreateExternalIdResolverWithWrites(params LlmExternalIdProviderIdWrite[] writes)
+        {
+            var resolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            resolver.EnqueueResult(LlmExternalIdResolutionResult.Succeeded(
+                writes.Select(write => write.Candidate).ToArray(),
+                writes,
+                Array.Empty<LlmExternalIdProviderIdWrite>(),
+                "Succeeded"));
+            return resolver;
+        }
+
+        private static LlmExternalIdProviderIdWrite CreateProviderIdWrite(string providerIdKey, string provider, string providerIdValue)
+        {
+            return new LlmExternalIdProviderIdWrite(
+                providerIdKey,
+                provider,
+                providerIdValue,
+                "Movie",
+                CreateCandidate(provider, providerIdValue, "Movie"));
+        }
+
+        private static LlmExternalIdCandidate CreateCandidate(string provider, string id, string mediaType)
+        {
+            return new LlmExternalIdCandidate
+            {
+                Provider = provider,
+                Id = id,
+                MediaType = mediaType,
+                Confidence = 0.95,
+                Reason = "verified by test resolver",
+                Evidence = "provider id write plan",
             };
         }
 
