@@ -19,8 +19,17 @@ public class PluginConfiguration : BasePluginConfiguration
     public const int MAXSEARCHRESULT = 5;
     public const string DefaultScraperModeDefault = "default";
     public const string DefaultScraperModeTmdbOnly = "tmdb-only";
+    public const string LlmStructuredOutputModeJsonSchema = "json-schema";
+    public const string LlmStructuredOutputModeJsonObject = "json-object";
+    public const string LlmStructuredOutputModeTextJson = "text-json";
 
     private string? defaultScraperMode = DefaultScraperModeDefault;
+    private int llmTimeoutSeconds = 8;
+    private int llmMaxTokens = 512;
+    private double llmConfidenceThreshold = 0.75;
+    private double llmEpisodeGroupMappingMinConfidence = 0.80;
+    private int llmEpisodeGroupMappingMaxCandidateGroups = 8;
+    private string? llmStructuredOutputMode = LlmStructuredOutputModeJsonSchema;
 
     /// <summary>
     /// Gets 插件版本.
@@ -120,6 +129,96 @@ public class PluginConfiguration : BasePluginConfiguration
     public string TmdbEpisodeGroupMap { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets a value indicating whether LLM can suggest TMDB episode group mappings.
+    /// </summary>
+    public bool EnableLlmEpisodeGroupMappingAssist { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether LLM assisted scraping is enabled.
+    /// </summary>
+    public bool EnableLlmAssist { get; set; }
+
+    /// <summary>
+    /// Gets or sets the OpenAI-compatible LLM base URL.
+    /// </summary>
+    [SuppressMessage("Design", "CA1056:Uri properties should not be strings", Justification = "XML serialization in Jellyfin cannot handle System.Uri.")]
+    public string LlmBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the LLM API key.
+    /// </summary>
+    public string LlmApiKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the LLM model name.
+    /// </summary>
+    public string LlmModel { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the LLM request timeout in seconds.
+    /// </summary>
+    public int LlmTimeoutSeconds
+    {
+        get => this.llmTimeoutSeconds;
+        set => this.llmTimeoutSeconds = Math.Clamp(value, 1, 30);
+    }
+
+    /// <summary>
+    /// Gets or sets the maximum LLM output token count.
+    /// </summary>
+    public int LlmMaxTokens
+    {
+        get => this.llmMaxTokens;
+        set => this.llmMaxTokens = Math.Clamp(value, 64, 4096);
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether relative path context can be sent to LLM.
+    /// </summary>
+    public bool LlmAllowRelativePathContext { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether text completion output is allowed.
+    /// </summary>
+    public bool LlmAllowTextCompletion { get; set; }
+
+    /// <summary>
+    /// Gets or sets the minimum confidence threshold for LLM results.
+    /// </summary>
+    public double LlmConfidenceThreshold
+    {
+        get => this.llmConfidenceThreshold;
+        set => this.llmConfidenceThreshold = Math.Clamp(value, 0.0, 1.0);
+    }
+
+    /// <summary>
+    /// Gets or sets the minimum confidence threshold for LLM episode group mapping results.
+    /// </summary>
+    public double LlmEpisodeGroupMappingMinConfidence
+    {
+        get => this.llmEpisodeGroupMappingMinConfidence;
+        set => this.llmEpisodeGroupMappingMinConfidence = Math.Clamp(value, 0.0, 1.0);
+    }
+
+    /// <summary>
+    /// Gets or sets the maximum TMDB episode group candidates sent to LLM.
+    /// </summary>
+    public int LlmEpisodeGroupMappingMaxCandidateGroups
+    {
+        get => this.llmEpisodeGroupMappingMaxCandidateGroups;
+        set => this.llmEpisodeGroupMappingMaxCandidateGroups = Math.Clamp(value, 1, 50);
+    }
+
+    /// <summary>
+    /// Gets or sets the expected LLM structured output mode.
+    /// </summary>
+    public string LlmStructuredOutputMode
+    {
+        get => NormalizeLlmStructuredOutputMode(this.llmStructuredOutputMode);
+        set => this.llmStructuredOutputMode = NormalizeLlmStructuredOutputMode(value);
+    }
+
+    /// <summary>
     /// Gets or sets a value indicating whether to backfill default episode titles after search missing metadata.
     /// </summary>
     public bool EnableSearchMissingMetadataEpisodeTitleBackfill { get; set; }
@@ -176,6 +275,17 @@ public class PluginConfiguration : BasePluginConfiguration
             DefaultScraperModeTmdbOnly => DefaultScraperModeTmdbOnly,
             DefaultScraperModeDefault => DefaultScraperModeDefault,
             _ => DefaultScraperModeDefault,
+        };
+    }
+
+    private static string NormalizeLlmStructuredOutputMode(string? value)
+    {
+        return value switch
+        {
+            LlmStructuredOutputModeJsonSchema => LlmStructuredOutputModeJsonSchema,
+            LlmStructuredOutputModeJsonObject => LlmStructuredOutputModeJsonObject,
+            LlmStructuredOutputModeTextJson => LlmStructuredOutputModeTextJson,
+            _ => LlmStructuredOutputModeJsonSchema,
         };
     }
 }
