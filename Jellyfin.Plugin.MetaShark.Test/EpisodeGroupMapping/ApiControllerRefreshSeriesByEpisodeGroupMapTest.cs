@@ -190,6 +190,26 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             AssertQueuedSeries(harness.QueueCalls, firstMatch.Id, secondMatch.Id);
         }
 
+        [TestMethod]
+        public void RefreshSeriesByEpisodeGroupMap_LlmWrittenCanonicalMap_UsesExistingAddedMappingQueueSemantics()
+        {
+            var llmMappedSeries = CreateSeries(Guid.NewGuid(), "LLM mapped series", "65942");
+            var unaffected = CreateSeries(Guid.NewGuid(), "Series unaffected", "70000");
+            var llmWrittenMap = Jellyfin.Plugin.MetaShark.EpisodeGroupMapping.EpisodeGroupMapParser.Shared.GetCanonicalText("70000=group-b\n65942=candidate-group");
+
+            using var harness = CreateHarness(items: new[] { llmMappedSeries, unaffected });
+
+            var result = harness.Controller.RefreshSeriesByEpisodeGroupMap(new TmdbEpisodeGroupRefreshRequest
+            {
+                OldMapping = "70000=group-b",
+                NewMapping = llmWrittenMap,
+            });
+
+            Assert.AreEqual(1, result.Code);
+            Assert.AreEqual(CreateExpectedSummary(queued: 1, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
+            AssertQueuedSeries(harness.QueueCalls, llmMappedSeries.Id);
+        }
+
         private static Series CreateSeries(Guid id, string name, string tmdbId)
         {
             return new Series
