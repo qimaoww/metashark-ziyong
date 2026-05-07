@@ -15,6 +15,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
+    using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
@@ -26,9 +27,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
     public class SeasonProvider : BaseProvider, IRemoteMetadataProvider<Season, SeasonInfo>
     {
-        public SeasonProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi)
+        private readonly ILlmMetadataAssistService? llmMetadataAssistService;
+        private readonly LlmAssistTriggerPolicy llmAssistTriggerPolicy = new LlmAssistTriggerPolicy();
+        private readonly LlmMetadataMergePolicy llmMetadataMergePolicy = new LlmMetadataMergePolicy();
+
+        public SeasonProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILlmMetadataAssistService? llmMetadataAssistService = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<SeasonProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
+            this.llmMetadataAssistService = llmMetadataAssistService;
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -66,10 +72,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             {
                 if (!string.IsNullOrWhiteSpace(seriesTmdbId))
                 {
-                    return await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber, cancellationToken).ConfigureAwait(false);
+                    var tmdbOnlyResult = await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber, cancellationToken).ConfigureAwait(false);
+                    if (tmdbOnlyResult.HasMetadata)
+                    {
+                        return tmdbOnlyResult;
+                    }
+
                 }
 
-                return result;
+                return await this.TryGetLlmAssistedMetadataAsync(info, seasonNumber, semantic, result, cancellationToken).ConfigureAwait(false);
             }
 
             // seasonNumber 为 null 有三种情况：
@@ -130,14 +141,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (!string.IsNullOrWhiteSpace(seriesTmdbId) && seasonNumber.HasValue && seasonNumber >= 0)
             {
                 var tmdbResult = await this.GetMetadataByTmdb(info, seriesTmdbId, seasonNumber.Value, cancellationToken).ConfigureAwait(false);
-                if (tmdbResult != null)
+                if (tmdbResult != null && tmdbResult.HasMetadata)
                 {
                     return tmdbResult;
                 }
             }
 
             // 从豆瓣获取不到季信息
-            return result;
+            return await this.TryGetLlmAssistedMetadataAsync(info, seasonNumber, semantic, result, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<string?> GuessDoubanSeasonId(string? sid, string? seriesTmdbId, int? seasonNumber, ItemLookupInfo info, CancellationToken cancellationToken)
@@ -269,6 +280,70 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return result;
         }
 
+        private async Task<MetadataResult<Season>> TryGetLlmAssistedMetadataAsync(
+            SeasonInfo info,
+            int? seasonNumber,
+            DefaultScraperSemantic semantic,
+            MetadataResult<Season> fallbackResult,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(info);
+            ArgumentNullException.ThrowIfNull(fallbackResult);
+            if (this.llmMetadataAssistService == null || !Config.LlmAllowTextCompletion)
+            {
+                return fallbackResult;
+            }
+
+            var triggerDecision = this.llmAssistTriggerPolicy.Evaluate(new LlmAssistTriggerContext
+            {
+                Configuration = Config,
+                Semantic = semantic,
+                MediaType = nameof(Season),
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+            });
+            if (!triggerDecision.ShouldTrigger)
+            {
+                return fallbackResult;
+            }
+
+            var request = new LlmScrapingAssistRequest
+            {
+                Configuration = Config,
+                LookupInfo = CreateLlmLookupInfo(info),
+                MediaType = nameof(Season),
+                Semantic = semantic,
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+                LibraryRoots = Array.Empty<string?>(),
+            };
+            var assistResult = await this.llmMetadataAssistService.AssistAsync(request, cancellationToken).ConfigureAwait(false);
+
+            if (assistResult.Status != LlmScrapingAssistStatus.Succeeded || assistResult.Suggestion == null)
+            {
+                this.Log("季 LLM 辅助未生成可用元数据. name: {0} status: {1} diagnostic: {2}", info.Name, assistResult.Status, assistResult.Diagnostic);
+                return fallbackResult;
+            }
+
+            var llmResult = new MetadataResult<Season>
+            {
+                Item = new Season
+                {
+                    IndexNumber = seasonNumber,
+                },
+            };
+            var mergeResult = this.llmMetadataMergePolicy.Apply(llmResult, assistResult.Suggestion, Config);
+            if (!mergeResult.Applied)
+            {
+                this.Log("季 LLM 辅助跳过合并. name: {0} reason: {1}", info.Name, mergeResult.Reason);
+                return fallbackResult;
+            }
+
+            llmResult.HasMetadata = true;
+            this.Log("季 LLM 辅助已填充文本元数据. name: {0} fields: {1}", info.Name, string.Join(",", mergeResult.ChangedFields));
+            return llmResult;
+        }
+
         private static bool ShouldPreserveExistingSeasonTitle(string? currentSeasonTitle, string? seasonGroupName)
         {
             if (string.IsNullOrWhiteSpace(currentSeasonTitle) || string.IsNullOrWhiteSpace(seasonGroupName))
@@ -306,6 +381,31 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return hasAsciiLetter;
+        }
+
+        private static SeasonInfo CreateLlmLookupInfo(SeasonInfo info)
+        {
+            return new SeasonInfo
+            {
+                Name = info.Name,
+                Path = LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Season)),
+                MetadataLanguage = info.MetadataLanguage,
+                Year = info.Year,
+                IndexNumber = info.IndexNumber,
+                ParentIndexNumber = info.ParentIndexNumber,
+                ProviderIds = CreateProviderIdPresenceMap(info.ProviderIds),
+                SeriesProviderIds = CreateProviderIdPresenceMap(info.SeriesProviderIds),
+            };
+        }
+
+        private static Dictionary<string, string>? CreateProviderIdPresenceMap(Dictionary<string, string>? providerIds)
+        {
+            if (providerIds == null || providerIds.Count == 0)
+            {
+                return null;
+            }
+
+            return providerIds.Keys.ToDictionary(key => key, _ => "present", StringComparer.OrdinalIgnoreCase);
         }
 
         private static bool IsAsciiLetter(char c)
