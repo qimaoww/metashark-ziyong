@@ -75,7 +75,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             ReplacePluginConfiguration(CreateLlmConfiguration());
             using var loggerFactory = LoggerFactory.Create(builder => { });
             var llmService = new LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService();
-            var provider = CreateProvider(loggerFactory, LlmProviderFlowTestHelpers.CreateAutomaticRefreshContextAccessor(), llmService: llmService);
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            var provider = CreateProvider(loggerFactory, LlmProviderFlowTestHelpers.CreateAutomaticRefreshContextAccessor(), llmService: llmService, llmExternalIdResolutionService: externalIdService);
             var info = CreateSeriesInfo();
             info.IsAutomated = true;
 
@@ -83,6 +84,37 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsFalse(result.HasMetadata);
             Assert.AreEqual(0, llmService.Requests.Count);
+            Assert.AreEqual(0, externalIdService.Requests.Count);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_OverwriteRefresh_DoesNotCallExternalIdResolverOrEpisodeGroupMappingAssist()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 8870, "zh-CN", CreateTmdbSeries(8870, "覆盖剧集", "覆盖简介", null, null));
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "9999", "Series", MetadataProvider.Tmdb.ToString()));
+            var llmApi = new RecordingLlmApi("overwrite-group", 0.95);
+            var refreshCalls = new List<QueueRefreshCall>();
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                tmdbApi: tmdbApi,
+                llmEpisodeGroupMappingProviderAssistService: CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, Array.Empty<BaseItem>(), refreshCalls),
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("覆盖剧集");
+            info.ProviderIds![MetadataProvider.Tmdb.ToString()] = "8870";
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("8870", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual(0, externalIdService.Requests.Count);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+            Assert.AreEqual(0, refreshCalls.Count);
         }
 
         [TestMethod]
@@ -423,6 +455,298 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(0, refreshCalls.Count);
         }
 
+        [TestMethod]
+        public async Task GetMetadata_UserRefreshWithoutHttpContext_DoesNotCallExternalIdResolver()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var doubanSubject = CreateDoubanSubject("null-http-series-douban", "空上下文剧集", 2024);
+            SeedDoubanSubject(doubanApi, doubanSubject);
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "8871", "Series", MetadataProvider.Tmdb.ToString()));
+            var provider = CreateProvider(
+                loggerFactory,
+                new HttpContextAccessor { HttpContext = null },
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("空上下文剧集", "/mnt/media/TV/空上下文剧集");
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "null-http-series-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_null-http-series-douban",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdService.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("null-http-series-douban", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.IsTrue(string.IsNullOrWhiteSpace(result.Item.GetProviderId(MetadataProvider.Tmdb)));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_DoubanMetadataWithoutTmdbId_InvokesExternalIdResolverAndUsesVerifiedTmdb()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var doubanSubject = CreateDoubanSubject("1291843", "豆瓣已有剧集", 2024);
+            SeedDoubanSubject(doubanApi, doubanSubject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var tvShow = CreateTmdbSeries(8860, "豆瓣已有剧集", "TMDb 补充简介", "tt8860000", "886000");
+            tvShow.EpisodeGroups = new ResultContainer<TvGroupCollection>
+            {
+                Results = new List<TvGroupCollection>
+                {
+                    new TvGroupCollection
+                    {
+                        Id = "douban-verified-group",
+                        Name = "豆瓣补充映射组",
+                        Type = TvGroupType.Absolute,
+                        GroupCount = 1,
+                        EpisodeCount = 1,
+                    },
+                },
+            };
+            SeedTmdbSeries(tmdbApi, 8860, "zh-CN", tvShow);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(tmdbApi, "douban-verified-group", "zh-CN");
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "8860", "Series", MetadataProvider.Tmdb.ToString()));
+            var llmApi = new RecordingLlmApi("douban-verified-group", 0.95);
+            var mappedSeries = CreateSeries(Guid.NewGuid(), "豆瓣已有剧集", "8860");
+            var refreshCalls = new List<QueueRefreshCall>();
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(mappedSeries.Id.ToString("N", CultureInfo.InvariantCulture)),
+                libraryManager: CreateLibraryManager(new[] { mappedSeries }).Object,
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmEpisodeGroupMappingProviderAssistService: CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, new[] { mappedSeries }, refreshCalls),
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("豆瓣已有剧集", "/mnt/media/TV/豆瓣已有剧集");
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "1291843",
+                [MetaSharkPlugin.ProviderId] = "Douban_1291843",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdService.Requests.Count, "已有 Douban metadata 但缺 TMDb 时仍应尝试外部 ID 解析。 ");
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("1291843", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("8860", result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("8860", info.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("tt8860000", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("886000", result.Item.GetProviderId(MetadataProvider.Tvdb));
+            Assert.AreEqual(1, llmApi.Prompts.Count, "剧集组映射只能在已验证 TMDbId 写入后运行。 ");
+            AssertQueuedSeries(refreshCalls, mappedSeries.Id);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ExternalIdResolverRequest_CarriesExistingPublicProviderIdsAsContext()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var doubanSubject = CreateDoubanSubject("1291843", "上下文剧集", 2024);
+            SeedDoubanSubject(doubanApi, doubanSubject);
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(LlmExternalIdResolutionResult.VerificationFailed("test no verified candidate"));
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor("context"),
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("上下文剧集", "/mnt/media/Shows/上下文剧集");
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "1291843",
+                [MetadataProvider.Imdb.ToString()] = "tt0133093",
+                [MetadataProvider.Tvdb.ToString()] = "81189",
+                [MetaSharkPlugin.ProviderId] = "Douban_1291843",
+                ["apiKey"] = "sk-test-secret",
+            };
+
+            _ = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdService.Requests.Count);
+            var requestProviderIds = externalIdService.Requests[0].LookupInfo!.ProviderIds!;
+            Assert.AreEqual("1291843", requestProviderIds[BaseProvider.DoubanProviderId]);
+            Assert.AreEqual("tt0133093", requestProviderIds[MetadataProvider.Imdb.ToString()]);
+            Assert.AreEqual("81189", requestProviderIds[MetadataProvider.Tvdb.ToString()]);
+            Assert.IsFalse(requestProviderIds.ContainsKey(MetaSharkPlugin.ProviderId));
+            Assert.IsFalse(requestProviderIds.ContainsKey("apiKey"));
+            Assert.AreEqual("Shows/上下文剧集", externalIdService.Requests[0].LookupInfo!.Path);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ExternalIdResolverVerifiedTmdb_WritesMissingTmdbAndUsesTmdbMetadata()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 8861, "zh-CN", CreateTmdbSeries(8861, "解析剧集", "解析剧集简介", null, null));
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "8861", "Series", MetadataProvider.Tmdb.ToString()));
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor("resolver-tmdb"),
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("解析剧集", "/mnt/media/TV/解析剧集");
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdService.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("8861", info.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("8861", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("解析剧集", result.Item.Name);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ExistingTmdbId_DoesNotInvokeExternalIdResolverOrOverwrite()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration());
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 8862, "zh-CN", CreateTmdbSeries(8862, "已有 TMDb 剧集", "已有 TMDb 简介", null, null));
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "9999", "Series", MetadataProvider.Tmdb.ToString()));
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor("existing-tmdb"),
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("已有 TMDb 剧集", "/mnt/media/TV/已有 TMDb 剧集");
+            info.ProviderIds![MetadataProvider.Tmdb.ToString()] = "8862";
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdService.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("8862", info.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("8862", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_ExplicitSearchMissingVerifiedTmdb_InvokesEpisodeGroupMappingAfterResolution()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var tvShow = CreateTmdbSeries(8863, "缺失映射剧集", "缺失映射简介", null, null);
+            tvShow.EpisodeGroups = new ResultContainer<TvGroupCollection>
+            {
+                Results = new List<TvGroupCollection>
+                {
+                    new TvGroupCollection
+                    {
+                        Id = "resolved-group",
+                        Name = "解析映射组",
+                        Type = TvGroupType.Absolute,
+                        GroupCount = 1,
+                        EpisodeCount = 1,
+                    },
+                },
+            };
+            SeedTmdbSeries(tmdbApi, 8863, "zh-CN", tvShow);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(tmdbApi, "resolved-group", "zh-CN");
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "8863", "Series", MetadataProvider.Tmdb.ToString()));
+            var llmApi = new RecordingLlmApi("resolved-group", 0.95);
+            var mappedSeries = CreateSeries(Guid.NewGuid(), "缺失映射剧集", "8863");
+            var refreshCalls = new List<QueueRefreshCall>();
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(mappedSeries.Id.ToString("N", CultureInfo.InvariantCulture)),
+                libraryManager: CreateLibraryManager(new[] { mappedSeries }).Object,
+                tmdbApi: tmdbApi,
+                llmEpisodeGroupMappingProviderAssistService: CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, new[] { mappedSeries }, refreshCalls),
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("缺失映射剧集", "/mnt/media/TV/缺失映射剧集");
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("8863", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual(1, externalIdService.Requests.Count);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
+            AssertQueuedSeries(refreshCalls, mappedSeries.Id);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_FailedExternalIdResolver_DoesNotInvokeEpisodeGroupMapping()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true, enableTmdbMatch: false));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(LlmExternalIdResolutionResult.VerificationFailed("test unverified candidate"));
+            var llmApi = new RecordingLlmApi("unverified-group", 0.95);
+            var refreshCalls = new List<QueueRefreshCall>();
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor("failed-resolver"),
+                tmdbApi: tmdbApi,
+                llmEpisodeGroupMappingProviderAssistService: CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, Array.Empty<BaseItem>(), refreshCalls),
+                llmExternalIdResolutionService: externalIdService);
+
+            var result = await provider.GetMetadata(CreateSeriesInfo("未验证映射剧集"), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.HasMetadata);
+            Assert.AreEqual(1, externalIdService.Requests.Count);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+            Assert.AreEqual(0, refreshCalls.Count);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_UnverifiedExternalIdResolverWithExistingDouban_DoesNotInvokeEpisodeGroupMapping()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var doubanSubject = CreateDoubanSubject("1291844", "未验证豆瓣剧集", 2024);
+            SeedDoubanSubject(doubanApi, doubanSubject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(LlmExternalIdResolutionResult.VerificationFailed("test unverified tmdb candidate"));
+            var llmApi = new RecordingLlmApi("unverified-group", 0.95);
+            var refreshCalls = new List<QueueRefreshCall>();
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor("unverified-douban"),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmEpisodeGroupMappingProviderAssistService: CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, Array.Empty<BaseItem>(), refreshCalls),
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("未验证豆瓣剧集", "/mnt/media/TV/未验证豆瓣剧集");
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "1291844",
+                [MetaSharkPlugin.ProviderId] = "Douban_1291844",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("1291844", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual(1, externalIdService.Requests.Count);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+            Assert.AreEqual(0, refreshCalls.Count);
+        }
+
         private static SeriesProvider CreateProvider(
             ILoggerFactory loggerFactory,
             IHttpContextAccessor httpContextAccessor,
@@ -431,7 +755,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             TmdbApi? tmdbApi = null,
             IMovieSeriesPeopleOverwriteRefreshCandidateStore? store = null,
             LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService? llmService = null,
-            ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService = null)
+            ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService = null,
+            ILlmExternalIdResolutionService? llmExternalIdResolutionService = null)
         {
             return new SeriesProvider(
                 new DefaultHttpClientFactory(),
@@ -444,7 +769,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 new ImdbApi(loggerFactory),
                 store,
                 llmService,
-                llmEpisodeGroupMappingProviderAssistService);
+                llmEpisodeGroupMappingProviderAssistService,
+                llmExternalIdResolutionService);
         }
 
         private static LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService CreateLlmService(string title, int year)
@@ -473,7 +799,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return llmService;
         }
 
-        private static PluginConfiguration CreateLlmConfiguration(bool enableLlm = true, bool allowTextCompletion = false, bool enableEpisodeGroupMappingAssist = false)
+        private static PluginConfiguration CreateLlmConfiguration(bool enableLlm = true, bool allowTextCompletion = false, bool enableEpisodeGroupMappingAssist = false, string defaultScraperMode = PluginConfiguration.DefaultScraperModeDefault, bool enableTmdbMatch = true)
         {
             return new PluginConfiguration
             {
@@ -484,8 +810,28 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 LlmModel = "test-model",
                 LlmAllowTextCompletion = allowTextCompletion,
                 LlmConfidenceThreshold = 0.75,
-                EnableTmdbMatch = true,
+                EnableTmdbMatch = enableTmdbMatch,
+                DefaultScraperMode = defaultScraperMode,
             };
+        }
+
+        private static LlmExternalIdResolutionResult CreateExternalIdResolutionResult(string provider, string id, string mediaType, string providerIdKey)
+        {
+            var candidate = new LlmExternalIdCandidate
+            {
+                Provider = provider,
+                Id = id,
+                MediaType = mediaType,
+                Confidence = 0.95,
+                Reason = "test verified candidate",
+                Evidence = "test verified evidence",
+            };
+
+            return LlmExternalIdResolutionResult.Succeeded(
+                new[] { candidate },
+                new[] { new LlmExternalIdProviderIdWrite(providerIdKey, provider, id, mediaType, candidate) },
+                Array.Empty<LlmExternalIdProviderIdWrite>(),
+                "test verified");
         }
 
         private static Series CreateSeries(Guid id, string name, string tmdbId)
@@ -634,6 +980,27 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 this.Prompts.Add(prompt);
                 return Task.FromResult(LlmApiResult.Succeeded($"{{\"selectedGroupId\":\"{this.selectedGroupId}\",\"confidence\":{this.confidence.ToString(CultureInfo.InvariantCulture)},\"reason\":\"test\"}}"));
+            }
+        }
+
+        private sealed class RecordingLlmExternalIdResolutionService : ILlmExternalIdResolutionService
+        {
+            private readonly Queue<LlmExternalIdResolutionResult> queuedResults = new Queue<LlmExternalIdResolutionResult>();
+
+            public List<LlmExternalIdResolutionRequest> Requests { get; } = new List<LlmExternalIdResolutionRequest>();
+
+            public void EnqueueResult(LlmExternalIdResolutionResult result)
+            {
+                this.queuedResults.Enqueue(result);
+            }
+
+            public Task<LlmExternalIdResolutionResult> ResolveAsync(LlmExternalIdResolutionRequest request, CancellationToken cancellationToken)
+            {
+                this.Requests.Add(request);
+                var result = this.queuedResults.Count > 0
+                    ? this.queuedResults.Dequeue()
+                    : LlmExternalIdResolutionResult.NotTriggered("No queued external ID test result.");
+                return Task.FromResult(result);
             }
         }
 

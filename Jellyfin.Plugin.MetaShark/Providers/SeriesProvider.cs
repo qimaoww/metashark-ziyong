@@ -6,6 +6,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics.CodeAnalysis;
     using System.Globalization;
     using System.Linq;
     using System.Net.Http;
@@ -30,17 +31,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using TMDbLib.Objects.TvShows;
     using MetadataProvider = MediaBrowser.Model.Entities.MetadataProvider;
 
+    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Keep provider orchestration helpers near the flow they support.")]
     public class SeriesProvider : BaseProvider, IRemoteMetadataProvider<Series, SeriesInfo>
     {
         private readonly ILlmMetadataAssistService? llmMetadataAssistService;
+        private readonly ILlmExternalIdResolutionService? llmExternalIdResolutionService;
         private readonly ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService;
         private readonly IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore;
 
-        public SeriesProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService = null)
+        public SeriesProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService = null, ILlmExternalIdResolutionService? llmExternalIdResolutionService = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<SeriesProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.movieSeriesPeopleOverwriteRefreshCandidateStore = movieSeriesPeopleOverwriteRefreshCandidateStore ?? InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared;
             this.llmMetadataAssistService = llmMetadataAssistService;
+            this.llmExternalIdResolutionService = llmExternalIdResolutionService;
             this.llmEpisodeGroupMappingProviderAssistService = llmEpisodeGroupMappingProviderAssistService;
         }
 
@@ -152,6 +156,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
             var hasTmdbMeta = !string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary);
             var hasDoubanMeta = !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid);
+            var llmExternalIdResolutionResult = LlmExternalIdResolutionResult.NotTriggered("TmdbProviderIdPresent");
+            var tmdbIdResolvedByLlmExternalIds = false;
+            if (string.IsNullOrWhiteSpace(tmdbId))
+            {
+                llmExternalIdResolutionResult = await this.TryResolveSeriesExternalIdsWithLlmAsync(info, semantic, cancellationToken).ConfigureAwait(false);
+                ApplyLlmExternalIdWrites(info, llmExternalIdResolutionResult);
+                var resolvedTmdbId = GetSeriesTmdbIdFromLlmExternalIdWrites(llmExternalIdResolutionResult);
+                if (!string.IsNullOrWhiteSpace(resolvedTmdbId))
+                {
+                    tmdbId = resolvedTmdbId;
+                    tmdbIdResolvedByLlmExternalIds = true;
+                }
+            }
+
             var llmAssistResult = LlmScrapingAssistResult.NotTriggered("AuthoritativeMetadataPresent");
             if (!hasDoubanMeta && !hasTmdbMeta)
             {
@@ -223,6 +241,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     if (!string.IsNullOrEmpty(tmdbId))
                     {
                         var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                        ApplyLlmExternalIdWrites(tmdbFallbackResult, llmExternalIdResolutionResult);
                         ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
                         return tmdbFallbackResult;
                     }
@@ -259,11 +278,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
 
                 // 搜索匹配tmdbId
-                var newTmdbId = await this.FindTmdbId(seriesName, subject.Imdb, subject.Year, info, cancellationToken).ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(newTmdbId))
+                if (!tmdbIdResolvedByLlmExternalIds)
                 {
-                    tmdbId = newTmdbId;
-                    item.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+                    var newTmdbId = await this.FindTmdbId(seriesName, subject.Imdb, subject.Year, info, cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(newTmdbId))
+                    {
+                        tmdbId = newTmdbId;
+                        item.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+                    }
                 }
 
                 if (!string.IsNullOrEmpty(tmdbId))
@@ -281,6 +303,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         item.OfficialRating = officialRating;
                     }
                 }
+
+                ApplyLlmExternalIdWrites(item, llmExternalIdResolutionResult);
 
                 result.Item = item;
                 result.QueriedById = true;
@@ -305,6 +329,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     await this.TryAssistEpisodeGroupMappingWithLlmAsync(tmdbId, tmdbResult.Item?.Name, info, semantic, cancellationToken).ConfigureAwait(false);
                 }
 
+                ApplyLlmExternalIdWrites(tmdbResult, llmExternalIdResolutionResult);
                 ApplyLlmTextCompletion(tmdbResult, llmAssistResult);
                 return tmdbResult;
             }
@@ -373,9 +398,134 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             };
         }
 
+        private static SeriesInfo CreateSafeLlmExternalIdSeriesLookupInfo(SeriesInfo info)
+        {
+            var safePath = Config.LlmAllowRelativePathContext
+                ? LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Series))
+                : string.Empty;
+
+            return new SeriesInfo
+            {
+                Name = info.Name,
+                Path = safePath,
+                MetadataLanguage = info.MetadataLanguage,
+                MetadataCountryCode = info.MetadataCountryCode,
+                Year = info.Year,
+                ParentIndexNumber = info.ParentIndexNumber,
+                IndexNumber = info.IndexNumber,
+                IsAutomated = info.IsAutomated,
+                ProviderIds = CreatePublicProviderIdCopy(info.ProviderIds),
+            };
+        }
+
         private static Dictionary<string, string>? CreateProviderIdPresenceOnlyCopy(Dictionary<string, string>? providerIds)
         {
             return providerIds?.Keys.ToDictionary(key => key, _ => "present", StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static Dictionary<string, string>? CreatePublicProviderIdCopy(Dictionary<string, string>? providerIds)
+        {
+            if (providerIds == null)
+            {
+                return null;
+            }
+
+            var copy = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var providerId in providerIds)
+            {
+                if (TryNormalizePublicProviderIdKey(providerId.Key, out var key))
+                {
+                    copy[key] = providerId.Value;
+                }
+            }
+
+            return copy;
+        }
+
+        private static bool TryNormalizePublicProviderIdKey(string key, out string normalizedKey)
+        {
+            if (string.Equals(key, MetadataProvider.Tmdb.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedKey = MetadataProvider.Tmdb.ToString();
+                return true;
+            }
+
+            if (string.Equals(key, MetadataProvider.Imdb.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedKey = MetadataProvider.Imdb.ToString();
+                return true;
+            }
+
+            if (string.Equals(key, MetadataProvider.Tvdb.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedKey = MetadataProvider.Tvdb.ToString();
+                return true;
+            }
+
+            if (string.Equals(key, DoubanProviderId, StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedKey = DoubanProviderId;
+                return true;
+            }
+
+            normalizedKey = string.Empty;
+            return false;
+        }
+
+        private static string? GetSeriesTmdbIdFromLlmExternalIdWrites(LlmExternalIdResolutionResult resolutionResult)
+        {
+            return resolutionResult.ProviderIdWrites
+                .FirstOrDefault(write => string.Equals(write.ProviderIdKey, MetadataProvider.Tmdb.ToString(), StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(write.MediaType, nameof(Series), StringComparison.Ordinal))
+                ?.ProviderIdValue;
+        }
+
+        private static void ApplyLlmExternalIdWrites(ItemLookupInfo info, LlmExternalIdResolutionResult resolutionResult)
+        {
+            if (resolutionResult.ProviderIdWrites.Count == 0)
+            {
+                return;
+            }
+
+            var providerIds = info.ProviderIds ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var write in resolutionResult.ProviderIdWrites)
+            {
+                if (!string.Equals(write.MediaType, nameof(Series), StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (providerIds.TryGetValue(write.ProviderIdKey, out var existingValue) && !string.IsNullOrWhiteSpace(existingValue))
+                {
+                    continue;
+                }
+
+                providerIds[write.ProviderIdKey] = write.ProviderIdValue;
+            }
+        }
+
+        private static void ApplyLlmExternalIdWrites(MetadataResult<Series> result, LlmExternalIdResolutionResult resolutionResult)
+        {
+            if (result.Item != null && result.HasMetadata)
+            {
+                ApplyLlmExternalIdWrites(result.Item, resolutionResult);
+            }
+        }
+
+        private static void ApplyLlmExternalIdWrites(Series series, LlmExternalIdResolutionResult resolutionResult)
+        {
+            foreach (var write in resolutionResult.ProviderIdWrites)
+            {
+                if (!string.Equals(write.MediaType, nameof(Series), StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(series.GetProviderId(write.ProviderIdKey)))
+                {
+                    series.SetProviderId(write.ProviderIdKey, write.ProviderIdValue);
+                }
+            }
         }
 
         private static void ApplyLlmTextCompletion(MetadataResult<Series> result, LlmScrapingAssistResult llmAssistResult)
@@ -414,6 +564,42 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     Configuration = Config,
                     LookupInfo = CreateSafeLlmSeriesLookupInfo(info),
                     MediaType = nameof(Series),
+                    Semantic = semantic,
+                    IsImageProvider = false,
+                    HttpContext = this.HttpContextAccessor.HttpContext,
+                    LibraryRoots = Array.Empty<string?>(),
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<LlmExternalIdResolutionResult> TryResolveSeriesExternalIdsWithLlmAsync(SeriesInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
+        {
+            if (this.llmExternalIdResolutionService == null || !HasCompleteLlmConfiguration(Config))
+            {
+                return LlmExternalIdResolutionResult.NotTriggered("LlmConfigurationMissing");
+            }
+
+            var triggerDecision = new LlmAssistTriggerPolicy().Evaluate(new LlmAssistTriggerContext
+            {
+                Configuration = Config,
+                Semantic = semantic,
+                MediaType = nameof(Series),
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+            });
+            if (!triggerDecision.ShouldTrigger)
+            {
+                return LlmExternalIdResolutionResult.NotTriggered(triggerDecision.Reason);
+            }
+
+            return await this.llmExternalIdResolutionService.ResolveAsync(
+                new LlmExternalIdResolutionRequest
+                {
+                    Configuration = Config,
+                    LookupInfo = CreateSafeLlmExternalIdSeriesLookupInfo(info),
+                    MediaType = nameof(Series),
+                    Name = info.Name,
+                    Year = info.Year,
                     Semantic = semantic,
                     IsImageProvider = false,
                     HttpContext = this.HttpContextAccessor.HttpContext,
