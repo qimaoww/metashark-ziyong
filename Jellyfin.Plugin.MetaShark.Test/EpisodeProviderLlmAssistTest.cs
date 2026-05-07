@@ -73,10 +73,32 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             using var harness = CreateHarness(httpContext: LlmProviderFlowTestHelpers.CreateAutomaticRefreshHttpContext(), isAutomated: true, allowTextCompletion: true);
             harness.LlmService.EnqueueResult(CreateSuccessResult(title: "启程"));
+            harness.ExternalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "456", "Series", null));
 
             var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.AreEqual(0, harness.LlmService.Requests.Count);
+            Assert.AreEqual(0, harness.ExternalIdService.Requests.Count);
+            Assert.AreEqual("第 1 集", result.Item!.Name);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenOverwriteRefresh_DoesNotCallExternalIdResolverOrEpisodeGroupMappingAssist()
+        {
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(TestItemIdString(), replaceAllMetadata: true),
+                allowTextCompletion: true,
+                allowEpisodeGroupMappingAssist: true);
+            harness.LlmService.EnqueueResult(CreateSuccessResult(title: "启程"));
+            harness.ExternalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "456", "Series", null));
+            harness.LlmEpisodeGroupMappingApi.Enqueue("candidate-group", 0.95);
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, harness.LlmService.Requests.Count);
+            Assert.AreEqual(0, harness.ExternalIdService.Requests.Count);
+            Assert.AreEqual(0, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
+            Assert.AreEqual(0, harness.QueueRefreshCalls.Count);
             Assert.AreEqual("第 1 集", result.Item!.Name);
         }
 
@@ -131,11 +153,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             using var harness = CreateHarness(httpContext: null, currentEpisodeTitle: "第 1 集", tmdbEpisodeName: "皇后回宫", allowTextCompletion: true);
             harness.LlmService.EnqueueResult(CreateSuccessResult(title: "启程"));
+            harness.ExternalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "456", "Series", null));
 
             var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
             var candidate = harness.TitleCandidateStore.Peek(harness.Episode.Id);
 
             Assert.AreEqual(0, harness.LlmService.Requests.Count);
+            Assert.AreEqual(0, harness.ExternalIdService.Requests.Count);
             Assert.AreEqual("皇后回宫", result.Item!.Name);
             Assert.IsNotNull(candidate, "隐式 scheduled fallback 仍应沿用既有 title backfill 兼容语义。 ");
             Assert.AreEqual("皇后回宫", candidate!.CandidateTitle);
@@ -346,13 +370,140 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_WhenSeriesTmdbMissingAndManualMatch_UsesVerifiedParentForCurrentLookupAndGroupMappingOnly()
+        {
+            var mappedSeries = new Series
+            {
+                Id = Guid.NewGuid(),
+                Name = "Series A",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tmdb.ToString()] = "456",
+                },
+            };
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateManualMatchHttpContext(TestItemIdString()),
+                seriesProviderIds: new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tvdb.ToString()] = "321",
+                    [BaseProvider.DoubanProviderId] = "1291843",
+                    [MetaSharkPlugin.ProviderId] = "Douban_1291843",
+                    ["apiKey"] = "sk-test-secret",
+                },
+                allowEpisodeGroupMappingAssist: true,
+                seriesForRefresh: mappedSeries);
+            harness.ExternalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "456", "Series", null));
+            SeedSeriesEpisodeGroupCandidate(harness.TmdbApi, "456", "zh-CN", "resolved-parent-group");
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(harness.TmdbApi, "resolved-parent-group", "zh-CN");
+            harness.LlmEpisodeGroupMappingApi.Enqueue("resolved-parent-group", 0.95);
+            SeedEpisode(harness.TmdbApi, 456, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "解析父级后命中单集",
+                VoteAverage = 8.1,
+                AirDate = new DateTime(2024, 5, 1),
+            });
+            SeedEpisodeTranslationOverview(harness.TmdbApi, 456, 1, 1, "zh-CN", null);
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("解析父级后命中单集", result.Item!.Name);
+            Assert.AreEqual(1, harness.ExternalIdService.Requests.Count);
+            AssertSafeEpisodeExternalIdRequest(harness.ExternalIdService.Requests.Single());
+            Assert.IsFalse(harness.Info.SeriesProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString()), "EpisodeProvider 不应把解析到的父级 TMDbId 写回 SeriesProviderIds。 ");
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb), "只有父级解析成功时不应写 Episode TMDbId。 ");
+            Assert.AreEqual(1, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
+            Assert.AreEqual("456=resolved-parent-group", MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
+            AssertQueuedSeries(harness.QueueRefreshCalls, mappedSeries.Id);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenSeriesTmdbMissingAndSearchMissingResolverFails_KeepsEarlyReturnAndWritesNoIds()
+        {
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(TestItemIdString()),
+                seriesProviderIds: new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tvdb.ToString()] = "321",
+                });
+            harness.ExternalIdService.EnqueueResult(LlmExternalIdResolutionResult.VerificationFailed("test unverified parent"));
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("第 1 集", result.Item!.Name);
+            Assert.AreEqual(1, harness.ExternalIdService.Requests.Count);
+            Assert.IsFalse(harness.Info.SeriesProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString()));
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tvdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenSeriesTmdbMissingAndResolverFails_DoesNotInvokeEpisodeGroupMappingAssist()
+        {
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateManualMatchHttpContext(TestItemIdString()),
+                seriesProviderIds: new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tvdb.ToString()] = "321",
+                },
+                allowEpisodeGroupMappingAssist: true);
+            harness.ExternalIdService.EnqueueResult(LlmExternalIdResolutionResult.VerificationFailed("test unverified parent"));
+            harness.LlmEpisodeGroupMappingApi.Enqueue("unverified-group", 0.95);
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("第 1 集", result.Item!.Name);
+            Assert.AreEqual(1, harness.ExternalIdService.Requests.Count);
+            Assert.AreEqual(0, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
+            Assert.AreEqual(0, harness.QueueRefreshCalls.Count);
+            Assert.IsFalse(harness.Info.SeriesProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString()));
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenVerifiedEpisodeWriteMatchesCurrentEpisode_AppliesOnlyMissingEpisodeIds()
+        {
+            using var harness = CreateHarness(httpContext: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(TestItemIdString()));
+            var episodeTmdbWrite = CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "9001", "Episode");
+            var episodeTvdbWrite = CreateProviderIdWrite(MetadataProvider.Tvdb.ToString(), "TVDB", "7001", "Episode");
+            harness.ExternalIdService.EnqueueResult(LlmExternalIdResolutionResult.Succeeded(
+                new[] { episodeTmdbWrite.Candidate, episodeTvdbWrite.Candidate },
+                new[] { episodeTmdbWrite, episodeTvdbWrite },
+                Array.Empty<LlmExternalIdProviderIdWrite>(),
+                "episode verified"));
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, harness.ExternalIdService.Requests.Count);
+            Assert.AreEqual("9001", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("7001", result.Item.GetProviderId(MetadataProvider.Tvdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenEpisodeIdVerificationFails_DoesNotWriteEpisodeProviderIds()
+        {
+            using var harness = CreateHarness(httpContext: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(TestItemIdString()));
+            harness.ExternalIdService.EnqueueResult(LlmExternalIdResolutionResult.VerificationFailed("TMDb episode detail did not match the same series, season, and episode", CreateCandidate("TMDb", "9999", "Episode")));
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, harness.ExternalIdService.Requests.Count);
+            Assert.IsNull(result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tvdb));
+        }
+
+        [TestMethod]
         public async Task GetMetadata_WhenAutomaticRefresh_DoesNotInvokeEpisodeGroupMappingAssist()
         {
             using var harness = CreateHarness(httpContext: LlmProviderFlowTestHelpers.CreateAutomaticRefreshHttpContext(), isAutomated: true, allowEpisodeGroupMappingAssist: true);
             harness.LlmEpisodeGroupMappingApi.Enqueue("candidate-group", 0.95);
+            harness.ExternalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "456", "Series", null));
 
             _ = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
 
+            Assert.AreEqual(0, harness.ExternalIdService.Requests.Count);
             Assert.AreEqual(0, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
             Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
             Assert.AreEqual(0, harness.QueueRefreshCalls.Count);
@@ -374,7 +525,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             int indexNumber = 1,
             Dictionary<string, string>? seriesProviderIds = null,
             bool allowEpisodeGroupMappingAssist = false,
-            Series? seriesForRefresh = null)
+            Series? seriesForRefresh = null,
+            LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService? externalIdResolutionService = null)
         {
             EnsurePluginInstance();
             var configuration = MetaSharkPlugin.Instance!.Configuration;
@@ -405,6 +557,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 indexNumber,
                 seriesProviderIds,
                 seriesForRefresh,
+                externalIdResolutionService,
                 LoggerFactory.Create(builder => { }));
         }
 
@@ -458,6 +611,22 @@ namespace Jellyfin.Plugin.MetaShark.Test
             LlmProviderFlowTestHelpers.AssertNoSensitiveContent(request, result, lookup.Path, lookup.Name, lookup.SeriesDisplayOrder);
         }
 
+        private static void AssertSafeEpisodeExternalIdRequest(LlmExternalIdResolutionRequest request)
+        {
+            Assert.IsInstanceOfType(request.LookupInfo, typeof(EpisodeInfo));
+            var lookup = (EpisodeInfo)request.LookupInfo!;
+            Assert.AreEqual("Episode", request.MediaType);
+            Assert.AreEqual("TV/Series A/Season 01/S01E01.mkv", lookup.Path);
+            Assert.AreEqual(1, lookup.ParentIndexNumber);
+            Assert.AreEqual(1, lookup.IndexNumber);
+            Assert.AreEqual("321", lookup.SeriesProviderIds![MetadataProvider.Tvdb.ToString()]);
+            Assert.AreEqual("1291843", lookup.SeriesProviderIds[BaseProvider.DoubanProviderId]);
+            Assert.IsFalse(lookup.SeriesProviderIds.ContainsKey(MetaSharkPlugin.ProviderId));
+            Assert.IsFalse(lookup.SeriesProviderIds.ContainsKey("apiKey"));
+            Assert.AreEqual("tt1234567", lookup.ProviderIds![MetadataProvider.Imdb.ToString()]);
+            LlmProviderFlowTestHelpers.AssertNoSensitiveContent(lookup.Path, lookup.Name, request.Name);
+        }
+
         private static EpisodeProvider CreateProvider(
             ILibraryManager libraryManager,
             IHttpContextAccessor httpContextAccessor,
@@ -467,6 +636,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             IEpisodeOverviewCleanupCandidateStore overviewCleanupCandidateStore,
             ILlmMetadataAssistService llmMetadataAssistService,
             ILlmEpisodeGroupMappingProviderAssistService llmEpisodeGroupMappingProviderAssistService,
+            ILlmExternalIdResolutionService llmExternalIdResolutionService,
             ILoggerFactory loggerFactory)
         {
             return new EpisodeProvider(
@@ -482,7 +652,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 titleBackfillCandidateStore,
                 overviewCleanupCandidateStore,
                 llmMetadataAssistService,
-                llmEpisodeGroupMappingProviderAssistService);
+                llmEpisodeGroupMappingProviderAssistService,
+                llmExternalIdResolutionService);
         }
 
         private static EpisodeInfo CreateEpisodeInfo(int parentIndexNumber, int indexNumber, bool isAutomated, bool isMissingEpisode, Dictionary<string, string>? seriesProviderIds)
@@ -505,7 +676,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 },
                 ProviderIds = new Dictionary<string, string>
                 {
-                    [MetadataProvider.Tmdb.ToString()] = "episode-tmdb-id",
+                    [MetadataProvider.Imdb.ToString()] = "tt1234567",
                 },
             };
         }
@@ -540,6 +711,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         Value = overview,
                         SourceLanguage = language,
                     });
+        }
+
+        private static LlmExternalIdResolutionResult CreateExternalIdResolutionResult(string provider, string id, string mediaType, string? providerIdKey)
+        {
+            var candidate = CreateCandidate(provider, id, mediaType);
+            var writes = providerIdKey == null
+                ? Array.Empty<LlmExternalIdProviderIdWrite>()
+                : new[] { new LlmExternalIdProviderIdWrite(providerIdKey, provider, id, mediaType, candidate) };
+            return LlmExternalIdResolutionResult.Succeeded(new[] { candidate }, writes, Array.Empty<LlmExternalIdProviderIdWrite>(), "test verified");
+        }
+
+        private static LlmExternalIdProviderIdWrite CreateProviderIdWrite(string providerIdKey, string provider, string providerIdValue, string mediaType)
+        {
+            return new LlmExternalIdProviderIdWrite(providerIdKey, provider, providerIdValue, mediaType, CreateCandidate(provider, providerIdValue, mediaType));
+        }
+
+        private static LlmExternalIdCandidate CreateCandidate(string provider, string id, string mediaType)
+        {
+            return new LlmExternalIdCandidate
+            {
+                Provider = provider,
+                Id = id,
+                MediaType = mediaType,
+                Confidence = 0.95,
+                Reason = "test verified candidate",
+                Evidence = "test verified evidence",
+            };
         }
 
         private static void EnsurePluginInstance()
@@ -618,11 +816,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 int indexNumber,
                 Dictionary<string, string>? seriesProviderIds,
                 Series? seriesForRefresh,
+                LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService? externalIdResolutionService,
                 ILoggerFactory loggerFactory)
             {
                 this.TitleCandidateStore = new InMemoryEpisodeTitleBackfillCandidateStore();
                 this.OverviewCleanupCandidateStore = new InMemoryEpisodeOverviewCleanupCandidateStore();
                 this.LlmService = new RecordingLlmService();
+                this.ExternalIdService = externalIdResolutionService ?? new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
                 this.LlmEpisodeGroupMappingApi = new RecordingEpisodeGroupMappingLlmApi();
                 this.QueueRefreshCalls = new List<QueueRefreshCall>();
                 this.Info = CreateEpisodeInfo(parentIndexNumber, indexNumber, isAutomated, isMissingEpisode, seriesProviderIds);
@@ -649,7 +849,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 this.HttpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
                 var tmdbApi = new TmdbApi(loggerFactory);
                 this.TmdbApi = tmdbApi;
-                SeedSeriesEpisodeGroupCandidate(tmdbApi, this.Info.SeriesProviderIds[MetadataProvider.Tmdb.ToString()], this.Info.MetadataLanguage, "candidate-group");
+                if (this.Info.SeriesProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var seriesTmdbId))
+                {
+                    SeedSeriesEpisodeGroupCandidate(tmdbApi, seriesTmdbId, this.Info.MetadataLanguage, "candidate-group");
+                }
+
                 if (tmdbEpisodeName != null || tmdbEpisodeOverview != null)
                 {
                     SeedEpisode(tmdbApi, 123, parentIndexNumber, indexNumber, "zh-CN", "zh-CN", new TvEpisode
@@ -672,6 +876,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     this.OverviewCleanupCandidateStore,
                     this.LlmService,
                     this.CreateEpisodeGroupMappingProviderAssistService(loggerFactory, tmdbApi),
+                    this.ExternalIdService,
                     loggerFactory);
             }
 
@@ -680,6 +885,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             public InMemoryEpisodeOverviewCleanupCandidateStore OverviewCleanupCandidateStore { get; }
 
             public RecordingLlmService LlmService { get; }
+
+            public LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService ExternalIdService { get; }
 
             public RecordingEpisodeGroupMappingLlmApi LlmEpisodeGroupMappingApi { get; }
 
