@@ -14,7 +14,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
+    using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
     using Jellyfin.Plugin.MetaShark.Model;
+    using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using Jellyfin.Plugin.MetaShark.Workers;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.TV;
@@ -30,12 +32,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
     public class SeriesProvider : BaseProvider, IRemoteMetadataProvider<Series, SeriesInfo>
     {
+        private readonly ILlmMetadataAssistService? llmMetadataAssistService;
+        private readonly ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService;
         private readonly IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore;
 
-        public SeriesProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null)
+        public SeriesProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<SeriesProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.movieSeriesPeopleOverwriteRefreshCandidateStore = movieSeriesPeopleOverwriteRefreshCandidateStore ?? InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared;
+            this.llmMetadataAssistService = llmMetadataAssistService;
+            this.llmEpisodeGroupMappingProviderAssistService = llmEpisodeGroupMappingProviderAssistService;
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -146,19 +152,56 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
             var hasTmdbMeta = !string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary);
             var hasDoubanMeta = !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid);
+            var llmAssistResult = LlmScrapingAssistResult.NotTriggered("AuthoritativeMetadataPresent");
+            if (!hasDoubanMeta && !hasTmdbMeta)
+            {
+                llmAssistResult = await this.TryAssistSeriesMetadataWithLlmAsync(info, semantic, cancellationToken).ConfigureAwait(false);
+            }
+
             this.Log("开始获取剧集元数据. name: {0} fileName: {1} metaSource: {2} enableTmdb: {3}", info.Name, fileName, metaSource, Config.EnableTmdb);
             if (!hasDoubanMeta && !hasTmdbMeta)
             {
+                var llmSearchHints = llmAssistResult.SearchHints;
+                var preferLlmSearchHints = ShouldPreferLlmSeriesSearchHints(info, fileName, llmSearchHints);
+
                 // 自动扫描搜索匹配元数据
                 if (doubanAllowed)
                 {
-                    sid = await this.GuessByDoubanAsync(info, cancellationToken).ConfigureAwait(false);
+                    if (preferLlmSearchHints)
+                    {
+                        sid = await this.GuessByDoubanWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (string.IsNullOrEmpty(sid))
+                    {
+                        sid = await this.GuessByDoubanAsync(info, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (string.IsNullOrEmpty(sid) && !preferLlmSearchHints)
+                    {
+                        sid = await this.GuessByDoubanWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
+                    }
+
                     effectiveSid = sid;
                 }
 
                 if (string.IsNullOrEmpty(effectiveSid) && string.IsNullOrEmpty(tmdbId) && Config.EnableTmdbMatch)
                 {
-                    tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
+                    if (preferLlmSearchHints)
+                    {
+                        tmdbId = await this.GuessByTmdbWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (string.IsNullOrEmpty(tmdbId))
+                    {
+                        tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (string.IsNullOrEmpty(tmdbId) && !preferLlmSearchHints)
+                    {
+                        tmdbId = await this.GuessByTmdbWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
+                    }
+
                     if (!string.IsNullOrEmpty(tmdbId))
                     {
                         metaSource = MetaSource.Tmdb;
@@ -179,7 +222,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                     if (!string.IsNullOrEmpty(tmdbId))
                     {
-                        return await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                        var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                        ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
+                        return tmdbFallbackResult;
                     }
 
                     return result;
@@ -224,6 +269,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 if (!string.IsNullOrEmpty(tmdbId))
                 {
                     await this.TryPopulateTvExternalIdsFromTmdbAsync(item, tmdbId, info, cancellationToken).ConfigureAwait(false);
+                    await this.TryAssistEpisodeGroupMappingWithLlmAsync(tmdbId, item.Name, info, semantic, cancellationToken).ConfigureAwait(false);
                 }
 
                 // 通过imdb获取电影分级信息
@@ -246,16 +292,209 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
                 }
 
+                ApplyLlmTextCompletion(result, llmAssistResult);
+
                 return result;
             }
 
             if (!string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid)))
             {
-                return await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                if (tmdbResult.HasMetadata)
+                {
+                    await this.TryAssistEpisodeGroupMappingWithLlmAsync(tmdbId, tmdbResult.Item?.Name, info, semantic, cancellationToken).ConfigureAwait(false);
+                }
+
+                ApplyLlmTextCompletion(tmdbResult, llmAssistResult);
+                return tmdbResult;
             }
 
             this.Log("剧集匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
             return result;
+        }
+
+        private static bool HasCompleteLlmConfiguration(Configuration.PluginConfiguration configuration)
+        {
+            return configuration.EnableLlmAssist
+                && !string.IsNullOrWhiteSpace(configuration.LlmBaseUrl)
+                && !string.IsNullOrWhiteSpace(configuration.LlmModel)
+                && !string.IsNullOrWhiteSpace(configuration.LlmApiKey);
+        }
+
+        private static bool ShouldPreferLlmSeriesSearchHints(SeriesInfo info, string fileName, LlmSearchHints searchHints)
+        {
+            if (!searchHints.HasHints)
+            {
+                return false;
+            }
+
+            if (searchHints.Year.HasValue && info.Year.HasValue && Math.Abs(searchHints.Year.Value - info.Year.Value) > 1)
+            {
+                return true;
+            }
+
+            var hintTitle = NormalizeLlmHintText(searchHints.Title);
+            if (hintTitle == null)
+            {
+                return false;
+            }
+
+            return IsDifferentNonEmptyText(hintTitle, info.Name) && IsDifferentNonEmptyText(hintTitle, fileName);
+        }
+
+        private static bool IsDifferentNonEmptyText(string value, string? other)
+        {
+            var normalizedOther = NormalizeLlmHintText(other);
+            return normalizedOther != null && !string.Equals(value, normalizedOther, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string? NormalizeLlmHintText(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+
+        private static SeriesInfo CreateSafeLlmSeriesLookupInfo(SeriesInfo info)
+        {
+            var safePath = Config.LlmAllowRelativePathContext
+                ? LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), "Series")
+                : string.Empty;
+
+            return new SeriesInfo
+            {
+                Name = info.Name,
+                Path = safePath,
+                MetadataLanguage = info.MetadataLanguage,
+                MetadataCountryCode = info.MetadataCountryCode,
+                Year = info.Year,
+                ParentIndexNumber = info.ParentIndexNumber,
+                IndexNumber = info.IndexNumber,
+                IsAutomated = info.IsAutomated,
+                ProviderIds = CreateProviderIdPresenceOnlyCopy(info.ProviderIds),
+            };
+        }
+
+        private static Dictionary<string, string>? CreateProviderIdPresenceOnlyCopy(Dictionary<string, string>? providerIds)
+        {
+            return providerIds?.Keys.ToDictionary(key => key, _ => "present", StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static void ApplyLlmTextCompletion(MetadataResult<Series> result, LlmScrapingAssistResult llmAssistResult)
+        {
+            if (result.Item == null || !result.HasMetadata || llmAssistResult.Status != LlmScrapingAssistStatus.Succeeded)
+            {
+                return;
+            }
+
+            _ = new LlmMetadataMergePolicy().Apply(result, llmAssistResult.Suggestion, Config);
+        }
+
+        private async Task<LlmScrapingAssistResult> TryAssistSeriesMetadataWithLlmAsync(SeriesInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
+        {
+            if (this.llmMetadataAssistService == null || !HasCompleteLlmConfiguration(Config))
+            {
+                return LlmScrapingAssistResult.NotTriggered("LlmConfigurationMissing");
+            }
+
+            var triggerDecision = new LlmAssistTriggerPolicy().Evaluate(new LlmAssistTriggerContext
+            {
+                Configuration = Config,
+                Semantic = semantic,
+                MediaType = nameof(Series),
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+            });
+            if (!triggerDecision.ShouldTrigger)
+            {
+                return LlmScrapingAssistResult.NotTriggered(triggerDecision.Reason);
+            }
+
+            return await this.llmMetadataAssistService.AssistAsync(
+                new LlmScrapingAssistRequest
+                {
+                    Configuration = Config,
+                    LookupInfo = CreateSafeLlmSeriesLookupInfo(info),
+                    MediaType = nameof(Series),
+                    Semantic = semantic,
+                    IsImageProvider = false,
+                    HttpContext = this.HttpContextAccessor.HttpContext,
+                    LibraryRoots = Array.Empty<string?>(),
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<string?> GuessByDoubanWithLlmHintsAsync(LlmSearchHints searchHints, ItemLookupInfo info, CancellationToken cancellationToken)
+        {
+            var title = NormalizeLlmHintText(searchHints.Title);
+            if (title == null)
+            {
+                return null;
+            }
+
+            var year = searchHints.Year;
+            this.Log("使用 LLM 提示搜索 Douban 剧集. title: {0} year: {1}", title, year);
+
+            if (Config.EnableDoubanAvoidRiskControl && year != null && year > 0)
+            {
+                var suggestResults = await this.DoubanApi.SearchBySuggestAsync(title, cancellationToken).ConfigureAwait(false);
+                var suggestMatch = suggestResults.FirstOrDefault(x => x.Year == year && string.Equals(x.Name, title, StringComparison.OrdinalIgnoreCase))
+                    ?? suggestResults.FirstOrDefault(x => x.Year == year);
+                if (suggestMatch != null)
+                {
+                    this.Log("已通过 LLM 提示找到 Douban id（suggest）. name: {0} sid: {1}", suggestMatch.Name, suggestMatch.Sid);
+                    return suggestMatch.Sid;
+                }
+            }
+
+            var results = await this.DoubanApi.SearchAsync(title, cancellationToken).ConfigureAwait(false);
+            var item = year != null && year > 0
+                ? results.FirstOrDefault(x => x.Category == "电视剧" && x.Year == year)
+                : results.FirstOrDefault(x => x.Category == "电视剧");
+            if (item == null)
+            {
+                return null;
+            }
+
+            this.Log("已通过 LLM 提示找到 Douban id. name: {0} sid: {1}", item.Name, item.Sid);
+            return item.Sid;
+        }
+
+        private async Task<string?> GuessByTmdbWithLlmHintsAsync(LlmSearchHints searchHints, ItemLookupInfo info, CancellationToken cancellationToken)
+        {
+            var title = NormalizeLlmHintText(searchHints.Title);
+            if (title == null)
+            {
+                return null;
+            }
+
+            this.Log("使用 LLM 提示搜索 TMDb 剧集. title: {0} year: {1}", title, searchHints.Year);
+            return await this.GuestByTmdbAsync(title, searchHints.Year, info, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task TryAssistEpisodeGroupMappingWithLlmAsync(string? tmdbId, string? seriesTitle, SeriesInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
+        {
+            if (this.llmEpisodeGroupMappingProviderAssistService == null
+                || !int.TryParse(tmdbId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seriesTmdbId))
+            {
+                return;
+            }
+
+            var safePath = Config.LlmAllowRelativePathContext
+                ? LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Series))
+                : string.Empty;
+            await this.llmEpisodeGroupMappingProviderAssistService.SuggestWriteAndRefreshAsync(
+                    new LlmEpisodeGroupMappingProviderAssistRequest
+                    {
+                        Configuration = Config,
+                        SeriesTmdbId = seriesTmdbId,
+                        SeriesTitle = string.IsNullOrWhiteSpace(seriesTitle) ? info.Name : seriesTitle,
+                        MetadataLanguage = info.MetadataLanguage,
+                        MediaType = nameof(Series),
+                        Semantic = semantic,
+                        HttpContext = this.HttpContextAccessor.HttpContext,
+                        SafeRelativePathSamples = string.IsNullOrWhiteSpace(safePath) ? Array.Empty<string?>() : new[] { safePath },
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
         private static bool TryResolveItemIdFromRequestPath(HttpContext? httpContext, out Guid itemId)
