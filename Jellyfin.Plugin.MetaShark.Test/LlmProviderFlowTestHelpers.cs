@@ -134,6 +134,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+        public static void AssertNoSensitiveContent(params string?[] texts)
+        {
+            foreach (var text in texts)
+            {
+                AssertNoSensitiveContent(text);
+            }
+        }
+
         private static HttpContext CreateRefreshHttpContext(string itemId, string metadataRefreshMode, bool replaceAllMetadata)
         {
             var context = new DefaultHttpContext();
@@ -141,6 +149,28 @@ namespace Jellyfin.Plugin.MetaShark.Test
             context.Request.Path = $"/Items/{itemId}/Refresh";
             context.Request.QueryString = new QueryString($"?metadataRefreshMode={metadataRefreshMode}&replaceAllMetadata={replaceAllMetadata.ToString().ToLowerInvariant()}");
             return context;
+        }
+
+
+        internal sealed class RecordingLlmExternalIdResolutionService : ILlmExternalIdResolutionService
+        {
+            private readonly Queue<LlmExternalIdResolutionResult> queuedResults = new Queue<LlmExternalIdResolutionResult>();
+
+            public List<LlmExternalIdResolutionRequest> Requests { get; } = new List<LlmExternalIdResolutionRequest>();
+
+            public void EnqueueResult(LlmExternalIdResolutionResult result)
+            {
+                this.queuedResults.Enqueue(result);
+            }
+
+            public Task<LlmExternalIdResolutionResult> ResolveAsync(LlmExternalIdResolutionRequest request, CancellationToken cancellationToken)
+            {
+                this.Requests.Add(request);
+                var result = this.queuedResults.Count > 0
+                    ? this.queuedResults.Dequeue()
+                    : LlmExternalIdResolutionResult.NotTriggered("No queued test result.");
+                return Task.FromResult(result);
+            }
         }
 
         internal sealed class RecordingLlmMetadataAssistService : ILlmMetadataAssistService
