@@ -17,7 +17,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System.Xml.Linq;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
+    using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
     using Jellyfin.Plugin.MetaShark.Model;
+    using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using Jellyfin.Plugin.MetaShark.Workers;
     using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
     using MediaBrowser.Controller.Entities.TV;
@@ -58,19 +60,29 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private readonly MemoryCache memoryCache;
         private readonly EpisodeTitleBackfillCoordinator? episodeTitleBackfillCoordinator;
         private readonly IEpisodeOverviewCleanupCandidateStore? episodeOverviewCleanupCandidateStore;
+        private readonly ILlmMetadataAssistService? llmMetadataAssistService;
+        private readonly ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService;
+        private readonly LlmAssistTriggerPolicy llmAssistTriggerPolicy = new LlmAssistTriggerPolicy();
         private readonly TvdbApi tvdbApi;
 
-        public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi, IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore = null)
-            : this(httpClientFactory, loggerFactory, libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi, tvdbApi, episodeTitleBackfillCandidateStore, null)
+        public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi, IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore)
+            : this(httpClientFactory, loggerFactory, libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi, tvdbApi, episodeTitleBackfillCandidateStore, null, null, null)
         {
         }
 
-        public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi, IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore, IEpisodeOverviewCleanupCandidateStore? episodeOverviewCleanupCandidateStore)
+        public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi, IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null)
+            : this(httpClientFactory, loggerFactory, libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi, tvdbApi, episodeTitleBackfillCandidateStore, null, llmMetadataAssistService, null)
+        {
+        }
+
+        public EpisodeProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, TvdbApi tvdbApi, IEpisodeTitleBackfillCandidateStore? episodeTitleBackfillCandidateStore, IEpisodeOverviewCleanupCandidateStore? episodeOverviewCleanupCandidateStore, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<EpisodeProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
             this.episodeTitleBackfillCoordinator = episodeTitleBackfillCandidateStore != null ? new EpisodeTitleBackfillCoordinator(episodeTitleBackfillCandidateStore, this.Logger) : null;
             this.episodeOverviewCleanupCandidateStore = episodeOverviewCleanupCandidateStore;
+            this.llmMetadataAssistService = llmMetadataAssistService;
+            this.llmEpisodeGroupMappingProviderAssistService = llmEpisodeGroupMappingProviderAssistService;
             this.tvdbApi = tvdbApi;
         }
 
@@ -145,6 +157,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var episodeItem = this.LibraryManager.FindByPath(info.Path, false) as Episode;
             var httpContext = this.HttpContextAccessor.HttpContext;
+            var semantic = this.ResolveMetadataSemantic(info);
+            var suppressLlmForImplicitSearchMissingFallback = semantic == DefaultScraperSemantic.UserRefresh
+                && httpContext == null
+                && EpisodeTitleBackfillRefreshClassifier.ShouldFallbackSearchMissingMetadataRefresh(originalMetadataTitle, episodeItem?.Name);
             var metadataRefreshMode = httpContext?.Request.Query["metadataRefreshMode"].ToString();
             var replaceAllMetadata = httpContext?.Request.Query["replaceAllMetadata"].ToString();
             if (string.IsNullOrWhiteSpace(replaceAllMetadata))
@@ -154,6 +170,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var requestedMetadataLanguage = info.MetadataLanguage ?? episodeItem?.GetPreferredMetadataLanguage();
             var titleMetadataLanguage = ResolveEpisodeTargetMetadataLanguage(requestedMetadataLanguage);
+
+            if (!suppressLlmForImplicitSearchMissingFallback)
+            {
+                await this.TryAssistEpisodeGroupMappingWithLlmAsync(seriesTmdbId, info, semantic, cancellationToken).ConfigureAwait(false);
+            }
 
             var episodeResult = await this.GetEpisodeAsync(
                     seriesTmdbId.ToInt(),
@@ -218,6 +239,25 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 IndexNumber = episodeNumber,
                 ParentIndexNumber = seasonNumber,
             };
+
+            if (!suppressLlmForImplicitSearchMissingFallback)
+            {
+                (effectiveProviderTitle, overviewDecision) = await this.TryApplyLlmEpisodeAssistAsync(
+                        info,
+                        originalMetadataTitle,
+                        semantic,
+                        titleMetadataLanguage,
+                        titleResolution,
+                        effectiveProviderTitle,
+                        detailsOverview,
+                        translationOverview,
+                        overviewDecision,
+                        seriesOverview,
+                        seasonOverview,
+                        httpContext,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             item.Overview = overviewDecision.Overview;
 
@@ -811,6 +851,201 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return (detailsTitle, translationTitle, translationTitle);
+        }
+
+        private async Task<(EpisodeLocalizedValue? EffectiveProviderTitle, (string? Overview, string? ResultLanguage) OverviewDecision)> TryApplyLlmEpisodeAssistAsync(
+            EpisodeInfo info,
+            string? originalMetadataTitle,
+            DefaultScraperSemantic semantic,
+            string? titleMetadataLanguage,
+            (EpisodeLocalizedValue? DetailsTitle, EpisodeLocalizedValue? TranslationTitle, EpisodeLocalizedValue? EffectiveProviderTitle) titleResolution,
+            EpisodeLocalizedValue? effectiveProviderTitle,
+            EpisodeLocalizedValue? detailsOverview,
+            EpisodeLocalizedValue? translationOverview,
+            (string? Overview, string? ResultLanguage) overviewDecision,
+            string? seriesOverview,
+            string? seasonOverview,
+            HttpContext? httpContext,
+            CancellationToken cancellationToken)
+        {
+            if (this.llmMetadataAssistService == null)
+            {
+                return (effectiveProviderTitle, overviewDecision);
+            }
+
+            var triggerDecision = this.llmAssistTriggerPolicy.Evaluate(new LlmAssistTriggerContext
+            {
+                Configuration = Config,
+                Semantic = semantic,
+                MediaType = nameof(Episode),
+                IsImageProvider = false,
+                HttpContext = httpContext,
+            });
+            if (!triggerDecision.ShouldTrigger)
+            {
+                return (effectiveProviderTitle, overviewDecision);
+            }
+
+            var assistResult = await this.llmMetadataAssistService.AssistAsync(
+                new LlmScrapingAssistRequest
+                {
+                    Configuration = Config,
+                    LookupInfo = CreateLlmEpisodeLookupInfo(info, originalMetadataTitle, titleResolution, detailsOverview, translationOverview, overviewDecision),
+                    MediaType = nameof(Episode),
+                    Semantic = semantic,
+                    IsImageProvider = false,
+                    HttpContext = httpContext,
+                    LibraryRoots = Array.Empty<string?>(),
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (assistResult.Status != LlmScrapingAssistStatus.Succeeded
+                || assistResult.Suggestion == null
+                || !IsHighConfidenceLlmSuggestion(assistResult.Suggestion))
+            {
+                this.Log("单集 LLM 辅助未生成可用元数据. name: {0} status: {1} diagnostic: {2}", info.Name, assistResult.Status, assistResult.Diagnostic);
+                return (effectiveProviderTitle, overviewDecision);
+            }
+
+            if (!Config.LlmAllowTextCompletion)
+            {
+                return (effectiveProviderTitle, overviewDecision);
+            }
+
+            var suggestion = assistResult.Suggestion;
+            if (IsMissingOrGenericEpisodeProviderTitle(effectiveProviderTitle?.Value)
+                && !string.IsNullOrWhiteSpace(suggestion.Title))
+            {
+                effectiveProviderTitle = CreateEpisodeLocalizedValue(suggestion.Title.Trim(), ResolveLlmTextCompletionSourceLanguage(titleMetadataLanguage, info.MetadataLanguage));
+            }
+
+            if (string.IsNullOrWhiteSpace(overviewDecision.Overview)
+                && !string.IsNullOrWhiteSpace(suggestion.Overview))
+            {
+                var llmOverviewDecision = ResolveEpisodeOverviewPersistence(ResolveLlmTextCompletionSourceLanguage(titleMetadataLanguage, info.MetadataLanguage), suggestion.Overview, seriesOverview, seasonOverview);
+                if (llmOverviewDecision.Overview != null)
+                {
+                    overviewDecision = llmOverviewDecision;
+                }
+            }
+
+            return (effectiveProviderTitle, overviewDecision);
+        }
+
+        private static EpisodeInfo CreateLlmEpisodeLookupInfo(
+            EpisodeInfo info,
+            string? originalMetadataTitle,
+            (EpisodeLocalizedValue? DetailsTitle, EpisodeLocalizedValue? TranslationTitle, EpisodeLocalizedValue? EffectiveProviderTitle) titleResolution,
+            EpisodeLocalizedValue? detailsOverview,
+            EpisodeLocalizedValue? translationOverview,
+            (string? Overview, string? ResultLanguage) overviewDecision)
+        {
+            var relativePath = LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Episode));
+            return new EpisodeInfo
+            {
+                Name = string.IsNullOrWhiteSpace(originalMetadataTitle) ? info.Name : originalMetadataTitle.Trim(),
+                Path = relativePath,
+                MetadataLanguage = info.MetadataLanguage,
+                Year = info.Year,
+                ParentIndexNumber = info.ParentIndexNumber,
+                IndexNumber = info.IndexNumber,
+                SeriesDisplayOrder = BuildLlmEpisodeContextDisplayOrder(info.SeriesDisplayOrder, originalMetadataTitle, titleResolution, detailsOverview, translationOverview, overviewDecision),
+                ProviderIds = CreateProviderIdPresenceMap(info.ProviderIds),
+                SeriesProviderIds = CreateProviderIdPresenceMap(info.SeriesProviderIds),
+            };
+        }
+
+        private static string BuildLlmEpisodeContextDisplayOrder(
+            string? seriesDisplayOrder,
+            string? originalMetadataTitle,
+            (EpisodeLocalizedValue? DetailsTitle, EpisodeLocalizedValue? TranslationTitle, EpisodeLocalizedValue? EffectiveProviderTitle) titleResolution,
+            EpisodeLocalizedValue? detailsOverview,
+            EpisodeLocalizedValue? translationOverview,
+            (string? Overview, string? ResultLanguage) overviewDecision)
+        {
+            return string.Join(
+                "; ",
+                string.IsNullOrWhiteSpace(seriesDisplayOrder) ? "DisplayOrder=default" : $"DisplayOrder={seriesDisplayOrder.Trim()}",
+                $"GenericTitle={IsDefaultJellyfinEpisodeTitle(originalMetadataTitle)}",
+                $"ProviderTitleState={ResolveLlmTextState(titleResolution.EffectiveProviderTitle?.Value)}",
+                $"ProviderTitleGeneric={IsGenericTmdbEpisodeTitle(titleResolution.EffectiveProviderTitle?.Value)}",
+                $"ProviderOverviewState={ResolveLlmTextState(overviewDecision.Overview)}",
+                $"ExternalCandidateSummary=TMDb(detailsTitle:{ResolveLlmTextState(titleResolution.DetailsTitle?.Value)},translationTitle:{ResolveLlmTextState(titleResolution.TranslationTitle?.Value)},detailsOverview:{ResolveLlmTextState(detailsOverview?.Value)},translationOverview:{ResolveLlmTextState(translationOverview?.Value)})");
+        }
+
+        private static Dictionary<string, string>? CreateProviderIdPresenceMap(Dictionary<string, string>? providerIds)
+        {
+            if (providerIds == null || providerIds.Count == 0)
+            {
+                return null;
+            }
+
+            return providerIds.Keys.ToDictionary(key => key, _ => "present", StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static LlmEpisodeDistributionItem[] CreateSingleEpisodeDistribution(EpisodeInfo info)
+        {
+            return info.ParentIndexNumber.HasValue
+                ? new[]
+                {
+                    new LlmEpisodeDistributionItem
+                    {
+                        SeasonNumber = info.ParentIndexNumber.Value,
+                        EpisodeCount = 1,
+                    },
+                }
+                : Array.Empty<LlmEpisodeDistributionItem>();
+        }
+
+        private async Task TryAssistEpisodeGroupMappingWithLlmAsync(string? seriesTmdbIdText, EpisodeInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
+        {
+            if (this.llmEpisodeGroupMappingProviderAssistService == null
+                || !int.TryParse(seriesTmdbIdText, out var seriesTmdbId))
+            {
+                return;
+            }
+
+            var safePath = Config.LlmAllowRelativePathContext
+                ? LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Episode))
+                : string.Empty;
+            await this.llmEpisodeGroupMappingProviderAssistService.SuggestWriteAndRefreshAsync(
+                    new LlmEpisodeGroupMappingProviderAssistRequest
+                    {
+                        Configuration = Config,
+                        SeriesTmdbId = seriesTmdbId,
+                        SeriesTitle = info.Name,
+                        MetadataLanguage = info.MetadataLanguage,
+                        MediaType = nameof(Episode),
+                        Semantic = semantic,
+                        HttpContext = this.HttpContextAccessor.HttpContext,
+                        SafeRelativePathSamples = string.IsNullOrWhiteSpace(safePath) ? Array.Empty<string?>() : new[] { safePath },
+                        EpisodeDistribution = CreateSingleEpisodeDistribution(info),
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        private static bool IsHighConfidenceLlmSuggestion(LlmScrapingSuggestion suggestion)
+        {
+            return suggestion.Confidence >= Config.LlmConfidenceThreshold;
+        }
+
+        private static bool IsMissingOrGenericEpisodeProviderTitle(string? title)
+        {
+            return string.IsNullOrWhiteSpace(title) || IsGenericTmdbEpisodeTitle(title);
+        }
+
+        private static string? ResolveLlmTextCompletionSourceLanguage(string? titleMetadataLanguage, string? lookupLanguage)
+        {
+            return string.Equals(titleMetadataLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(lookupLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase)
+                ? "zh-CN"
+                : null;
+        }
+
+        private static string ResolveLlmTextState(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? "missing" : "present";
         }
 
 #pragma warning disable CA1848
