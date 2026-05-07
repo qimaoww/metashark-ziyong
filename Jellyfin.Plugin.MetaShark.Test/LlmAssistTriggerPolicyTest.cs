@@ -52,12 +52,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void Evaluate_AllowsUserRefreshWhenJellyfinRunsQueuedRefreshWithoutHttpContext()
+        public void Evaluate_RejectsUserRefreshWithoutHttpContext()
         {
             var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Series", null);
 
-            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
-            Assert.AreEqual("UserRefreshWithoutHttpContext", decision.Reason);
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("ImplicitRefreshRejected", decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_RejectsAutomatedScheduledQueueRefresh()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.AutomaticRefresh, "Series", null);
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("AutomaticRefreshRejected", decision.Reason);
         }
 
         [TestMethod]

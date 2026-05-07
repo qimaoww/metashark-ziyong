@@ -56,11 +56,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 return LlmAssistTriggerDecision.Allowed("ExplicitUserRefresh");
             }
 
-            if (context.Semantic == DefaultScraperSemantic.UserRefresh && context.HttpContext == null)
-            {
-                return LlmAssistTriggerDecision.Allowed("UserRefreshWithoutHttpContext");
-            }
-
             return LlmAssistTriggerDecision.Rejected("ImplicitRefreshRejected");
         }
 
