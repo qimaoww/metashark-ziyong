@@ -21,6 +21,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     using Microsoft.Extensions.Logging;
     using TMDbLib.Objects.TvShows;
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Keep orchestration flow before helper methods.")]
     public sealed class LlmEpisodeGroupMappingProviderAssistService : ILlmEpisodeGroupMappingProviderAssistService
     {
         private static readonly Action<ILogger, int, Exception?> LogQueuedRefresh =
