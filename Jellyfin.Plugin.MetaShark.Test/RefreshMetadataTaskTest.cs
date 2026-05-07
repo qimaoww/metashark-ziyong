@@ -89,6 +89,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Assert.AreEqual(MetadataRefreshMode.FullRefresh, queueCalls[0].Options.ImageRefreshMode);
                 Assert.IsFalse(queueCalls[0].Options.ReplaceAllMetadata);
                 Assert.IsFalse(queueCalls[0].Options.ReplaceAllImages);
+                Assert.IsTrue(queueCalls[0].Options.IsAutomated);
 
                 LogAssert.AssertLoggedOnce(loggerStub, LogLevel.Information, expectException: false, originalFormatContains: "[MetaShark] 开始刷新待重新刮削条目", messageContains: ["[MetaShark] 开始刷新待重新刮削条目"]);
                 LogAssert.AssertLoggedOnce(

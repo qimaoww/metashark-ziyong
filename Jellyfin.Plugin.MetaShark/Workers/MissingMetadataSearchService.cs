@@ -219,6 +219,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 ImageRefreshMode = MetadataRefreshMode.FullRefresh,
                 ReplaceAllMetadata = replaceAllMetadata,
                 ReplaceAllImages = false,
+                IsAutomated = true,
             };
         }
 

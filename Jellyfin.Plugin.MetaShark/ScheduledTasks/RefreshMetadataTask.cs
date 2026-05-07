@@ -115,6 +115,7 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
                     ImageRefreshMode = MetadataRefreshMode.FullRefresh,
                     ReplaceAllMetadata = false,
                     ReplaceAllImages = false,
+                    IsAutomated = true,
                 };
 
                 this.providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.Normal);

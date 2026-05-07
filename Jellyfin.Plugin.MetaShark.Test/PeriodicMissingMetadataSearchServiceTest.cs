@@ -864,6 +864,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(MetadataRefreshMode.FullRefresh, options.ImageRefreshMode);
             Assert.AreEqual(expectedReplaceAllMetadata, options.ReplaceAllMetadata);
             Assert.IsFalse(options.ReplaceAllImages);
+            Assert.IsTrue(options.IsAutomated);
         }
 
         private sealed class ProgressRecorder : IProgress<double>
