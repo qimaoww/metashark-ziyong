@@ -40,8 +40,9 @@ https://github.com/qimaoww/metashark-ziyong/releases/download/manifest/manifest.
 - `特别篇插入`：开启后可按 TVDB airs before/after 规则，将 Season 0 特别篇插入对应季内。
 - `缺失元数据回填`：用于在元数据缺失时补回剧集标题、简介等字段。
 - `图片补全与回填`：用于在图片缺失或部分来源不可用时继续补全相关图片信息。
-- `LLM 辅助刮削`：默认关闭，不是独立元数据源；只会在手动识别、手动刷新或搜索缺失元数据等需要重新查询元数据的流程中按配置尝试调用。
-- LLM 请求只发送相对媒体路径和必要摘要，不发送完整本地路径、API Key、cookie 或 token；启用前请自行评估费用、隐私和网络风险。
+- `LLM 辅助刮削`：默认关闭，不是独立元数据源；只会在手动识别、手动刷新或搜索缺失元数据等需要重新查询元数据的流程中按配置尝试调用，自动扫描、自动刷新、计划任务、媒体库扫描后任务和覆盖刷新不会触发。
+- LLM 外部 ID 辅助解析没有单独开关，复用 `LLM 辅助刮削` 开关和同一触发范围，可把已有公开 ProviderIds（IMDb、TVDB、Douban、TMDb）作为上下文发送给 LLM。LLM 只能提出外部 ID 候选，也可能明确返回无候选；候选 ID 必须再经对应 API 或来源验证才会写入。只补写缺失的 ProviderIds，已有 ID 不会被覆盖。
+- LLM 请求只发送相对媒体路径、公开 ProviderIds 和必要摘要，不发送完整本地路径、服务器 URL、Jellyfin 私有标识、API Key、cookie 或 token；启用前请自行评估费用、隐私和网络风险。
 - OpenAI 兼容 Base URL 需要填写到 `/v1` 级别，例如 `https://api.example.com/v1`。
 - `LLM 辅助建议 TMDb 剧集组映射`：默认关闭，只能从 TMDb 返回的候选剧集组中选择，不承诺一定匹配正确。
 

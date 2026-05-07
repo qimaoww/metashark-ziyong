@@ -138,6 +138,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(string.Empty, configuration.LlmModel);
         }
 
+        [TestMethod]
+        public void ShouldNotExposeSeparateExternalIdResolutionSwitch()
+        {
+            var property = typeof(PluginConfiguration).GetProperty("EnableLlmExternalIdResolution", BindingFlags.Public | BindingFlags.Instance);
+
+            Assert.IsNull(property, "外部 ID 辅助解析复用 EnableLlmAssist，不应暴露未实现的独立开关。 ");
+        }
+
         private static void AssertProperty(string propertyName, Type expectedType, object expectedDefault, PluginConfiguration configuration)
         {
             var property = typeof(PluginConfiguration).GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
