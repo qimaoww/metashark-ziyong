@@ -8,6 +8,8 @@ namespace Jellyfin.Plugin.MetaShark
     using System.IO;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
+    using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
+    using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using Jellyfin.Plugin.MetaShark.Workers;
     using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
     using MediaBrowser.Controller;
@@ -122,6 +124,47 @@ namespace Jellyfin.Plugin.MetaShark
             {
                 return new TvdbApi(ctx.GetRequiredService<ILoggerFactory>());
             });
+            serviceCollection.AddSingleton<LlmApi>((ctx) =>
+            {
+                return new LlmApi(ctx.GetRequiredService<ILoggerFactory>());
+            });
+            serviceCollection.AddSingleton<ILlmApi>((ctx) => ctx.GetRequiredService<LlmApi>());
+            serviceCollection.AddSingleton<LlmAssistTriggerPolicy>();
+            serviceCollection.AddSingleton<LlmScrapeContextBuilder>();
+            serviceCollection.AddSingleton<LlmSuggestionValidator>();
+            serviceCollection.AddSingleton<LlmScrapeMismatchDetector>();
+            serviceCollection.AddSingleton<LlmMetadataMergePolicy>();
+            serviceCollection.AddSingleton<LlmRelativePathSanitizer>();
+            serviceCollection.AddSingleton<LlmMetadataAssistService>((ctx) =>
+            {
+                return new LlmMetadataAssistService(
+                    ctx.GetRequiredService<ILlmApi>(),
+                    ctx.GetRequiredService<LlmAssistTriggerPolicy>(),
+                    ctx.GetRequiredService<LlmScrapeContextBuilder>(),
+                    ctx.GetRequiredService<LlmSuggestionValidator>(),
+                    ctx.GetRequiredService<LlmScrapeMismatchDetector>(),
+                    ctx.GetRequiredService<LlmMetadataMergePolicy>());
+            });
+            serviceCollection.AddSingleton<ILlmMetadataAssistService>((ctx) => ctx.GetRequiredService<LlmMetadataAssistService>());
+            serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
+            {
+                return new LlmEpisodeGroupMappingAssistService(
+                    ctx.GetRequiredService<ILlmApi>(),
+                    ctx.GetRequiredService<TmdbApi>());
+            });
+            serviceCollection.AddSingleton<ILlmEpisodeGroupMappingAssistService>((ctx) => ctx.GetRequiredService<LlmEpisodeGroupMappingAssistService>());
+            serviceCollection.AddSingleton<LlmEpisodeGroupMappingProviderAssistService>((ctx) =>
+            {
+                return new LlmEpisodeGroupMappingProviderAssistService(
+                    ctx.GetRequiredService<ILlmEpisodeGroupMappingAssistService>(),
+                    ctx.GetRequiredService<TmdbApi>(),
+                    ctx.GetRequiredService<ILibraryManager>(),
+                    ctx.GetRequiredService<IProviderManager>(),
+                    ctx.GetRequiredService<IFileSystem>(),
+                    ctx.GetRequiredService<LlmAssistTriggerPolicy>(),
+                    ctx.GetRequiredService<ILogger<LlmEpisodeGroupMappingProviderAssistService>>());
+            });
+            serviceCollection.AddSingleton<ILlmEpisodeGroupMappingProviderAssistService>((ctx) => ctx.GetRequiredService<LlmEpisodeGroupMappingProviderAssistService>());
         }
     }
 }
