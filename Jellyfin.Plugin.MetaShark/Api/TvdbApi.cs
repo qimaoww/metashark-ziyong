@@ -173,6 +173,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 {
                     episodes.Add(new TvdbEpisode
                     {
+                        Id = episode.Id,
                         SeasonNumber = episode.SeasonNumber,
                         Number = episode.Number,
                         AirsBeforeSeason = episode.AirsBeforeSeason,
@@ -439,6 +440,9 @@ namespace Jellyfin.Plugin.MetaShark.Api
         [SuppressMessage("Performance", "CA1812", Justification = "Deserialized by System.Text.Json")]
         private sealed class TvdbEpisodeBaseRecord
         {
+            [JsonPropertyName("id")]
+            public int? Id { get; set; }
+
             [JsonPropertyName("seasonNumber")]
             public int? SeasonNumber { get; set; }
 

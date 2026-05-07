@@ -47,6 +47,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var episodeGroupMappingAssist = serviceProvider.GetRequiredService<ILlmEpisodeGroupMappingAssistService>();
             var episodeGroupMappingAssistConcrete = serviceProvider.GetRequiredService<LlmEpisodeGroupMappingAssistService>();
             var episodeGroupMappingAssistSecondResolve = serviceProvider.GetRequiredService<ILlmEpisodeGroupMappingAssistService>();
+            var externalIdValidator = serviceProvider.GetRequiredService<LlmExternalIdCandidateValidator>();
+            var externalIdValidatorSecondResolve = serviceProvider.GetRequiredService<LlmExternalIdCandidateValidator>();
+            var externalIdResolutionService = serviceProvider.GetRequiredService<ILlmExternalIdResolutionService>();
+            var externalIdResolutionServiceConcrete = serviceProvider.GetRequiredService<LlmExternalIdResolutionService>();
+            var externalIdResolutionServiceSecondResolve = serviceProvider.GetRequiredService<ILlmExternalIdResolutionService>();
 
             Assert.AreSame(llmApi, llmApiConcrete);
             Assert.AreSame(llmApi, llmApiSecondResolve);
@@ -60,6 +65,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreSame(sanitizer, sanitizerSecondResolve);
             Assert.AreSame(episodeGroupMappingAssist, episodeGroupMappingAssistConcrete);
             Assert.AreSame(episodeGroupMappingAssist, episodeGroupMappingAssistSecondResolve);
+            Assert.AreSame(externalIdValidator, externalIdValidatorSecondResolve);
+            Assert.AreSame(externalIdResolutionService, externalIdResolutionServiceConcrete);
+            Assert.AreSame(externalIdResolutionService, externalIdResolutionServiceSecondResolve);
         }
 
         [TestMethod]

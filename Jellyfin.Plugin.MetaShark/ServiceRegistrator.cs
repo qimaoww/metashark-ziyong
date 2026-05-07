@@ -132,6 +132,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<LlmAssistTriggerPolicy>();
             serviceCollection.AddSingleton<LlmScrapeContextBuilder>();
             serviceCollection.AddSingleton<LlmSuggestionValidator>();
+            serviceCollection.AddSingleton<LlmExternalIdCandidateValidator>();
             serviceCollection.AddSingleton<LlmScrapeMismatchDetector>();
             serviceCollection.AddSingleton<LlmMetadataMergePolicy>();
             serviceCollection.AddSingleton<LlmRelativePathSanitizer>();
@@ -146,6 +147,17 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<LlmMetadataMergePolicy>());
             });
             serviceCollection.AddSingleton<ILlmMetadataAssistService>((ctx) => ctx.GetRequiredService<LlmMetadataAssistService>());
+            serviceCollection.AddSingleton<LlmExternalIdResolutionService>((ctx) =>
+            {
+                return new LlmExternalIdResolutionService(
+                    ctx.GetRequiredService<ILlmApi>(),
+                    ctx.GetRequiredService<TmdbApi>(),
+                    ctx.GetRequiredService<DoubanApi>(),
+                    ctx.GetRequiredService<TvdbApi>(),
+                    ctx.GetRequiredService<LlmAssistTriggerPolicy>(),
+                    ctx.GetRequiredService<LlmExternalIdCandidateValidator>());
+            });
+            serviceCollection.AddSingleton<ILlmExternalIdResolutionService>((ctx) => ctx.GetRequiredService<LlmExternalIdResolutionService>());
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
             {
                 return new LlmEpisodeGroupMappingAssistService(

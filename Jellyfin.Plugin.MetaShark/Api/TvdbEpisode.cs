@@ -8,6 +8,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
     public sealed class TvdbEpisode
     {
+        public int? Id { get; set; }
+
         public int? SeasonNumber { get; set; }
 
         public int? Number { get; set; }
