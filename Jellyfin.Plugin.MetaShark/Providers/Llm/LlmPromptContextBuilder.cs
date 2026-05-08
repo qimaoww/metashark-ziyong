@@ -26,6 +26,44 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             WriteIndented = false,
         };
 
+        private static readonly string[] MetadataAllowedCandidateFields =
+        {
+            "mediaType",
+            "title",
+            "year",
+            "seasonNumber",
+            "episodeNumber",
+            "originalTitle",
+            "overview",
+            "confidence",
+        };
+
+        private static readonly string[] MetadataForbiddenFields =
+        {
+            "sortTitle",
+            "providerIds",
+            "ProviderIds",
+            "path",
+            "absolutePath",
+            "serverUrl",
+            "apiKey",
+            "token",
+            "cookie",
+        };
+
+        private static readonly string[] MetadataPromptConstraints =
+        {
+            "Return exactly one JSON object and no Markdown, explanation, code fence, or natural-language prefix/suffix.",
+            "The only top-level field is suggestions, and suggestions must be an array.",
+            "Use only the allowed candidate fields listed in AllowedCandidateFields.",
+            "Do not output reason; MetaShark metadata suggestions do not support a reason field.",
+            "Do not output forbidden fields: sortTitle, providerIds, ProviderIds, path, absolutePath, serverUrl, apiKey, token, or cookie.",
+            "confidence is required on every usable candidate and must be numeric from 0.0 to 1.0.",
+            "If uncertain, return { \"suggestions\": [] } or use low confidence; do not omit confidence on usable candidates.",
+            "For Episode media, suggest only current season/episode metadata. Do not change the series title, sort title, ProviderIds, or external IDs.",
+            "Privacy: do not include full local paths, server URLs, Jellyfin private IDs, API keys, cookies, or tokens.",
+        };
+
         private static readonly string[] ExternalIdPromptConstraints =
         {
             "Return JSON only as { \"externalIdCandidates\": [...] }.",
@@ -35,10 +73,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             "When the ID is unknown or confidence is insufficient, return { \"externalIdCandidates\": [] }.",
         };
 
-        public static LlmPromptContext Build(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, ParseNameResult? parsedName)
+        public static LlmPromptContext Build(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, ParseNameResult? parsedName, bool allowRelativePathContext = true)
         {
             ArgumentNullException.ThrowIfNull(info);
-            var relativePath = LlmRelativePathSanitizer.Sanitize(info.Path, libraryRoots, mediaType);
+            var relativePath = allowRelativePathContext ? LlmRelativePathSanitizer.Sanitize(info.Path, libraryRoots, mediaType) : string.Empty;
             return new LlmPromptContext
             {
                 MediaType = mediaType,
@@ -51,23 +89,42 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 SeasonNumber = NormalizePositiveOrZeroNumber(info.ParentIndexNumber),
                 EpisodeNumber = NormalizePositiveOrZeroNumber(info.IndexNumber),
                 SeriesDisplayOrder = NormalizeText(GetSeriesDisplayOrder(info)),
-                ParsedName = NormalizeText(parsedName?.Name),
-                ParsedChineseName = NormalizeText(parsedName?.ChineseName),
-                ParsedYear = NormalizePositiveNumber(parsedName?.Year),
-                ParsedSeasonNumber = NormalizePositiveOrZeroNumber(parsedName?.ParentIndexNumber),
-                ParsedEpisodeNumber = NormalizePositiveOrZeroNumber(parsedName?.IndexNumber),
-                ParsedIsSpecial = parsedName?.IsSpecial ?? false,
-                ParsedIsExtra = parsedName?.IsExtra ?? false,
+                ParsedName = allowRelativePathContext ? NormalizeText(parsedName?.Name) : null,
+                ParsedChineseName = allowRelativePathContext ? NormalizeText(parsedName?.ChineseName) : null,
+                ParsedYear = allowRelativePathContext ? NormalizePositiveNumber(parsedName?.Year) : null,
+                ParsedSeasonNumber = allowRelativePathContext ? NormalizePositiveOrZeroNumber(parsedName?.ParentIndexNumber) : null,
+                ParsedEpisodeNumber = allowRelativePathContext ? NormalizePositiveOrZeroNumber(parsedName?.IndexNumber) : null,
+                ParsedIsSpecial = allowRelativePathContext && (parsedName?.IsSpecial ?? false),
+                ParsedIsExtra = allowRelativePathContext && (parsedName?.IsExtra ?? false),
                 ExistingProviderIdsSummary = BuildProviderIdsSummary(info),
             };
         }
 
-        public static string BuildJson(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, ParseNameResult? parsedName)
+        public static string BuildJson(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, ParseNameResult? parsedName, bool allowRelativePathContext = true)
         {
-            return JsonSerializer.Serialize(Build(info, mediaType, libraryRoots, parsedName), JsonOptions);
+            return JsonSerializer.Serialize(Build(info, mediaType, libraryRoots, parsedName, allowRelativePathContext), JsonOptions);
         }
 
-        public static LlmExternalIdPromptContext BuildExternalIdPromptContext(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, IEnumerable<string?>? relativePathSamples = null)
+        public static string BuildMetadataAssistPromptJson(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, ParseNameResult? parsedName, bool allowRelativePathContext = true)
+        {
+            var prompt = new
+            {
+                Role = "Jellyfin metadata assistant.",
+                Task = "Return only safe metadata suggestions for the current media item.",
+                Output = "Exactly one JSON object, no Markdown, no explanation, no code fence, no natural-language prefix or suffix.",
+                TopLevelField = "suggestions array",
+                OutputSchema = "{ \"suggestions\": [{ \"mediaType\": \"Movie|Series|Season|Episode\", \"title\": \"safe title\", \"year\": 2024, \"seasonNumber\": 1, \"episodeNumber\": 1, \"originalTitle\": \"safe original title\", \"overview\": \"safe overview\", \"confidence\": 0.0 }] }",
+                EmptyResultExample = "{ \"suggestions\": [] }",
+                AllowedCandidateFields = MetadataAllowedCandidateFields,
+                ForbiddenFields = MetadataForbiddenFields,
+                Constraints = MetadataPromptConstraints,
+                Context = Build(info, mediaType, libraryRoots, parsedName, allowRelativePathContext),
+            };
+
+            return JsonSerializer.Serialize(prompt, JsonOptions);
+        }
+
+        public static LlmExternalIdPromptContext BuildExternalIdPromptContext(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, IEnumerable<string?>? relativePathSamples = null, bool allowRelativePathContext = true)
         {
             ArgumentNullException.ThrowIfNull(info);
             return new LlmExternalIdPromptContext
@@ -80,14 +137,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 Year = NormalizePositiveNumber(info.Year),
                 SeasonNumber = NormalizePositiveOrZeroNumber(info.ParentIndexNumber),
                 EpisodeNumber = NormalizePositiveOrZeroNumber(info.IndexNumber),
-                SafeRelativePathSamples = BuildSafeRelativePathSamples(info.Path, relativePathSamples, libraryRoots, mediaType),
+                SafeRelativePathSamples = allowRelativePathContext ? BuildSafeRelativePathSamples(info.Path, relativePathSamples, libraryRoots, mediaType) : Array.Empty<string>(),
                 PublicProviderIds = BuildPublicProviderIds(info),
             };
         }
 
-        public static string BuildExternalIdPromptJson(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, IEnumerable<string?>? relativePathSamples = null)
+        public static string BuildExternalIdPromptJson(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, IEnumerable<string?>? relativePathSamples = null, bool allowRelativePathContext = true)
         {
-            return JsonSerializer.Serialize(BuildExternalIdPromptContext(info, mediaType, libraryRoots, relativePathSamples), JsonOptions);
+            return JsonSerializer.Serialize(BuildExternalIdPromptContext(info, mediaType, libraryRoots, relativePathSamples, allowRelativePathContext), JsonOptions);
         }
 
         private static LlmProviderIdsSummary BuildProviderIdsSummary(ItemLookupInfo info)

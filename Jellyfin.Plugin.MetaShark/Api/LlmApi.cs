@@ -6,6 +6,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Net;
     using System.Net.Http;
     using System.Net.Http.Headers;
@@ -35,7 +36,10 @@ namespace Jellyfin.Plugin.MetaShark.Api
             LoggerMessage.Define<int, string>(LogLevel.Warning, new EventId(2, nameof(LogLlmRequestRetry)), "[MetaShark] LLM 请求异常，将重试. 尝试={Attempt} 诊断={Diagnostic}");
 
         private static readonly Action<ILogger, string, Exception?> LogLlmRequestException =
-            LoggerMessage.Define<string>(LogLevel.Error, new EventId(3, nameof(LogLlmRequestException)), "[MetaShark] LLM 请求异常. 诊断={Diagnostic}");
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(3, nameof(LogLlmRequestException)), "[MetaShark] LLM 请求异常. 诊断={Diagnostic}");
+
+        private static readonly Action<ILogger, string, Exception?> LogLlmRequestTimeout =
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4, nameof(LogLlmRequestTimeout)), "[MetaShark] LLM 请求超时. 诊断={Diagnostic}");
 
         private readonly ILogger<LlmApi> logger;
         private readonly HttpClient httpClient;
@@ -44,24 +48,28 @@ namespace Jellyfin.Plugin.MetaShark.Api
         {
             ArgumentNullException.ThrowIfNull(loggerFactory);
             this.logger = loggerFactory.CreateLogger<LlmApi>();
-            var timeoutSeconds = MetaSharkPlugin.Instance?.Configuration.LlmTimeoutSeconds ?? new PluginConfiguration().LlmTimeoutSeconds;
-            this.httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+            this.httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         }
 
         public async Task<LlmApiResult> CompleteAsync(string prompt, CancellationToken cancellationToken)
         {
+            return await this.CompleteAsync(prompt, LlmResponseSchemaKind.MetadataSuggestions, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<LlmApiResult> CompleteAsync(string prompt, LlmResponseSchemaKind responseSchemaKind, CancellationToken cancellationToken)
+        {
             ArgumentNullException.ThrowIfNull(prompt);
-            var configuration = MetaSharkPlugin.Instance?.Configuration ?? new PluginConfiguration();
-            using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutSource.CancelAfter(TimeSpan.FromSeconds(configuration.LlmTimeoutSeconds));
-            var requestCancellationToken = timeoutSource.Token;
             var lastDiagnostic = string.Empty;
 
             for (var attempt = 0; attempt <= MaxRetryCount; attempt++)
             {
+                var configuration = MetaSharkPlugin.Instance?.Configuration ?? new PluginConfiguration();
+                using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutSource.CancelAfter(TimeSpan.FromSeconds(configuration.LlmTimeoutSeconds));
+                var requestCancellationToken = timeoutSource.Token;
                 try
                 {
-                    using var request = CreateRequest(configuration, prompt);
+                    using var request = CreateRequest(configuration, prompt, responseSchemaKind);
                     using var response = await this.httpClient.SendAsync(request, requestCancellationToken).ConfigureAwait(false);
                     var responseBody = await response.Content.ReadAsStringAsync(requestCancellationToken).ConfigureAwait(false);
                     if (response.IsSuccessStatusCode)
@@ -93,11 +101,18 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 {
                     throw new OperationCanceledException(cancellationToken);
                 }
-                catch (OperationCanceledException ex) when (requestCancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (requestCancellationToken.IsCancellationRequested)
                 {
-                    var diagnostic = RedactDiagnostic(ex.Message, configuration.LlmApiKey, prompt, null);
-                    LogLlmRequestException(this.logger, diagnostic, new InvalidOperationException(diagnostic));
-                    return LlmApiResult.Failed($"LLM request timeout: {diagnostic}");
+                    lastDiagnostic = $"LLM request timeout after {configuration.LlmTimeoutSeconds} seconds.";
+                    if (attempt < MaxRetryCount)
+                    {
+                        LogLlmRequestRetry(this.logger, attempt + 1, lastDiagnostic, null);
+                        await DelayBeforeRetryAsync(attempt, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    LogLlmRequestTimeout(this.logger, lastDiagnostic, null);
+                    return LlmApiResult.Failed(lastDiagnostic);
                 }
                 catch (HttpRequestException ex) when (attempt < MaxRetryCount)
                 {
@@ -121,7 +136,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
             this.httpClient.Dispose();
         }
 
-        private static HttpRequestMessage CreateRequest(PluginConfiguration configuration, string prompt)
+        private static HttpRequestMessage CreateRequest(PluginConfiguration configuration, string prompt, LlmResponseSchemaKind responseSchemaKind)
         {
             var request = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUrl(configuration.LlmBaseUrl));
             if (!string.IsNullOrWhiteSpace(configuration.LlmApiKey))
@@ -135,7 +150,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 Messages = new[] { new LlmChatMessage { Role = "user", Content = prompt } },
                 Temperature = 0,
                 MaxTokens = configuration.LlmMaxTokens,
-                ResponseFormat = CreateResponseFormat(configuration.LlmStructuredOutputMode),
+                ResponseFormat = CreateResponseFormat(configuration.LlmStructuredOutputMode, responseSchemaKind),
             };
             request.Content = new StringContent(JsonSerializer.Serialize(body, JsonOptions), Encoding.UTF8, "application/json");
             return request;
@@ -146,26 +161,193 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return baseUrl.TrimEnd('/') + "/chat/completions";
         }
 
-        private static LlmResponseFormat? CreateResponseFormat(string structuredOutputMode)
+        private static LlmResponseFormat? CreateResponseFormat(string structuredOutputMode, LlmResponseSchemaKind responseSchemaKind)
         {
             return structuredOutputMode switch
             {
-                PluginConfiguration.LlmStructuredOutputModeJsonSchema => new LlmResponseFormat
+                PluginConfiguration.LlmStructuredOutputModeJsonSchema => CreateJsonSchemaResponseFormat(responseSchemaKind),
+                PluginConfiguration.LlmStructuredOutputModeJsonObject => new LlmResponseFormat { Type = "json_object" },
+                _ => null,
+            };
+        }
+
+        private static LlmResponseFormat CreateJsonSchemaResponseFormat(LlmResponseSchemaKind schemaKind)
+        {
+            var (name, schema) = schemaKind switch
+            {
+                LlmResponseSchemaKind.ExternalIdCandidates => ("metashark_external_id_candidates", CreateExternalIdCandidateSchema()),
+                LlmResponseSchemaKind.EpisodeGroupMapping => ("metashark_episode_group_mapping", CreateEpisodeGroupMappingSchema()),
+                _ => ("metashark_metadata_suggestions", CreateMetadataSuggestionSchema()),
+            };
+
+            return new LlmResponseFormat
+            {
+                Type = "json_schema",
+                JsonSchema = new LlmJsonSchema
                 {
-                    Type = "json_schema",
-                    JsonSchema = new LlmJsonSchema
+                    Name = name,
+                    Strict = true,
+                    Schema = schema,
+                },
+            };
+        }
+
+        private static Dictionary<string, object> CreateMetadataSuggestionSchema()
+        {
+            var metadataFields = new[] { "mediaType", "title", "year", "seasonNumber", "episodeNumber", "originalTitle", "overview", "confidence" };
+            return new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = false,
+                ["required"] = new[] { "suggestions" },
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["suggestions"] = new Dictionary<string, object>
                     {
-                        Name = "metashark_metadata_match",
-                        Strict = true,
-                        Schema = new Dictionary<string, object>
+                        ["type"] = "array",
+                        ["items"] = new Dictionary<string, object>
                         {
                             ["type"] = "object",
-                            ["additionalProperties"] = true,
+                            ["additionalProperties"] = false,
+                            ["required"] = metadataFields,
+                            ["properties"] = new Dictionary<string, object>
+                            {
+                                ["mediaType"] = NullableEnumStringSchema("Movie", "Series", "Season", "Episode"),
+                                ["title"] = NullableStringSchema(200),
+                                ["year"] = NullableIntegerSchema(1874, DateTime.UtcNow.Year + 2),
+                                ["seasonNumber"] = NullableIntegerSchema(0, null),
+                                ["episodeNumber"] = NullableIntegerSchema(0, null),
+                                ["originalTitle"] = NullableStringSchema(200),
+                                ["overview"] = NullableStringSchema(4000),
+                                ["confidence"] = ConfidenceSchema(),
+                            },
                         },
                     },
                 },
-                PluginConfiguration.LlmStructuredOutputModeJsonObject => new LlmResponseFormat { Type = "json_object" },
-                _ => null,
+            };
+        }
+
+        private static Dictionary<string, object> CreateExternalIdCandidateSchema()
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = false,
+                ["required"] = new[] { "externalIdCandidates" },
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["externalIdCandidates"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "array",
+                        ["items"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "object",
+                            ["additionalProperties"] = false,
+                            ["required"] = new[] { "provider", "id", "mediaType", "confidence", "reason", "evidence" },
+                            ["properties"] = new Dictionary<string, object>
+                            {
+                                ["provider"] = EnumStringSchema("TMDb", "IMDb", "TVDB", "Douban"),
+                                ["id"] = StringSchema(64),
+                                ["mediaType"] = EnumStringSchema("Movie", "Series", "Episode"),
+                                ["confidence"] = ConfidenceSchema(),
+                                ["reason"] = StringSchema(500),
+                                ["evidence"] = StringSchema(1000),
+                            },
+                        },
+                    },
+                },
+            };
+        }
+
+        private static Dictionary<string, object> CreateEpisodeGroupMappingSchema()
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = false,
+                ["required"] = new[] { "selectedGroupId", "confidence", "reason" },
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["selectedGroupId"] = StringSchema(128),
+                    ["confidence"] = ConfidenceSchema(),
+                    ["reason"] = NullableStringSchema(500),
+                },
+            };
+        }
+
+        private static Dictionary<string, object> StringSchema(int maxLength)
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "string",
+                ["maxLength"] = maxLength,
+            };
+        }
+
+        private static Dictionary<string, object> NullableStringSchema(int maxLength)
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = new[] { "string", "null" },
+                ["maxLength"] = maxLength,
+            };
+        }
+
+        private static Dictionary<string, object> EnumStringSchema(params string[] values)
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "string",
+                ["enum"] = values,
+            };
+        }
+
+        private static Dictionary<string, object> NullableEnumStringSchema(params string[] values)
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = new[] { "string", "null" },
+                ["enum"] = values.Cast<object>().Concat(new object?[] { null }).ToArray(),
+            };
+        }
+
+        private static Dictionary<string, object> IntegerSchema(int minimum, int? maximum)
+        {
+            var schema = new Dictionary<string, object>
+            {
+                ["type"] = "integer",
+                ["minimum"] = minimum,
+            };
+            if (maximum.HasValue)
+            {
+                schema["maximum"] = maximum.Value;
+            }
+
+            return schema;
+        }
+
+        private static Dictionary<string, object> NullableIntegerSchema(int minimum, int? maximum)
+        {
+            var schema = new Dictionary<string, object>
+            {
+                ["type"] = new[] { "integer", "null" },
+                ["minimum"] = minimum,
+            };
+            if (maximum.HasValue)
+            {
+                schema["maximum"] = maximum.Value;
+            }
+
+            return schema;
+        }
+
+        private static Dictionary<string, object> ConfidenceSchema()
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "number",
+                ["minimum"] = 0.0,
+                ["maximum"] = 1.0,
             };
         }
 
@@ -173,8 +355,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         {
             return statusCode is HttpStatusCode.RequestTimeout
                 or HttpStatusCode.TooManyRequests
-                or HttpStatusCode.InternalServerError
-                or HttpStatusCode.ServiceUnavailable;
+                || (int)statusCode >= 500;
         }
 
         private static string RedactDiagnostic(string diagnostic, string apiKey, string prompt, string? rawResponse)

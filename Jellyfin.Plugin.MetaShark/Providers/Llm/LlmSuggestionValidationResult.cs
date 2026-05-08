@@ -24,6 +24,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return new LlmSuggestionValidationResult(true, suggestion, string.Empty);
         }
 
+        public static LlmSuggestionValidationResult NoCandidate(string diagnostic)
+        {
+            return new LlmSuggestionValidationResult(true, null, string.IsNullOrWhiteSpace(diagnostic) ? "NoCandidate" : diagnostic);
+        }
+
         public static LlmSuggestionValidationResult Failed(string diagnostic)
         {
             return new LlmSuggestionValidationResult(false, null, string.IsNullOrWhiteSpace(diagnostic) ? "LLM suggestion invalid." : diagnostic);

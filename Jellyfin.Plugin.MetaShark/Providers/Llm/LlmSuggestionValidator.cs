@@ -8,12 +8,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
     using System.Collections.Generic;
     using System.Diagnostics.CodeAnalysis;
     using System.Text.Json;
+    using Microsoft.Extensions.Logging;
+    using Microsoft.Extensions.Logging.Abstractions;
 
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Validator is intentionally injectable for assist service composition tests.")]
     public sealed class LlmSuggestionValidator
     {
         private const int MaxTitleLength = 200;
         private const int MaxOverviewLength = 4000;
+
+        private static readonly Action<ILogger, string, Exception?> LogIgnoredUnknownSuggestionField =
+            LoggerMessage.Define<string>(LogLevel.Debug, new EventId(1, nameof(LogIgnoredUnknownSuggestionField)), "[MetaShark] LLM metadata suggestion ignored unknown field. Field={FieldName}");
 
         private static readonly HashSet<string> AllowedMediaTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -23,17 +28,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             "Episode",
         };
 
-        private static readonly HashSet<string> AllowedJsonFields = new HashSet<string>(StringComparer.Ordinal)
+        private readonly ILogger<LlmSuggestionValidator> logger;
+
+        public LlmSuggestionValidator()
+            : this(NullLogger<LlmSuggestionValidator>.Instance)
         {
-            "mediaType",
-            "title",
-            "year",
-            "seasonNumber",
-            "episodeNumber",
-            "originalTitle",
-            "overview",
-            "confidence",
-        };
+        }
+
+        public LlmSuggestionValidator(ILogger<LlmSuggestionValidator> logger)
+        {
+            this.logger = logger ?? NullLogger<LlmSuggestionValidator>.Instance;
+        }
 
         public LlmSuggestionValidationResult ParseAndValidate(string? contentJson, double confidenceThreshold)
         {
@@ -51,35 +56,22 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                     return LlmSuggestionValidationResult.Failed("LLM suggestion schema invalid.");
                 }
 
-                foreach (var property in root.EnumerateObject())
+                if (root.TryGetProperty("suggestions", out var suggestions))
                 {
-                    if (!AllowedJsonFields.Contains(property.Name))
+                    var topLevelFieldResult = ValidateSuggestionsEnvelopeFields(root);
+                    if (!topLevelFieldResult.Success)
                     {
-                        return LlmSuggestionValidationResult.Failed($"LLM suggestion schema invalid: field '{property.Name}' is not allowed.");
+                        return topLevelFieldResult;
                     }
+
+                    return this.ParseAndValidateSuggestions(suggestions, confidenceThreshold);
                 }
 
-                var suggestion = new LlmScrapingSuggestion
-                {
-                    MediaType = GetOptionalString(root, "mediaType"),
-                    Title = GetOptionalString(root, "title"),
-                    Year = GetOptionalInt(root, "year"),
-                    SeasonNumber = GetOptionalInt(root, "seasonNumber"),
-                    EpisodeNumber = GetOptionalInt(root, "episodeNumber"),
-                    OriginalTitle = GetOptionalString(root, "originalTitle"),
-                    Overview = GetOptionalString(root, "overview"),
-                    Confidence = GetRequiredDouble(root, "confidence"),
-                };
-
-                return this.Validate(suggestion, confidenceThreshold);
+                return this.ParseAndValidateSuggestion(root, confidenceThreshold);
             }
             catch (JsonException ex)
             {
                 return LlmSuggestionValidationResult.Failed($"LLM suggestion schema invalid: {ex.Message}");
-            }
-            catch (InvalidOperationException ex)
-            {
-                return LlmSuggestionValidationResult.Failed(ex.Message);
             }
         }
 
@@ -198,6 +190,92 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             return value;
+        }
+
+        private static LlmSuggestionValidationResult ValidateSuggestionsEnvelopeFields(JsonElement root)
+        {
+            foreach (var property in root.EnumerateObject())
+            {
+                if (!string.Equals(property.Name, "suggestions", StringComparison.Ordinal))
+                {
+                    return LlmSuggestionValidationResult.Failed($"LLM suggestion schema invalid: top-level field '{property.Name}' is not allowed.");
+                }
+            }
+
+            return LlmSuggestionValidationResult.NoCandidate("EnvelopeFieldsValid");
+        }
+
+        private static bool IsKnownSuggestionField(string fieldName)
+        {
+            return string.Equals(fieldName, "mediaType", StringComparison.Ordinal)
+                || string.Equals(fieldName, "title", StringComparison.Ordinal)
+                || string.Equals(fieldName, "year", StringComparison.Ordinal)
+                || string.Equals(fieldName, "seasonNumber", StringComparison.Ordinal)
+                || string.Equals(fieldName, "episodeNumber", StringComparison.Ordinal)
+                || string.Equals(fieldName, "originalTitle", StringComparison.Ordinal)
+                || string.Equals(fieldName, "overview", StringComparison.Ordinal)
+                || string.Equals(fieldName, "confidence", StringComparison.Ordinal);
+        }
+
+        private LlmSuggestionValidationResult ParseAndValidateSuggestions(JsonElement suggestions, double confidenceThreshold)
+        {
+            if (suggestions.ValueKind != JsonValueKind.Array)
+            {
+                return LlmSuggestionValidationResult.Failed("LLM suggestion schema invalid: field 'suggestions' must be array.");
+            }
+
+            foreach (var suggestionElement in suggestions.EnumerateArray())
+            {
+                if (suggestionElement.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var result = this.ParseAndValidateSuggestion(suggestionElement, confidenceThreshold);
+                if (result.Success && result.Suggestion != null)
+                {
+                    return result;
+                }
+            }
+
+            return LlmSuggestionValidationResult.NoCandidate("NoCandidate");
+        }
+
+        private LlmSuggestionValidationResult ParseAndValidateSuggestion(JsonElement root, double confidenceThreshold)
+        {
+            try
+            {
+                this.LogUnknownSuggestionFields(root);
+
+                var suggestion = new LlmScrapingSuggestion
+                {
+                    MediaType = GetOptionalString(root, "mediaType"),
+                    Title = GetOptionalString(root, "title"),
+                    Year = GetOptionalInt(root, "year"),
+                    SeasonNumber = GetOptionalInt(root, "seasonNumber"),
+                    EpisodeNumber = GetOptionalInt(root, "episodeNumber"),
+                    OriginalTitle = GetOptionalString(root, "originalTitle"),
+                    Overview = GetOptionalString(root, "overview"),
+                    Confidence = GetRequiredDouble(root, "confidence"),
+                };
+
+                return this.Validate(suggestion, confidenceThreshold);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return LlmSuggestionValidationResult.Failed(ex.Message);
+            }
+        }
+
+        private void LogUnknownSuggestionFields(JsonElement root)
+        {
+            foreach (var property in root.EnumerateObject())
+            {
+                if (!IsKnownSuggestionField(property.Name))
+                {
+                    LogIgnoredUnknownSuggestionField(this.logger, property.Name, null);
+                }
+            }
         }
     }
 }

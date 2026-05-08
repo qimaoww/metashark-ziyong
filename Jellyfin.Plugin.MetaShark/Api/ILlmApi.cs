@@ -7,8 +7,20 @@ namespace Jellyfin.Plugin.MetaShark.Api
     using System.Threading;
     using System.Threading.Tasks;
 
+    public enum LlmResponseSchemaKind
+    {
+        MetadataSuggestions,
+        ExternalIdCandidates,
+        EpisodeGroupMapping,
+    }
+
     public interface ILlmApi
     {
         Task<LlmApiResult> CompleteAsync(string prompt, CancellationToken cancellationToken);
+
+        Task<LlmApiResult> CompleteAsync(string prompt, LlmResponseSchemaKind responseSchemaKind, CancellationToken cancellationToken)
+        {
+            return this.CompleteAsync(prompt, cancellationToken);
+        }
     }
 }

@@ -29,14 +29,69 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void Parse_WhenTextJsonResponseContainsJsonObject_ShouldExtractContentJson()
+        public void Parse_WhenPureJsonObjectResponseIsValid_ShouldReturnContentJson()
+        {
+            var result = LlmResponseParser.Parse(
+                "{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.9}]}",
+                PluginConfiguration.LlmStructuredOutputModeTextJson);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            Assert.AreEqual("{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.9}]}", result.ContentJson);
+        }
+
+        [TestMethod]
+        public void Parse_WhenContentIsSingleJsonFence_ShouldReturnContentJson()
+        {
+            var result = LlmResponseParser.Parse(
+                LlmApiTest.CreateSuccessEnvelope("```json\n{\"title\":\"三体\",\"confidence\":0.9}\n```"),
+                PluginConfiguration.LlmStructuredOutputModeTextJson);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            Assert.AreEqual("{\"title\":\"三体\",\"confidence\":0.9}", result.ContentJson);
+        }
+
+        [TestMethod]
+        public void Parse_WhenRawResponseIsSingleJsonFence_ShouldReturnContentJson()
+        {
+            var result = LlmResponseParser.Parse(
+                "```json\n{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.9}]}\n```",
+                PluginConfiguration.LlmStructuredOutputModeTextJson);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            Assert.AreEqual("{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.9}]}", result.ContentJson);
+        }
+
+        [TestMethod]
+        public void Parse_WhenTextJsonResponseWrapsJsonInNaturalLanguage_ShouldReturnFailureDiagnostic()
         {
             var result = LlmResponseParser.Parse(
                 LlmApiTest.CreateSuccessEnvelope("输出如下：\n{\"title\":\"三体\",\"confidence\":0.9}\n请使用该 JSON。"),
                 PluginConfiguration.LlmStructuredOutputModeTextJson);
 
-            Assert.IsTrue(result.Success, result.Diagnostic);
-            Assert.AreEqual("{\"title\":\"三体\",\"confidence\":0.9}", result.ContentJson);
+            Assert.IsFalse(result.Success);
+            Assert.IsTrue(result.Diagnostic.Contains("invalid JSON", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+        }
+
+        [TestMethod]
+        public void Parse_WhenContentContainsMultipleJsonDocuments_ShouldReturnFailureDiagnostic()
+        {
+            var result = LlmResponseParser.Parse(
+                LlmApiTest.CreateSuccessEnvelope("{\"title\":\"三体\",\"confidence\":0.9}{\"title\":\"流浪地球\",\"confidence\":0.8}"),
+                PluginConfiguration.LlmStructuredOutputModeTextJson);
+
+            Assert.IsFalse(result.Success);
+            Assert.IsTrue(result.Diagnostic.Contains("invalid JSON", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+        }
+
+        [TestMethod]
+        public void Parse_WhenContentContainsMultipleFences_ShouldReturnFailureDiagnostic()
+        {
+            var result = LlmResponseParser.Parse(
+                LlmApiTest.CreateSuccessEnvelope("```json\n{\"title\":\"三体\",\"confidence\":0.9}\n```\n```json\n{\"title\":\"流浪地球\",\"confidence\":0.8}\n```"),
+                PluginConfiguration.LlmStructuredOutputModeTextJson);
+
+            Assert.IsFalse(result.Success);
+            Assert.IsTrue(result.Diagnostic.Contains("single JSON object", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
         }
 
         [TestMethod]
@@ -55,6 +110,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsFalse(result.Success);
             Assert.IsTrue(result.Diagnostic.Contains("content", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+        }
+
+        [TestMethod]
+        public void Parse_WhenMessageContentIsOpenAiContentArray_ShouldFailClosed()
+        {
+            var result = LlmResponseParser.Parse(
+                "{\"choices\":[{\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"title\\\":\\\"三体\\\",\\\"confidence\\\":0.9}\"}]},\"finish_reason\":\"stop\"}]}",
+                PluginConfiguration.LlmStructuredOutputModeJsonSchema);
+
+            Assert.IsFalse(result.Success);
+            Assert.IsTrue(result.Diagnostic.Contains("schema", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
         }
 
         [TestMethod]

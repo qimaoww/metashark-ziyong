@@ -52,7 +52,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 capturedRequest = request;
                 capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
-                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"title\":\"三体\",\"confidence\":0.91}"));
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.91}]}"));
             }), disposeHandler: true));
 
             var result = await api.CompleteAsync("请根据安全上下文输出 JSON", CancellationToken.None).ConfigureAwait(false);
@@ -75,7 +75,85 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(777, root.GetProperty("max_tokens").GetInt32());
             Assert.AreEqual(JsonValueKind.Array, root.GetProperty("messages").ValueKind);
             Assert.AreEqual("json_schema", root.GetProperty("response_format").GetProperty("type").GetString());
+            AssertMetadataResponseSchema(root.GetProperty("response_format"));
             AssertForbiddenRequestFieldsAbsent(root);
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenMetadataPromptUsesJsonSchema_ShouldSendMetadataSuggestionsSchema()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            string? capturedBody = null;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.9}]}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("Jellyfin metadata assistant. Return { \"suggestions\": [] }", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            using var bodyDocument = JsonDocument.Parse(capturedBody!);
+            AssertMetadataResponseSchema(bodyDocument.RootElement.GetProperty("response_format"));
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenExternalIdPromptUsesJsonSchema_ShouldSendExternalIdCandidateSchema()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            string? capturedBody = null;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"externalIdCandidates\":[]}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("Return JSON only as { \"externalIdCandidates\": [...] }.", LlmResponseSchemaKind.ExternalIdCandidates, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            using var bodyDocument = JsonDocument.Parse(capturedBody!);
+            AssertExternalIdCandidateResponseSchema(bodyDocument.RootElement.GetProperty("response_format"));
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenEpisodeGroupPromptUsesJsonSchema_ShouldSendGroupMappingSchema()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            string? capturedBody = null;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"selectedGroupId\":\"grp\",\"confidence\":0.9,\"reason\":\"match\"}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("Select one TMDB episode group id from candidateGroups and return selectedGroupId.", LlmResponseSchemaKind.EpisodeGroupMapping, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            using var bodyDocument = JsonDocument.Parse(capturedBody!);
+            AssertEpisodeGroupMappingResponseSchema(bodyDocument.RootElement.GetProperty("response_format"));
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenExplicitMetadataSchemaPromptMentionsOtherSchemaFields_ShouldSendMetadataSchema()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            string? capturedBody = null;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.9}]}"));
+            }), disposeHandler: true));
+
+            var prompt = "Metadata title contains externalIdCandidates and selectedGroupId as literal text.";
+            var result = await api.CompleteAsync(prompt, LlmResponseSchemaKind.MetadataSuggestions, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            using var bodyDocument = JsonDocument.Parse(capturedBody!);
+            AssertMetadataResponseSchema(bodyDocument.RootElement.GetProperty("response_format"));
         }
 
         [TestMethod]
@@ -87,7 +165,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async request =>
             {
                 capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
-                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"title\":\"三体\",\"confidence\":0.9}"));
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.9}]}"));
             }), disposeHandler: true));
 
             var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
@@ -106,7 +184,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async request =>
             {
                 capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
-                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("这里是结果 {\"title\":\"三体\",\"confidence\":0.9}"));
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"title\":\"三体\",\"confidence\":0.9}"));
             }), disposeHandler: true));
 
             var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
@@ -128,7 +206,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 attempts++;
                 var statusCode = responses.Dequeue();
                 return Task.FromResult(statusCode == HttpStatusCode.OK
-                    ? CreateJsonResponse(statusCode, CreateSuccessEnvelope("{\"title\":\"三体\",\"confidence\":0.9}"))
+                    ? CreateJsonResponse(statusCode, CreateSuccessEnvelope("{\"suggestions\":[{\"title\":\"三体\",\"confidence\":0.9}]}"))
                     : CreateJsonResponse(statusCode, "{\"error\":{\"message\":\"temporary\",\"type\":\"server\"}}"));
             }), disposeHandler: true));
 
@@ -136,6 +214,28 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsTrue(result.Success, result.Diagnostic);
             Assert.AreEqual(3, attempts, "最多 2 次 retry 应对应总尝试 3 次。 ");
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenRequestTimeoutStatusOccurs_ShouldRetryThenSucceed()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            var responses = new Queue<HttpStatusCode>(new[] { HttpStatusCode.RequestTimeout, HttpStatusCode.OK });
+            var attempts = 0;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(_ =>
+            {
+                attempts++;
+                var statusCode = responses.Dequeue();
+                return Task.FromResult(statusCode == HttpStatusCode.OK
+                    ? CreateJsonResponse(statusCode, CreateSuccessEnvelope("{\"suggestions\":[]}"))
+                    : CreateJsonResponse(statusCode, "{\"error\":{\"message\":\"request timeout\"}}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            Assert.AreEqual(2, attempts);
         }
 
         [TestMethod]
@@ -174,6 +274,91 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => api.CompleteAsync("prompt", cancellationTokenSource.Token)).ConfigureAwait(false);
             Assert.AreEqual(1, attempts);
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenPluginTimeoutOccurs_ShouldRetryThenReturnFailedDiagnostic()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(new PluginConfiguration
+            {
+                LlmBaseUrl = "http://localhost:11434/v1",
+                LlmModel = "qwen2.5",
+                LlmStructuredOutputMode = PluginConfiguration.LlmStructuredOutputModeJsonSchema,
+                LlmTimeoutSeconds = 1,
+            });
+            var attempts = 0;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async (_, cancellationToken) =>
+            {
+                attempts++;
+                await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"suggestions\":[]}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.Success);
+            Assert.AreEqual(3, attempts);
+            Assert.IsTrue(result.Diagnostic.Contains("timeout", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenSchemaInvalidOrEmptyContent_ShouldNotRetry()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            var attempts = 0;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(_ =>
+            {
+                attempts++;
+                return Task.FromResult(CreateJsonResponse(HttpStatusCode.OK, LlmApiTest.CreateSuccessEnvelope(string.Empty)));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.Success);
+            Assert.AreEqual(1, attempts);
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenSchemaIncompatibleContentArrayOccurs_ShouldFailClosedWithoutRetry()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            var attempts = 0;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(_ =>
+            {
+                attempts++;
+                return Task.FromResult(CreateJsonResponse(HttpStatusCode.OK, "{\"choices\":[{\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"{}\"}]},\"finish_reason\":\"stop\"}]}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.Success);
+            Assert.AreEqual(1, attempts);
+            Assert.IsTrue(result.Diagnostic.Contains("schema", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenServerErrorIsNotExplicitlyListed_ShouldRetry()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            var responses = new Queue<HttpStatusCode>(new[] { HttpStatusCode.BadGateway, HttpStatusCode.OK });
+            var attempts = 0;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(_ =>
+            {
+                attempts++;
+                var statusCode = responses.Dequeue();
+                return Task.FromResult(statusCode == HttpStatusCode.OK
+                    ? CreateJsonResponse(statusCode, CreateSuccessEnvelope("{\"suggestions\":[]}"))
+                    : CreateJsonResponse(statusCode, "{\"error\":{\"message\":\"temporary\"}}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            Assert.AreEqual(2, attempts);
         }
 
         private static PluginConfiguration CreateConfiguration(string structuredOutputMode)
@@ -221,6 +406,141 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Assert.IsFalse(root.TryGetProperty(fieldName, out _), $"生产请求不应包含字段 {fieldName}: {root}");
             }
         }
+
+        private static void AssertMetadataResponseSchema(JsonElement responseFormat)
+        {
+            Assert.AreEqual("json_schema", responseFormat.GetProperty("type").GetString());
+            var jsonSchema = responseFormat.GetProperty("json_schema");
+            Assert.AreEqual("metashark_metadata_suggestions", jsonSchema.GetProperty("name").GetString());
+            Assert.IsTrue(jsonSchema.GetProperty("strict").GetBoolean());
+            var schema = jsonSchema.GetProperty("schema");
+            AssertStrictCompatibleSchema(schema);
+            Assert.AreEqual("object", schema.GetProperty("type").GetString());
+            Assert.IsFalse(schema.GetProperty("additionalProperties").GetBoolean());
+            CollectionAssert.AreEquivalent(new[] { "suggestions" }, ReadStringArray(schema.GetProperty("required")));
+            var properties = schema.GetProperty("properties");
+            CollectionAssert.AreEquivalent(new[] { "suggestions" }, properties.EnumerateObject().Select(property => property.Name).ToArray());
+
+            var suggestionItem = properties.GetProperty("suggestions").GetProperty("items");
+            Assert.IsFalse(suggestionItem.GetProperty("additionalProperties").GetBoolean());
+            CollectionAssert.AreEquivalent(
+                new[] { "mediaType", "title", "year", "seasonNumber", "episodeNumber", "originalTitle", "overview", "confidence" },
+                ReadStringArray(suggestionItem.GetProperty("required")));
+            var candidateProperties = suggestionItem.GetProperty("properties");
+            CollectionAssert.AreEquivalent(
+                new[] { "mediaType", "title", "year", "seasonNumber", "episodeNumber", "originalTitle", "overview", "confidence" },
+                candidateProperties.EnumerateObject().Select(property => property.Name).ToArray());
+            AssertNullableTypeSchema(candidateProperties.GetProperty("mediaType"), "string", "null");
+            AssertNullableTypeSchema(candidateProperties.GetProperty("title"), "string", "null");
+            AssertNullableTypeSchema(candidateProperties.GetProperty("year"), "integer", "null");
+            AssertNullableTypeSchema(candidateProperties.GetProperty("seasonNumber"), "integer", "null");
+            AssertNullableTypeSchema(candidateProperties.GetProperty("episodeNumber"), "integer", "null");
+            AssertNullableTypeSchema(candidateProperties.GetProperty("originalTitle"), "string", "null");
+            AssertNullableTypeSchema(candidateProperties.GetProperty("overview"), "string", "null");
+            AssertConfidenceSchema(candidateProperties.GetProperty("confidence"));
+            Assert.IsFalse(candidateProperties.TryGetProperty("reason", out _), suggestionItem.ToString());
+            Assert.IsFalse(candidateProperties.TryGetProperty("sortTitle", out _), suggestionItem.ToString());
+            Assert.IsFalse(candidateProperties.TryGetProperty("providerIds", out _), suggestionItem.ToString());
+            Assert.IsFalse(candidateProperties.TryGetProperty("ProviderIds", out _), suggestionItem.ToString());
+            Assert.IsFalse(candidateProperties.TryGetProperty("path", out _), suggestionItem.ToString());
+            Assert.IsFalse(candidateProperties.TryGetProperty("serverUrl", out _), suggestionItem.ToString());
+            Assert.IsFalse(candidateProperties.TryGetProperty("apiKey", out _), suggestionItem.ToString());
+            Assert.IsFalse(candidateProperties.TryGetProperty("token", out _), suggestionItem.ToString());
+            Assert.IsFalse(candidateProperties.TryGetProperty("cookie", out _), suggestionItem.ToString());
+        }
+
+        private static void AssertExternalIdCandidateResponseSchema(JsonElement responseFormat)
+        {
+            Assert.AreEqual("json_schema", responseFormat.GetProperty("type").GetString());
+            var jsonSchema = responseFormat.GetProperty("json_schema");
+            Assert.AreEqual("metashark_external_id_candidates", jsonSchema.GetProperty("name").GetString());
+            var schema = jsonSchema.GetProperty("schema");
+            AssertStrictCompatibleSchema(schema);
+            CollectionAssert.AreEquivalent(new[] { "externalIdCandidates" }, ReadStringArray(schema.GetProperty("required")));
+            var properties = schema.GetProperty("properties");
+            CollectionAssert.AreEquivalent(new[] { "externalIdCandidates" }, properties.EnumerateObject().Select(property => property.Name).ToArray());
+            var candidateProperties = properties.GetProperty("externalIdCandidates").GetProperty("items").GetProperty("properties");
+            CollectionAssert.AreEquivalent(
+                new[] { "provider", "id", "mediaType", "confidence", "reason", "evidence" },
+                candidateProperties.EnumerateObject().Select(property => property.Name).ToArray());
+            Assert.IsFalse(properties.TryGetProperty("suggestions", out _), schema.ToString());
+            Assert.IsFalse(properties.TryGetProperty("selectedGroupId", out _), schema.ToString());
+        }
+
+        private static void AssertEpisodeGroupMappingResponseSchema(JsonElement responseFormat)
+        {
+            Assert.AreEqual("json_schema", responseFormat.GetProperty("type").GetString());
+            var jsonSchema = responseFormat.GetProperty("json_schema");
+            Assert.AreEqual("metashark_episode_group_mapping", jsonSchema.GetProperty("name").GetString());
+            var schema = jsonSchema.GetProperty("schema");
+            AssertStrictCompatibleSchema(schema);
+            CollectionAssert.AreEquivalent(new[] { "selectedGroupId", "confidence", "reason" }, ReadStringArray(schema.GetProperty("required")));
+            var properties = schema.GetProperty("properties");
+            CollectionAssert.AreEquivalent(new[] { "selectedGroupId", "confidence", "reason" }, properties.EnumerateObject().Select(property => property.Name).ToArray());
+            AssertConfidenceSchema(properties.GetProperty("confidence"));
+            AssertNullableTypeSchema(properties.GetProperty("reason"), "string", "null");
+            Assert.IsFalse(properties.TryGetProperty("suggestions", out _), schema.ToString());
+            Assert.IsFalse(properties.TryGetProperty("externalIdCandidates", out _), schema.ToString());
+        }
+
+        private static void AssertStrictCompatibleSchema(JsonElement schema)
+        {
+            Assert.IsFalse(schema.TryGetProperty("anyOf", out _), schema.ToString());
+            Assert.IsFalse(schema.TryGetProperty("oneOf", out _), schema.ToString());
+
+            if (IsObjectSchema(schema))
+            {
+                Assert.IsTrue(schema.TryGetProperty("additionalProperties", out var additionalProperties), schema.ToString());
+                Assert.IsFalse(additionalProperties.GetBoolean(), schema.ToString());
+                Assert.IsTrue(schema.TryGetProperty("properties", out var properties), schema.ToString());
+                Assert.IsTrue(schema.TryGetProperty("required", out var required), schema.ToString());
+                CollectionAssert.AreEquivalent(
+                    properties.EnumerateObject().Select(property => property.Name).ToArray(),
+                    ReadStringArray(required));
+
+                foreach (var property in properties.EnumerateObject())
+                {
+                    AssertStrictCompatibleSchema(property.Value);
+                }
+            }
+
+            if (schema.TryGetProperty("items", out var items))
+            {
+                AssertStrictCompatibleSchema(items);
+            }
+        }
+
+        private static bool IsObjectSchema(JsonElement schema)
+        {
+            if (!schema.TryGetProperty("type", out var type))
+            {
+                return false;
+            }
+
+            if (type.ValueKind == JsonValueKind.String)
+            {
+                return string.Equals(type.GetString(), "object", StringComparison.Ordinal);
+            }
+
+            return type.ValueKind == JsonValueKind.Array && ReadStringArray(type).Contains("object", StringComparer.Ordinal);
+        }
+
+        private static string[] ReadStringArray(JsonElement array)
+        {
+            return array.EnumerateArray().Select(element => element.GetString()).ToArray()!;
+        }
+
+        private static void AssertConfidenceSchema(JsonElement schema)
+        {
+            Assert.AreEqual("number", schema.GetProperty("type").GetString());
+            Assert.AreEqual(0.0, schema.GetProperty("minimum").GetDouble());
+            Assert.AreEqual(1.0, schema.GetProperty("maximum").GetDouble());
+        }
+
+        private static void AssertNullableTypeSchema(JsonElement schema, params string[] expectedTypes)
+        {
+            CollectionAssert.AreEquivalent(expectedTypes, ReadStringArray(schema.GetProperty("type")));
+        }
     }
 
     internal static class LlmApiTestSupport
@@ -239,8 +559,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return loggerFactory;
         }
 
-        public static void ReplaceHttpClient(LlmApi api, HttpClient replacement)
+        public static void ReplaceHttpClient(LlmApi api, HttpClient replacement, bool disposeHandler = false)
         {
+            _ = disposeHandler;
             var httpClientField = typeof(LlmApi).GetField("httpClient", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.IsNotNull(httpClientField, "LlmApi.httpClient 未定义");
 
@@ -321,16 +642,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
     internal sealed class RoutingHttpMessageHandler : HttpMessageHandler
     {
-        private readonly Func<HttpRequestMessage, Task<HttpResponseMessage>> responder;
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder;
 
         public RoutingHttpMessageHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> responder)
+            : this((request, _) => responder(request))
+        {
+        }
+
+        public RoutingHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder)
         {
             this.responder = responder;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            return this.responder(request);
+            return this.responder(request, cancellationToken);
         }
     }
 }

@@ -124,6 +124,83 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void BuildMetadataAssistPromptJson_IncludesExplicitOutputContract()
+        {
+            var info = new EpisodeInfo
+            {
+                Name = "第 1 集",
+                Path = @"\\NAS\share\Shows\三体\Season 01\S01E01.mkv",
+                MetadataLanguage = "zh-CN",
+                Year = 2023,
+                ParentIndexNumber = 1,
+                IndexNumber = 1,
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { MetadataProvider.Tmdb.ToString(), "1399" },
+                    { "apiKey", "sk-test-secret-123456" },
+                    { "token", "token-secret" },
+                    { "cookie", "cookie-secret" },
+                    { "serverUrl", "http://192.168.31.40:58096/" },
+                    { "JellyfinItemId", "bf9b5f13e69045118bbb6c592843f47e" },
+                },
+            };
+
+            var json = LlmPromptContextBuilder.BuildMetadataAssistPromptJson(
+                info,
+                "Episode",
+                new[] { @"\\NAS\share", "/opt/jellyfin", "/home/test" },
+                new ParseNameResult { Name = "Three Body", ChineseName = "三体", ParentIndexNumber = 1, IndexNumber = 1 });
+
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            Assert.AreEqual("Jellyfin metadata assistant.", root.GetProperty("Role").GetString());
+            Assert.IsTrue(root.GetProperty("Task").GetString()!.Contains("safe metadata suggestions", System.StringComparison.Ordinal), json);
+            Assert.IsTrue(root.GetProperty("Output").GetString()!.Contains("Exactly one JSON object", System.StringComparison.Ordinal), json);
+            Assert.AreEqual("suggestions array", root.GetProperty("TopLevelField").GetString());
+            Assert.IsTrue(root.GetProperty("OutputSchema").GetString()!.Contains("\"suggestions\"", System.StringComparison.Ordinal), json);
+            Assert.AreEqual("{ \"suggestions\": [] }", root.GetProperty("EmptyResultExample").GetString());
+
+            var allowedFields = root.GetProperty("AllowedCandidateFields").EnumerateArray().Select(field => field.GetString()).ToArray();
+            CollectionAssert.AreEquivalent(
+                new[] { "mediaType", "title", "year", "seasonNumber", "episodeNumber", "originalTitle", "overview", "confidence" },
+                allowedFields);
+            CollectionAssert.DoesNotContain(allowedFields, "reason");
+            CollectionAssert.DoesNotContain(allowedFields, "sortTitle");
+            CollectionAssert.DoesNotContain(allowedFields, "providerIds");
+
+            var forbiddenFields = root.GetProperty("ForbiddenFields").EnumerateArray().Select(field => field.GetString()).ToArray();
+            foreach (var fieldName in new[] { "sortTitle", "providerIds", "ProviderIds", "path", "absolutePath", "serverUrl", "apiKey", "token", "cookie" })
+            {
+                CollectionAssert.Contains(forbiddenFields, fieldName);
+            }
+
+            var constraints = root.GetProperty("Constraints").EnumerateArray().Select(field => field.GetString()).ToArray();
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("no Markdown", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("Do not output reason", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("confidence is required", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("0.0 to 1.0", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("For Episode media", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("Do not change the series title", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("Privacy", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("full local paths", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("server URLs", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("API keys", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("cookies", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("tokens", System.StringComparison.Ordinal)), json);
+
+            var context = root.GetProperty("Context");
+            Assert.AreEqual("Episode", context.GetProperty("MediaType").GetString());
+            Assert.AreEqual(1, context.GetProperty("SeasonNumber").GetInt32());
+            Assert.AreEqual(1, context.GetProperty("EpisodeNumber").GetInt32());
+            AssertSafeMetadataAssistPromptJson(json);
+            Assert.IsFalse(json.Contains("bf9b5f13e69045118bbb6c592843f47e", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("http://192.168.31.40:58096", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("sk-test-secret-123456", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("token-secret", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("cookie-secret", System.StringComparison.Ordinal), json);
+        }
+
+        [TestMethod]
         public void BuildExternalIdPromptJson_IncludesSchemaInstructionAndSafeContext()
         {
             var info = new EpisodeInfo
@@ -173,6 +250,65 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var samples = root.GetProperty("SafeRelativePathSamples").EnumerateArray().Select(sample => sample.GetString()).ToArray();
             CollectionAssert.Contains(samples, "Shows/The Matrix/Season 01/S01E01.mkv");
             CollectionAssert.Contains(samples, "Shows/The Matrix/Season 01/S01E02.mkv");
+        }
+
+        [TestMethod]
+        public void BuildMetadataAssistPromptJson_WhenRelativePathContextDisabled_OmitsPathFileAndParentFolder()
+        {
+            var info = new EpisodeInfo
+            {
+                Name = "第 1 集",
+                Path = "/mnt/media/Shows/Private Series/Season 01/S01E01.mkv",
+                MetadataLanguage = "zh-CN",
+                ParentIndexNumber = 1,
+                IndexNumber = 1,
+            };
+
+            var json = LlmPromptContextBuilder.BuildMetadataAssistPromptJson(
+                info,
+                "Episode",
+                new[] { "/mnt/media" },
+                new ParseNameResult { Name = "Private Series", ParentIndexNumber = 1, IndexNumber = 1 },
+                allowRelativePathContext: false);
+
+            using var document = JsonDocument.Parse(json);
+            var context = document.RootElement.GetProperty("Context");
+            Assert.AreEqual(string.Empty, context.GetProperty("RelativePath").GetString());
+            Assert.AreEqual(JsonValueKind.Null, context.GetProperty("FileName").ValueKind);
+            Assert.AreEqual(JsonValueKind.Null, context.GetProperty("ParentFolderName").ValueKind);
+            Assert.IsFalse(json.Contains("Private Series", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("Season 01", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("S01E01.mkv", System.StringComparison.Ordinal), json);
+            AssertSafeMetadataAssistPromptJson(json);
+        }
+
+        [TestMethod]
+        public void BuildExternalIdPromptJson_WhenRelativePathContextDisabled_OmitsPathSamples()
+        {
+            var info = new EpisodeInfo
+            {
+                Name = "第 1 集",
+                Path = "/mnt/media/Shows/Private Series/Season 01/S01E01.mkv",
+                MetadataLanguage = "zh-CN",
+                ParentIndexNumber = 1,
+                IndexNumber = 1,
+            };
+
+            var json = LlmPromptContextBuilder.BuildExternalIdPromptJson(
+                info,
+                "Episode",
+                new[] { "/mnt/media" },
+                new[] { "/mnt/media/Shows/Private Series/Season 01/S01E02.mkv" },
+                allowRelativePathContext: false);
+
+            using var document = JsonDocument.Parse(json);
+            var samples = document.RootElement.GetProperty("SafeRelativePathSamples").EnumerateArray().ToArray();
+            Assert.AreEqual(0, samples.Length);
+            Assert.IsFalse(json.Contains("Private Series", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("Season 01", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("S01E01.mkv", System.StringComparison.Ordinal), json);
+            Assert.IsFalse(json.Contains("S01E02.mkv", System.StringComparison.Ordinal), json);
+            AssertSafeExternalIdPromptJson(json);
         }
 
         [TestMethod]
@@ -293,6 +429,28 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 "JellyfinItemId",
                 "nm0000206",
                 "not-numeric",
+            };
+
+            foreach (var fragment in forbiddenFragments)
+            {
+                Assert.IsFalse(json.Contains(fragment, System.StringComparison.Ordinal), json);
+            }
+        }
+
+        private static void AssertSafeMetadataAssistPromptJson(string json)
+        {
+            var forbiddenFragments = new[]
+            {
+                "/mnt/media",
+                "/root",
+                "/home",
+                "/opt/jellyfin",
+                "C:\\",
+                "\\\\NAS",
+                "sk-test-secret-123456",
+                "token-secret",
+                "cookie-secret",
+                "http://192.168.31.40:58096",
             };
 
             foreach (var fragment in forbiddenFragments)

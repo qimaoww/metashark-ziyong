@@ -7,7 +7,6 @@ namespace Jellyfin.Plugin.MetaShark.Api
     using System;
     using System.Linq;
     using System.Text.Json;
-    using Jellyfin.Plugin.MetaShark.Configuration;
 
     public static class LlmResponseParser
     {
@@ -27,7 +26,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     return LlmApiResult.Failed(ParseErrorEnvelope(errorElement));
                 }
 
-                if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
+                if (!root.TryGetProperty("choices", out var choices))
+                {
+                    return ParseContentJson(responseJson, "LLM response content");
+                }
+
+                if (choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
                 {
                     return LlmApiResult.Failed("LLM response choices is empty.");
                 }
@@ -57,24 +61,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     return LlmApiResult.Failed("LLM response message content is empty.");
                 }
 
-                var contentJson = string.Equals(structuredOutputMode, PluginConfiguration.LlmStructuredOutputModeTextJson, StringComparison.Ordinal)
-                    ? ExtractJsonObject(content)
-                    : content.Trim();
-                if (contentJson == null)
-                {
-                    return LlmApiResult.Failed("LLM response content does not contain valid JSON object.");
-                }
-
-                if (!IsValidSchemaObject(contentJson))
-                {
-                    return LlmApiResult.Failed("LLM response content schema invalid.");
-                }
-
-                return LlmApiResult.Succeeded(contentJson);
+                return ParseContentJson(content, "LLM response content");
             }
             catch (JsonException ex)
             {
-                return LlmApiResult.Failed($"LLM response invalid JSON: {ex.Message}");
+                var contentResult = ParseContentJson(responseJson, "LLM response content");
+                return contentResult.Success ? contentResult : LlmApiResult.Failed($"LLM response invalid JSON: {ex.Message}");
             }
         }
 
@@ -122,35 +114,74 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return string.IsNullOrWhiteSpace(diagnostic) ? "LLM error envelope is empty." : diagnostic;
         }
 
-        private static string? ExtractJsonObject(string content)
+        private static LlmApiResult ParseContentJson(string content, string diagnosticPrefix)
         {
-            var trimmed = content.Trim();
-            if (trimmed.StartsWith('{') && trimmed.EndsWith('}'))
+            var contentJson = TrimSingleJsonFence(content);
+            if (contentJson == null)
             {
-                return trimmed;
+                return LlmApiResult.Failed($"{diagnosticPrefix} does not contain a single JSON object.");
             }
 
-            var start = trimmed.IndexOf('{', StringComparison.Ordinal);
-            var end = trimmed.LastIndexOf('}');
-            if (start < 0 || end <= start)
+            try
+            {
+                using var document = JsonDocument.Parse(contentJson);
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    return LlmApiResult.Failed($"{diagnosticPrefix} schema invalid.");
+                }
+            }
+            catch (JsonException ex)
+            {
+                return LlmApiResult.Failed($"{diagnosticPrefix} invalid JSON: {ex.Message}");
+            }
+
+            return LlmApiResult.Succeeded(contentJson.Trim());
+        }
+
+        private static string? TrimSingleJsonFence(string content)
+        {
+            var trimmed = content.Trim();
+            if (trimmed.Length == 0)
             {
                 return null;
             }
 
-            return trimmed[start..(end + 1)].Trim();
-        }
+            if (!trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                return trimmed;
+            }
 
-        private static bool IsValidSchemaObject(string contentJson)
-        {
-            try
+            var firstLineEnd = trimmed.IndexOf('\n', StringComparison.Ordinal);
+            if (firstLineEnd < 0)
             {
-                using var document = JsonDocument.Parse(contentJson);
-                return document.RootElement.ValueKind == JsonValueKind.Object;
+                return null;
             }
-            catch (JsonException)
+
+            var fenceInfo = trimmed[3..firstLineEnd].Trim();
+            if (fenceInfo.Length != 0 && !string.Equals(fenceInfo, "json", StringComparison.OrdinalIgnoreCase))
             {
-                return false;
+                return null;
             }
+
+            var closingFenceStart = trimmed.LastIndexOf("\n```", StringComparison.Ordinal);
+            if (closingFenceStart <= firstLineEnd)
+            {
+                return null;
+            }
+
+            var afterClosingFence = trimmed[(closingFenceStart + 4)..].Trim();
+            if (afterClosingFence.Length != 0)
+            {
+                return null;
+            }
+
+            var fencedContent = trimmed[(firstLineEnd + 1)..closingFenceStart].Trim();
+            if (fencedContent.StartsWith("```", StringComparison.Ordinal) || fencedContent.Contains("\n```", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return fencedContent.Length == 0 ? null : fencedContent;
         }
 
         private static string? GetString(JsonElement element, string propertyName)
