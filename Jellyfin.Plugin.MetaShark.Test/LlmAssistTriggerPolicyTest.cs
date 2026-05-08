@@ -181,12 +181,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(string.IsNullOrWhiteSpace(api.CapturedPrompt));
             using var document = JsonDocument.Parse(api.CapturedPrompt!);
             var root = document.RootElement;
-            Assert.AreEqual("Episode", root.GetProperty("MediaType").GetString());
-            Assert.AreEqual("三体", root.GetProperty("ParsedName").GetString());
-            Assert.AreEqual(2023, root.GetProperty("ParsedYear").GetInt32());
-            Assert.AreEqual(1, root.GetProperty("ParsedSeasonNumber").GetInt32());
-            Assert.AreEqual(1, root.GetProperty("ParsedEpisodeNumber").GetInt32());
-            Assert.AreEqual(result.SanitizedContext!.ParsedName, root.GetProperty("ParsedName").GetString());
+            var context = root.TryGetProperty("Context", out var contextElement) ? contextElement : root;
+            Assert.AreEqual("Episode", context.GetProperty("MediaType").GetString());
+            Assert.AreEqual("三体", context.GetProperty("ParsedName").GetString());
+            Assert.AreEqual(2023, context.GetProperty("ParsedYear").GetInt32());
+            Assert.AreEqual(1, context.GetProperty("ParsedSeasonNumber").GetInt32());
+            Assert.AreEqual(1, context.GetProperty("ParsedEpisodeNumber").GetInt32());
+            Assert.AreEqual(result.SanitizedContext!.ParsedName, context.GetProperty("ParsedName").GetString());
         }
 
         private static LlmAssistTriggerDecision Evaluate(DefaultScraperSemantic semantic, string mediaType, HttpContext? httpContext)

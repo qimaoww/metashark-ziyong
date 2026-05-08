@@ -88,6 +88,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_TextCompletionDisabled_DoesNotCallMetadataAssistButAllowsExternalIdResolver()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(allowTextCompletion: false));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 8872, "zh-CN", CreateTmdbSeries(8872, "关闭文本补全剧集", "关闭文本补全简介", null, null));
+            var llmService = CreateLlmService("不应调用的文本补全", 2024);
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "8872", "Series", MetadataProvider.Tmdb.ToString()));
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor("text-disabled"),
+                tmdbApi: tmdbApi,
+                llmService: llmService,
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("关闭文本补全剧集", "/mnt/media/TV/关闭文本补全剧集");
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, llmService.Requests.Count);
+            Assert.AreEqual(1, externalIdService.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("8872", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
         public async Task GetMetadata_OverwriteRefresh_DoesNotCallExternalIdResolverOrEpisodeGroupMappingAssist()
         {
             EnsurePluginInstance();
@@ -799,7 +826,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return llmService;
         }
 
-        private static PluginConfiguration CreateLlmConfiguration(bool enableLlm = true, bool allowTextCompletion = false, bool enableEpisodeGroupMappingAssist = false, string defaultScraperMode = PluginConfiguration.DefaultScraperModeDefault, bool enableTmdbMatch = true)
+        private static PluginConfiguration CreateLlmConfiguration(bool enableLlm = true, bool allowTextCompletion = true, bool enableEpisodeGroupMappingAssist = false, string defaultScraperMode = PluginConfiguration.DefaultScraperModeDefault, bool enableTmdbMatch = true)
         {
             return new PluginConfiguration
             {

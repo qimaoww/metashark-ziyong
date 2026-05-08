@@ -887,6 +887,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return (effectiveProviderTitle, overviewDecision);
             }
 
+            if (!Config.LlmAllowTextCompletion)
+            {
+                return (effectiveProviderTitle, overviewDecision);
+            }
+
             var triggerDecision = this.llmAssistTriggerPolicy.Evaluate(new LlmAssistTriggerContext
             {
                 Configuration = Config,
@@ -921,11 +926,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return (effectiveProviderTitle, overviewDecision);
             }
 
-            if (!Config.LlmAllowTextCompletion)
-            {
-                return (effectiveProviderTitle, overviewDecision);
-            }
-
             var suggestion = assistResult.Suggestion;
             if (IsMissingOrGenericEpisodeProviderTitle(effectiveProviderTitle?.Value)
                 && !string.IsNullOrWhiteSpace(suggestion.Title))
@@ -955,7 +955,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             EpisodeLocalizedValue? translationOverview,
             (string? Overview, string? ResultLanguage) overviewDecision)
         {
-            var relativePath = LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Episode));
+            var relativePath = Config.LlmAllowRelativePathContext
+                ? LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Episode))
+                : string.Empty;
             return new EpisodeInfo
             {
                 Name = string.IsNullOrWhiteSpace(originalMetadataTitle) ? info.Name : originalMetadataTitle.Trim(),

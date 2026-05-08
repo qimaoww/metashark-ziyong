@@ -45,6 +45,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             MetaSharkPlugin.Instance!.Configuration.EnableLlmAssist = false;
             MetaSharkPlugin.Instance.Configuration.EnableLlmEpisodeGroupMappingAssist = false;
             MetaSharkPlugin.Instance.Configuration.LlmAllowTextCompletion = false;
+            MetaSharkPlugin.Instance.Configuration.LlmAllowRelativePathContext = true;
             MetaSharkPlugin.Instance.Configuration.LlmBaseUrl = string.Empty;
             MetaSharkPlugin.Instance.Configuration.LlmModel = string.Empty;
             MetaSharkPlugin.Instance.Configuration.LlmApiKey = string.Empty;
@@ -166,16 +167,73 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_WhenTextCompletionDisabled_DoesNotUseLlmText()
+        public async Task GetMetadata_WhenTextCompletionDisabled_DoesNotCallMetadataAssist()
         {
             using var harness = CreateHarness(httpContext: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(TestItemIdString()), allowTextCompletion: false);
             harness.LlmService.EnqueueResult(CreateSuccessResult(title: "启程", overview: "雫第一次参加神之水滴选拔挑战。"));
 
             var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
 
-            Assert.AreEqual(1, harness.LlmService.Requests.Count);
+            Assert.AreEqual(0, harness.LlmService.Requests.Count);
             Assert.AreEqual("第 1 集", result.Item!.Name);
             Assert.IsNull(result.Item.Overview);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenTextCompletionDisabled_StillAllowsManualExternalIdResolution()
+        {
+            using var harness = CreateHarness(httpContext: LlmProviderFlowTestHelpers.CreateManualMatchHttpContext(TestItemIdString()), allowTextCompletion: false);
+            harness.LlmService.EnqueueResult(CreateSuccessResult(title: "启程", overview: "雫第一次参加神之水滴选拔挑战。"));
+            harness.ExternalIdService.EnqueueResult(CreateExternalIdResolutionResult(MetadataProvider.Tmdb.ToString(), "9001", nameof(Episode), MetadataProvider.Tmdb.ToString()));
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, harness.LlmService.Requests.Count);
+            Assert.AreEqual(1, harness.ExternalIdService.Requests.Count);
+            Assert.AreEqual("9001", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("第 1 集", result.Item.Name);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenRelativePathContextDisabled_RemovesPathsFromAllEpisodeLlmRequests()
+        {
+            var mappedSeries = new Series
+            {
+                Id = Guid.NewGuid(),
+                Name = "Series A",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tmdb.ToString()] = "123",
+                },
+            };
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateManualMatchHttpContext(TestItemIdString()),
+                allowTextCompletion: true,
+                allowEpisodeGroupMappingAssist: true,
+                allowRelativePathContext: false,
+                seriesForRefresh: mappedSeries);
+            harness.LlmService.EnqueueResult(CreateSuccessResult(title: "启程"));
+            harness.ExternalIdService.EnqueueResult(CreateExternalIdResolutionResult(MetadataProvider.Tmdb.ToString(), "9001", nameof(Episode), MetadataProvider.Tmdb.ToString()));
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(harness.TmdbApi, "candidate-group", "zh-CN");
+            harness.LlmEpisodeGroupMappingApi.Enqueue("candidate-group", 0.95);
+
+            _ = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, harness.LlmService.Requests.Count);
+            var metadataLookup = (EpisodeInfo)harness.LlmService.Requests.Single().LookupInfo!;
+            Assert.AreEqual(string.Empty, metadataLookup.Path);
+
+            Assert.AreEqual(1, harness.ExternalIdService.Requests.Count);
+            var externalIdLookup = (EpisodeInfo)harness.ExternalIdService.Requests.Single().LookupInfo!;
+            Assert.AreEqual(string.Empty, externalIdLookup.Path);
+
+            Assert.AreEqual(1, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
+            var groupPrompt = harness.LlmEpisodeGroupMappingApi.Prompts.Single();
+            Assert.IsFalse(groupPrompt.Contains("TV/Series A/Season 01/S01E01.mkv", StringComparison.Ordinal), groupPrompt);
+            Assert.IsFalse(groupPrompt.Contains("S01E01.mkv", StringComparison.Ordinal), groupPrompt);
+            Assert.IsFalse(groupPrompt.Contains("Season 01", StringComparison.Ordinal), groupPrompt);
+            Assert.IsFalse(groupPrompt.Contains("Series A/Season", StringComparison.Ordinal), groupPrompt);
+            LlmProviderFlowTestHelpers.AssertNoSensitiveContent(metadataLookup.Path, externalIdLookup.Path, groupPrompt);
         }
 
         [TestMethod]
@@ -201,6 +259,66 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(1, harness.LlmService.Requests.Count);
             Assert.AreEqual("第 1 集", result.Item!.Name);
             Assert.IsNull(harness.TitleCandidateStore.Peek(harness.Episode.Id));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenRawLlmSuggestionContainsSortTitle_IgnoresSortTitleAndAppliesOnlySupportedFields()
+        {
+            var llmApi = new RecordingRawLlmApi(LlmApiResult.Succeeded("{\"suggestions\":[{\"mediaType\":\"Episode\",\"title\":\"启程\",\"overview\":\"雫第一次参加神之水滴选拔挑战。\",\"confidence\":0.9,\"sortTitle\":\"Do Not Persist Sort Title\"}]}"));
+            var llmService = CreateRawLlmMetadataAssistService(llmApi);
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(TestItemIdString()),
+                allowTextCompletion: true,
+                llmMetadataAssistService: llmService);
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, llmApi.CallCount);
+            Assert.AreEqual("启程", result.Item!.Name);
+            Assert.AreEqual("雫第一次参加神之水滴选拔挑战。", result.Item.Overview);
+            AssertPublicStringPropertiesDoNotContain(result.Item, "Do Not Persist Sort Title");
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenRawLlmCandidateMissingConfidence_SkipsAssistWithoutProviderError()
+        {
+            var llmApi = new RecordingRawLlmApi(LlmApiResult.Succeeded("{\"suggestions\":[{\"mediaType\":\"Episode\",\"title\":\"缺少置信度标题\"}]}"));
+            var llmService = CreateRawLlmMetadataAssistService(llmApi);
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(TestItemIdString()),
+                tmdbEpisodeName: "皇后回宫",
+                allowTextCompletion: true,
+                llmMetadataAssistService: llmService);
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, llmApi.CallCount);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("皇后回宫", result.Item!.Name);
+            var candidate = harness.TitleCandidateStore.Peek(harness.Episode.Id);
+            Assert.IsNotNull(candidate);
+            Assert.AreEqual("皇后回宫", candidate!.CandidateTitle);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenMetadataAssistTimesOut_KeepsExistingEpisodeFlow()
+        {
+            var llmApi = new RecordingRawLlmApi(LlmApiResult.Failed("LLM request timed out."));
+            var llmService = CreateRawLlmMetadataAssistService(llmApi);
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(TestItemIdString()),
+                tmdbEpisodeName: "皇后回宫",
+                allowTextCompletion: true,
+                llmMetadataAssistService: llmService);
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+            var candidate = harness.TitleCandidateStore.Peek(harness.Episode.Id);
+
+            Assert.AreEqual(1, llmApi.CallCount);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("皇后回宫", result.Item!.Name);
+            Assert.IsNotNull(candidate);
+            Assert.AreEqual("皇后回宫", candidate!.CandidateTitle);
         }
 
         [TestMethod]
@@ -525,14 +643,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
             int indexNumber = 1,
             Dictionary<string, string>? seriesProviderIds = null,
             bool allowEpisodeGroupMappingAssist = false,
+            bool allowRelativePathContext = true,
             Series? seriesForRefresh = null,
-            LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService? externalIdResolutionService = null)
+            LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService? externalIdResolutionService = null,
+            ILlmMetadataAssistService? llmMetadataAssistService = null)
         {
             EnsurePluginInstance();
             var configuration = MetaSharkPlugin.Instance!.Configuration;
             configuration.EnableLlmAssist = enableLlm;
             configuration.EnableLlmEpisodeGroupMappingAssist = allowEpisodeGroupMappingAssist;
             configuration.LlmAllowTextCompletion = allowTextCompletion;
+            configuration.LlmAllowRelativePathContext = allowRelativePathContext;
             configuration.LlmBaseUrl = enableLlm ? "http://127.0.0.1:11434/v1" : string.Empty;
             configuration.LlmModel = enableLlm ? "test-model" : string.Empty;
             configuration.LlmApiKey = enableLlm ? "sk-test-secret" : string.Empty;
@@ -558,6 +679,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 seriesProviderIds,
                 seriesForRefresh,
                 externalIdResolutionService,
+                llmMetadataAssistService,
                 LoggerFactory.Create(builder => { }));
         }
 
@@ -592,6 +714,32 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 SeasonNumber = 1,
                 EpisodeNumber = 1,
             };
+        }
+
+        private static LlmMetadataAssistService CreateRawLlmMetadataAssistService(ILlmApi llmApi)
+        {
+            return new LlmMetadataAssistService(
+                llmApi,
+                new LlmAssistTriggerPolicy(),
+                new LlmScrapeContextBuilder(),
+                new LlmSuggestionValidator(),
+                new LlmScrapeMismatchDetector(),
+                new LlmMetadataMergePolicy(),
+                new LlmRequestLimiter());
+        }
+
+        private static void AssertPublicStringPropertiesDoNotContain(object item, string forbiddenValue)
+        {
+            foreach (var property in item.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
+            {
+                if (property.PropertyType != typeof(string) || property.GetIndexParameters().Length != 0)
+                {
+                    continue;
+                }
+
+                var value = property.GetValue(item) as string;
+                Assert.IsFalse(string.Equals(value, forbiddenValue, StringComparison.Ordinal), $"Unexpected unsupported LLM field value in {property.Name}.");
+            }
         }
 
         private static void AssertSafeEpisodeLlmRequest(LlmScrapingAssistRequest request, LlmScrapingAssistResult? result)
@@ -817,6 +965,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Dictionary<string, string>? seriesProviderIds,
                 Series? seriesForRefresh,
                 LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService? externalIdResolutionService,
+                ILlmMetadataAssistService? llmMetadataAssistService,
                 ILoggerFactory loggerFactory)
             {
                 this.TitleCandidateStore = new InMemoryEpisodeTitleBackfillCandidateStore();
@@ -874,7 +1023,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     new TvdbApi(loggerFactory),
                     this.TitleCandidateStore,
                     this.OverviewCleanupCandidateStore,
-                    this.LlmService,
+                    llmMetadataAssistService ?? this.LlmService,
                     this.CreateEpisodeGroupMappingProviderAssistService(loggerFactory, tmdbApi),
                     this.ExternalIdService,
                     loggerFactory);
@@ -1009,6 +1158,24 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 this.Prompts.Add(prompt);
                 var result = this.queuedResults.Count > 0 ? this.queuedResults.Dequeue() : (GroupId: "candidate-group", Confidence: 0.95);
                 return Task.FromResult(LlmApiResult.Succeeded($"{{\"selectedGroupId\":\"{result.GroupId}\",\"confidence\":{result.Confidence.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"reason\":\"test\"}}"));
+            }
+        }
+
+        private sealed class RecordingRawLlmApi : ILlmApi
+        {
+            private readonly LlmApiResult result;
+
+            public RecordingRawLlmApi(LlmApiResult result)
+            {
+                this.result = result;
+            }
+
+            public int CallCount { get; private set; }
+
+            public Task<LlmApiResult> CompleteAsync(string prompt, CancellationToken cancellationToken)
+            {
+                this.CallCount++;
+                return Task.FromResult(this.result);
             }
         }
 

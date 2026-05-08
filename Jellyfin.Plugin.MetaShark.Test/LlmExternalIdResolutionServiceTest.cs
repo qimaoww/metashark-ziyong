@@ -93,6 +93,72 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task ResolveAsync_WhenTextCompletionDisabled_ShouldStillResolveExternalId()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 27205, "zh-CN", string.Empty);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "27205", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = new MovieInfo { Name = "Inception", Year = 2010, MetadataLanguage = "zh-CN", ProviderIds = new Dictionary<string, string>() };
+            var request = CreateRequest(lookupInfo);
+            request.Configuration!.LlmAllowTextCompletion = false;
+
+            var result = await service.ResolveAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmExternalIdResolutionStatus.Succeeded, result.Status, result.Diagnostic);
+            Assert.AreEqual("27205", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
+        }
+
+        [TestMethod]
+        public async Task ResolveAsync_WhenRelativePathContextDisabled_ShouldNotIncludePathsInPrompt()
+        {
+            var llmApi = new RecordingLlmApi(@"{ ""externalIdCandidates"": [] }");
+            var service = this.CreateService(llmApi, this.CreateTmdbApi());
+            var lookupInfo = new EpisodeInfo
+            {
+                Name = "Episode 1",
+                Path = "/mnt/media/Shows/Series A/Season 01/S01E01.mkv",
+                MetadataLanguage = "zh-CN",
+                ParentIndexNumber = 1,
+                IndexNumber = 1,
+                ProviderIds = new Dictionary<string, string>(),
+                SeriesProviderIds = new Dictionary<string, string> { [MetadataProvider.Tmdb.ToString()] = "1396" },
+            };
+            var request = CreateRequest(lookupInfo, mediaType: "Episode");
+            request.Configuration!.LlmAllowRelativePathContext = false;
+            request.RelativePathSamples = new[] { "/mnt/media/Shows/Series A/Season 01/S01E02.mkv", "Shows/Series A/Season 01/S01E03.mkv" };
+
+            var result = await service.ResolveAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmExternalIdResolutionStatus.Skipped, result.Status, result.Diagnostic);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
+            var prompt = llmApi.Prompts.Single();
+            Assert.IsFalse(prompt.Contains("/mnt/media", StringComparison.OrdinalIgnoreCase), prompt);
+            Assert.IsFalse(prompt.Contains("Shows/Series A", StringComparison.Ordinal), prompt);
+            Assert.IsFalse(prompt.Contains("S01E", StringComparison.OrdinalIgnoreCase), prompt);
+            using var document = JsonDocument.Parse(prompt);
+            Assert.AreEqual(0, document.RootElement.GetProperty("SafeRelativePathSamples").GetArrayLength());
+        }
+
+        [TestMethod]
+        public async Task ResolveAsync_WhenLimiterBusy_ShouldSkipWithoutCallingApi()
+        {
+            using var limiter = new LlmRequestLimiter();
+            using var heldLease = await limiter.TryAcquireAsync(CancellationToken.None).ConfigureAwait(false);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "27205", "Movie")));
+            var service = this.CreateService(llmApi, this.CreateTmdbApi(), requestLimiter: limiter);
+            var lookupInfo = new MovieInfo { Name = "Inception", Year = 2010, MetadataLanguage = "zh-CN", ProviderIds = new Dictionary<string, string>() };
+
+            var result = await service.ResolveAsync(CreateRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmExternalIdResolutionStatus.Skipped, result.Status);
+            Assert.AreEqual("LlmRequestLimiterBusy", result.Diagnostic);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+            Assert.AreEqual(0, lookupInfo.ProviderIds.Count);
+        }
+
+        [TestMethod]
         public async Task ResolveAsync_WhenLlmJsonInvalid_ShouldReturnValidationFailureWithoutWrite()
         {
             var llmApi = new RecordingLlmApi(@"{ ""candidates"": [] }");
@@ -508,7 +574,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(result.Diagnostics[0].Contains("not overwritten", StringComparison.OrdinalIgnoreCase), result.Diagnostics[0]);
         }
 
-        private LlmExternalIdResolutionService CreateService(RecordingLlmApi llmApi, TmdbApi tmdbApi, TvdbApi? tvdbApi = null)
+        private LlmExternalIdResolutionService CreateService(RecordingLlmApi llmApi, TmdbApi tmdbApi, TvdbApi? tvdbApi = null, ILlmRequestLimiter? requestLimiter = null)
         {
             return new LlmExternalIdResolutionService(
                 llmApi,
@@ -516,7 +582,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 new DoubanApi(this.loggerFactory),
                 tvdbApi ?? this.CreateTvdbApi(),
                 new LlmAssistTriggerPolicy(),
-                new LlmExternalIdCandidateValidator());
+                new LlmExternalIdCandidateValidator(),
+                requestLimiter);
         }
 
         private TmdbApi CreateTmdbApi()

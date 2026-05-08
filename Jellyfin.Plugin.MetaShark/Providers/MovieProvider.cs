@@ -480,7 +480,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private async Task<LlmScrapingAssistResult> TryAssistMovieMetadataWithLlmAsync(MovieInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
         {
-            if (this.llmMetadataAssistService == null || !HasCompleteLlmConfiguration(Config))
+            if (this.llmMetadataAssistService == null || !Config.LlmAllowTextCompletion || !HasCompleteLlmConfiguration(Config))
             {
                 return LlmScrapingAssistResult.NotTriggered("LlmConfigurationMissing");
             }

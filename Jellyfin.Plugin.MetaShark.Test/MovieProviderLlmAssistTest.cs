@@ -95,6 +95,29 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_DoesNotCallMetadataAssist_WhenTextCompletionDisabled()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(allowTextCompletion: false));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("text-disabled-douban", "Text Disabled Movie", 2024);
+            SeedDoubanSearchResults(doubanApi, "Text Disabled Movie", subject);
+            SeedDoubanSubject(doubanApi, subject);
+            var llm = CreateSuccessfulLlm("Ignored Text Completion Movie", 2024);
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                llmMetadataAssistService: llm);
+
+            var result = await provider.GetMetadata(CreateMovieInfo("Text Disabled Movie", "/mnt/media/Movies/Text Disabled Movie/Text Disabled Movie.mkv", 2024), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, llm.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("text-disabled-douban", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+        }
+
+        [TestMethod]
         public async Task GetMetadata_CallsLlmOnceForManualMatch_AndSendsSafeRelativePath()
         {
             ReplacePluginConfiguration(CreateLlmConfiguration());
@@ -542,7 +565,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
-        private static PluginConfiguration CreateLlmConfiguration(bool allowTextCompletion = false)
+        private static PluginConfiguration CreateLlmConfiguration(bool allowTextCompletion = true)
         {
             return new PluginConfiguration
             {
