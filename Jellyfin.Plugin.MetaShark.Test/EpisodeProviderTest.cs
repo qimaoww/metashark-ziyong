@@ -12,16 +12,18 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using System;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Serialization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
+using TMDbLib.Objects.General;
 using TMDbLib.Objects.TvShows;
 
 namespace Jellyfin.Plugin.MetaShark.Test
@@ -287,6 +289,55 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }
         }
 
+
+        [TestMethod]
+        public async Task GetMetadata_WhenTmdbEpisodeUnexpectedHttpError_ReturnsNoMetadataWithoutThrowing()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableTmdb = true,
+                LlmAllowTextCompletion = false,
+            });
+
+            var tmdbApi = new TmdbApi(loggerFactory);
+            ConfigureTmdbClient(tmdbApi, new HttpClient(new StatusHttpMessageHandler(HttpStatusCode.InternalServerError)));
+
+            var provider = new EpisodeProvider(
+                new DefaultHttpClientFactory(),
+                loggerFactory,
+                new Mock<ILibraryManager>().Object,
+                new Mock<IHttpContextAccessor>().Object,
+                new DoubanApi(loggerFactory),
+                tmdbApi,
+                new OmdbApi(loggerFactory),
+                new ImdbApi(loggerFactory),
+                new TvdbApi(loggerFactory));
+
+            var result = await provider.GetMetadata(
+                new EpisodeInfo
+                {
+                    Name = "Episode 3",
+                    Path = "/test/Series/S02/episode-03.mkv",
+                    MetadataLanguage = "zh-CN",
+                    ParentIndexNumber = 2,
+                    IndexNumber = 3,
+                    SeriesProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), "1" },
+                    },
+                    IsAutomated = true,
+                },
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result, "EpisodeProvider 应返回空元数据结果，而不是让 TMDb HTTP 异常冒泡。 ");
+            Assert.IsTrue(result.HasMetadata, "EpisodeProvider 应按既有空结果语义返回可接受结果，而不是让 TMDb 异常冒泡。 ");
+            Assert.IsNotNull(result.Item, "EpisodeProvider fail-closed 时应保持既有空 item 结果语义。 ");
+            Assert.AreEqual("Episode 3", result.Item!.Name, "TMDb 单集详情不可用时应保留查询标题，不应写入 TMDb 标题。 ");
+            Assert.IsNull(result.Item.Overview, "TMDb 单集详情不可用时不应写入简介。 ");
+            Assert.IsNull(result.Item.PremiereDate, "TMDb 单集详情不可用时不应写入首播日期。 ");
+        }
+
         [TestMethod]
         public async Task GetMetadata_DoesNotAddEpisodePeople()
         {
@@ -498,6 +549,44 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     { "Episode", 1 },
                 },
                 originalFormatContains: "[MetaShark] 未找到 TVDB 特别篇定位");
+        }
+
+
+        private static void ConfigureTmdbClient(TmdbApi api, HttpClient httpClient)
+        {
+            var tmdbClientField = typeof(TmdbApi).GetField("tmDbClient", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(tmdbClientField, "TmdbApi.tmDbClient 未定义。 ");
+            var tmdbClient = tmdbClientField!.GetValue(api);
+            Assert.IsNotNull(tmdbClient, "TmdbApi.tmDbClient 不是有效对象。 ");
+            var setConfigMethod = tmdbClient!.GetType().GetMethod("SetConfig", new[] { typeof(TMDbConfig) });
+            Assert.IsNotNull(setConfigMethod, "TMDbClient.SetConfig 未定义。 ");
+            setConfigMethod!.Invoke(tmdbClient, new object[] { new TMDbConfig() });
+
+            var restClientField = tmdbClient.GetType().GetField("_client", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(restClientField, "TMDbClient._client 未定义。 ");
+            var restClient = restClientField!.GetValue(tmdbClient);
+            Assert.IsNotNull(restClient, "TMDbClient._client 不是有效对象。 ");
+            var httpClientProperty = restClient!.GetType().GetProperty("HttpClient", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.IsNotNull(httpClientProperty, "RestClient.HttpClient 未定义。 ");
+            httpClientProperty!.SetValue(restClient, httpClient);
+        }
+
+        private sealed class StatusHttpMessageHandler : HttpMessageHandler
+        {
+            private readonly HttpStatusCode statusCode;
+
+            public StatusHttpMessageHandler(HttpStatusCode statusCode)
+            {
+                this.statusCode = statusCode;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                return Task.FromResult(new HttpResponseMessage(this.statusCode)
+                {
+                    Content = new StringContent("server error"),
+                });
+            }
         }
 
     }

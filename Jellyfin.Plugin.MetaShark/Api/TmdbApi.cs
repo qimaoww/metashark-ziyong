@@ -1,4 +1,4 @@
-﻿// <copyright file="TmdbApi.cs" company="PlaceholderCompany">
+// <copyright file="TmdbApi.cs" company="PlaceholderCompany">
 // Copyright (c) PlaceholderCompany. All rights reserved.
 // </copyright>
 
@@ -23,6 +23,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
     using Microsoft.Extensions.Logging;
     using TMDbLib.Client;
     using TMDbLib.Objects.Collections;
+    using TMDbLib.Objects.Exceptions;
     using TMDbLib.Objects.Find;
     using TMDbLib.Objects.General;
     using TMDbLib.Objects.Movies;
@@ -44,6 +45,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private readonly MemoryCache memoryCache;
         private readonly TMDbClient tmDbClient;
         private readonly Action<ILogger, string, Exception?> logTmdbError;
+        private readonly Action<ILogger, string, Exception?> logTmdbUnexpectedHttpError;
         private readonly string apiKey;
         private readonly string apiHost;
 
@@ -55,6 +57,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
             this.logger = loggerFactory.CreateLogger<TmdbApi>();
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
             this.logTmdbError = LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(TmdbApi)), "[MetaShark] TMDB 请求异常. 操作={Operation}");
+            this.logTmdbUnexpectedHttpError = LoggerMessage.Define<string>(LogLevel.Warning, new EventId(2, nameof(TmdbApi)), "[MetaShark] TMDB 单集请求返回非预期 HTTP 错误. 操作={Operation}");
             var config = MetaSharkPlugin.Instance?.Configuration;
             this.apiKey = string.IsNullOrEmpty(config?.TmdbApiKey) ? DefaultApiKey : config.TmdbApiKey;
             this.apiHost = string.IsNullOrEmpty(config?.TmdbHost) ? DefaultApiHost : config.TmdbHost;
@@ -566,6 +569,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 this.logTmdbError(this.logger, nameof(this.GetEpisodeAsync), ex);
                 return null;
             }
+            catch (GeneralHttpException ex)
+            {
+                this.logTmdbUnexpectedHttpError(this.logger, nameof(this.GetEpisodeAsync), ex);
+                return null;
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
@@ -670,6 +678,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 this.logTmdbError(this.logger, nameof(this.GetEpisodeImagesAsync), ex);
                 return null;
             }
+            catch (GeneralHttpException ex)
+            {
+                this.logTmdbUnexpectedHttpError(this.logger, nameof(this.GetEpisodeImagesAsync), ex);
+                return null;
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
@@ -729,6 +742,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 this.logTmdbError(this.logger, nameof(this.GetEpisodeTranslationTitleAsync), ex);
                 return null;
             }
+            catch (GeneralHttpException ex)
+            {
+                this.logTmdbUnexpectedHttpError(this.logger, nameof(this.GetEpisodeTranslationTitleAsync), ex);
+                return null;
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
@@ -786,6 +804,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
             catch (HttpRequestException ex)
             {
                 this.logTmdbError(this.logger, nameof(this.GetEpisodeTranslationOverviewAsync), ex);
+                return null;
+            }
+            catch (GeneralHttpException ex)
+            {
+                this.logTmdbUnexpectedHttpError(this.logger, nameof(this.GetEpisodeTranslationOverviewAsync), ex);
                 return null;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

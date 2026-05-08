@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Reflection;
@@ -10,6 +11,8 @@ using MediaBrowser.Controller;
 using MediaBrowser.Model.Serialization;
 using Microsoft.Extensions.Logging;
 using Moq;
+using TMDbLib.Objects.Exceptions;
+using TMDbLib.Objects.General;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -66,6 +69,67 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 originalFormatContains: "[MetaShark] TMDB 请求异常. 操作={Operation}",
                 messageContains: ["[MetaShark]", "TMDB 请求异常", nameof(TmdbApi.GetMovieAsync)]);
             AssertLoggedEventId(loggerStub, LogLevel.Error, 1, nameof(TmdbApi));
+        }
+
+
+        [TestMethod]
+        public async Task GetEpisodeAsync_WhenTmdbGeneralHttpException_ShouldLogWarningAndReturnNull()
+        {
+            var loggerStub = new Mock<ILogger<TmdbApi>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var loggerFactory = CreateLoggerFactory(loggerStub);
+            using var api = CreateTmdbApiWithStatus(loggerFactory.Object, HttpStatusCode.InternalServerError);
+
+            var result = await api.GetEpisodeAsync(1, 2, 3, "zh-CN", "zh-CN", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNull(result, "TMDB 单集详情遇到非预期 HTTP 错误时应返回 null。 ");
+            AssertTmdbUnexpectedHttpWarningLogged(loggerStub, nameof(TmdbApi.GetEpisodeAsync));
+        }
+
+        [TestMethod]
+        public async Task GetEpisodeTranslationTitleAsync_WhenTmdbGeneralHttpException_ShouldLogWarningAndReturnNull()
+        {
+            var loggerStub = new Mock<ILogger<TmdbApi>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var loggerFactory = CreateLoggerFactory(loggerStub);
+            using var api = CreateTmdbApiWithStatus(loggerFactory.Object, HttpStatusCode.InternalServerError);
+
+            var result = await api.GetEpisodeTranslationTitleAsync(1, 2, 3, "zh-CN", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNull(result, "TMDB 单集翻译标题遇到非预期 HTTP 错误时应返回 null。 ");
+            AssertTmdbUnexpectedHttpWarningLogged(loggerStub, nameof(TmdbApi.GetEpisodeTranslationTitleAsync));
+        }
+
+        [TestMethod]
+        public async Task GetEpisodeTranslationOverviewAsync_WhenTmdbGeneralHttpException_ShouldLogWarningAndReturnNull()
+        {
+            var loggerStub = new Mock<ILogger<TmdbApi>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var loggerFactory = CreateLoggerFactory(loggerStub);
+            using var api = CreateTmdbApiWithStatus(loggerFactory.Object, HttpStatusCode.InternalServerError);
+
+            var result = await api.GetEpisodeTranslationOverviewAsync(1, 2, 3, "zh-CN", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNull(result, "TMDB 单集翻译简介遇到非预期 HTTP 错误时应返回 null。 ");
+            AssertTmdbUnexpectedHttpWarningLogged(loggerStub, nameof(TmdbApi.GetEpisodeTranslationOverviewAsync));
+        }
+
+        [TestMethod]
+        public async Task GetEpisodeImagesAsync_WhenTmdbGeneralHttpException_ShouldLogWarningAndReturnNull()
+        {
+            var loggerStub = new Mock<ILogger<TmdbApi>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            var loggerFactory = CreateLoggerFactory(loggerStub);
+            using var api = CreateTmdbApiWithStatus(loggerFactory.Object, HttpStatusCode.InternalServerError);
+
+            var result = await api.GetEpisodeImagesAsync(1, 2, 3, "zh-CN", string.Empty, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNull(result, "TMDB 单集图片遇到非预期 HTTP 错误时应返回 null。 ");
+            AssertTmdbUnexpectedHttpWarningLogged(loggerStub, nameof(TmdbApi.GetEpisodeImagesAsync));
         }
 
         [TestMethod]
@@ -147,6 +211,74 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 originalFormatContains: "[MetaShark] 通过 IMDB ID 获取 OMDB 数据失败. IMDB编号={ImdbId}",
                 messageContains: ["[MetaShark]", "通过 IMDB ID 获取 OMDB 数据失败", imdbId]);
             AssertLoggedEventId(loggerStub, LogLevel.Error, 1, nameof(OmdbApi.GetByImdbID));
+        }
+
+
+        private static TmdbApi CreateTmdbApiWithStatus(ILoggerFactory loggerFactory, HttpStatusCode statusCode)
+        {
+            var api = new TmdbApi(loggerFactory);
+            ConfigureTmdbClient(api, new HttpClient(new StatusHttpMessageHandler(statusCode)));
+            return api;
+        }
+
+        private static void ConfigureTmdbClient(TmdbApi api, HttpClient httpClient)
+        {
+            var tmdbClientField = typeof(TmdbApi).GetField("tmDbClient", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(tmdbClientField, "TmdbApi.tmDbClient 未定义。 ");
+            var tmdbClient = tmdbClientField!.GetValue(api);
+            Assert.IsNotNull(tmdbClient, "TmdbApi.tmDbClient 不是有效对象。 ");
+            var setConfigMethod = tmdbClient!.GetType().GetMethod("SetConfig", new[] { typeof(TMDbConfig) });
+            Assert.IsNotNull(setConfigMethod, "TMDbClient.SetConfig 未定义。 ");
+            setConfigMethod!.Invoke(tmdbClient, new object[] { new TMDbConfig() });
+
+            var restClientField = tmdbClient.GetType().GetField("_client", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(restClientField, "TMDbClient._client 未定义。 ");
+            var restClient = restClientField!.GetValue(tmdbClient);
+            Assert.IsNotNull(restClient, "TMDbClient._client 不是有效对象。 ");
+            var httpClientProperty = restClient!.GetType().GetProperty("HttpClient", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.IsNotNull(httpClientProperty, "RestClient.HttpClient 未定义。 ");
+            httpClientProperty!.SetValue(restClient, httpClient);
+        }
+
+        private static void AssertTmdbUnexpectedHttpWarningLogged(Mock<ILogger<TmdbApi>> loggerStub, string operation)
+        {
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Warning,
+                expectException: true,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Operation"] = operation,
+                },
+                originalFormatContains: "[MetaShark] TMDB 单集请求返回非预期 HTTP 错误. 操作={Operation}",
+                messageContains: ["[MetaShark]", "TMDB 单集请求返回非预期 HTTP 错误", operation]);
+            AssertLoggedEventId(loggerStub, LogLevel.Warning, 2, nameof(TmdbApi));
+            AssertLoggedExceptionType<GeneralHttpException>(loggerStub, LogLevel.Warning);
+            AssertNoErrorLogged(loggerStub, operation);
+        }
+
+        private static void AssertNoErrorLogged(Mock loggerStub, string operation)
+        {
+            var hasError = loggerStub.Invocations.Any(invocation => string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal)
+                && invocation.Arguments.Count == 5
+                && invocation.Arguments[0] is LogLevel logLevel
+                && logLevel == LogLevel.Error
+                && invocation.Arguments[2]?.ToString()?.Contains(operation, StringComparison.Ordinal) == true);
+            Assert.IsFalse(hasError, $"TMDB single-episode GeneralHttpException should be Warning-only for {operation}.");
+        }
+
+        private static void AssertLoggedExceptionType<TException>(Mock loggerStub, LogLevel level)
+            where TException : Exception
+        {
+            var matches = loggerStub.Invocations
+                .Where(invocation => string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal)
+                    && invocation.Arguments.Count == 5
+                    && invocation.Arguments[0] is LogLevel logLevel
+                    && logLevel == level
+                    && invocation.Arguments[3] is TException)
+                .ToList();
+
+            Assert.AreEqual(1, matches.Count, $"期望找到唯一 {typeof(TException).Name} 异常日志。Level={level}。");
         }
 
         private static Mock<ILoggerFactory> CreateLoggerFactory<T>(Mock<ILogger<T>> loggerStub)
@@ -263,6 +395,25 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .ToList();
 
             Assert.AreEqual(1, matches.Count, $"期望找到唯一匹配的 EventId。Level={level}, Id={expectedId}, Name={expectedName}。");
+        }
+
+
+        private sealed class StatusHttpMessageHandler : HttpMessageHandler
+        {
+            private readonly HttpStatusCode statusCode;
+
+            public StatusHttpMessageHandler(HttpStatusCode statusCode)
+            {
+                this.statusCode = statusCode;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                return Task.FromResult(new HttpResponseMessage(this.statusCode)
+                {
+                    Content = new StringContent("server error"),
+                });
+            }
         }
 
         private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
