@@ -10,5 +10,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
     public interface ILlmExternalIdResolutionService
     {
         Task<LlmExternalIdResolutionResult> ResolveAsync(LlmExternalIdResolutionRequest request, CancellationToken cancellationToken);
+
+        Task<LlmTmdbIdCorrectionResult> TryResolveTmdbCorrectionAsync(LlmTmdbIdCorrectionRequest request, CancellationToken cancellationToken);
     }
 }

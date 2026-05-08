@@ -155,12 +155,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
         internal sealed class RecordingLlmExternalIdResolutionService : ILlmExternalIdResolutionService
         {
             private readonly Queue<LlmExternalIdResolutionResult> queuedResults = new Queue<LlmExternalIdResolutionResult>();
+            private readonly Queue<LlmTmdbIdCorrectionResult> queuedCorrectionResults = new Queue<LlmTmdbIdCorrectionResult>();
 
             public List<LlmExternalIdResolutionRequest> Requests { get; } = new List<LlmExternalIdResolutionRequest>();
+
+            public List<LlmTmdbIdCorrectionRequest> CorrectionRequests { get; } = new List<LlmTmdbIdCorrectionRequest>();
 
             public void EnqueueResult(LlmExternalIdResolutionResult result)
             {
                 this.queuedResults.Enqueue(result);
+            }
+
+            public void EnqueueCorrectionResult(LlmTmdbIdCorrectionResult result)
+            {
+                this.queuedCorrectionResults.Enqueue(result);
             }
 
             public Task<LlmExternalIdResolutionResult> ResolveAsync(LlmExternalIdResolutionRequest request, CancellationToken cancellationToken)
@@ -169,6 +177,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var result = this.queuedResults.Count > 0
                     ? this.queuedResults.Dequeue()
                     : LlmExternalIdResolutionResult.NotTriggered("No queued test result.");
+                return Task.FromResult(result);
+            }
+
+            public Task<LlmTmdbIdCorrectionResult> TryResolveTmdbCorrectionAsync(LlmTmdbIdCorrectionRequest request, CancellationToken cancellationToken)
+            {
+                this.CorrectionRequests.Add(request);
+                var result = this.queuedCorrectionResults.Count > 0
+                    ? this.queuedCorrectionResults.Dequeue()
+                    : LlmTmdbIdCorrectionResult.NoReplacement("No queued test result.");
                 return Task.FromResult(result);
             }
         }

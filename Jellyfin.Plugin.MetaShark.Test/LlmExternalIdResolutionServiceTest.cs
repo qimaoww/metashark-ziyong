@@ -19,6 +19,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Moq;
+using TMDbLib.Objects.Find;
+using TMDbLib.Objects.Search;
 using TmdbMovie = TMDbLib.Objects.Movies.Movie;
 using TmdbTvShow = TMDbLib.Objects.TvShows.TvShow;
 
@@ -69,7 +71,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task ResolveAsync_WhenProviderIdExists_ShouldNotOverwrite()
+        public async Task ResolveAsync_WhenProviderIdExistsAndCorrectionSwitchOff_ShouldNotOverwriteThroughOrdinaryResolver()
         {
             var tmdbApi = this.CreateTmdbApi();
             SeedTmdbMovie(tmdbApi, 27205, "zh-CN", string.Empty);
@@ -83,8 +85,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 ProviderIds = new Dictionary<string, string> { [MetadataProvider.Tmdb.ToString()] = "existing" },
             };
 
-            var result = await service.ResolveAsync(CreateRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+            var request = CreateRequest(lookupInfo);
+            request.Configuration!.EnableLlmTmdbIdCorrection = false;
 
+            var result = await service.ResolveAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(request.Configuration.EnableLlmTmdbIdCorrection);
             Assert.AreEqual(LlmExternalIdResolutionStatus.Skipped, result.Status, result.Diagnostic);
             Assert.AreEqual("existing", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
             Assert.AreEqual(0, result.ProviderIdWrites.Count);
@@ -548,6 +554,305 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenImdbUniqueMappingProvesOldWrong_ShouldReturnReplacementOnly()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "tt1234567", "zh-CN", movieIds: new[] { 222 });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie", reason: "public id conflict", evidence: "IMDb evidence")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.ShouldReplace, result.Diagnostic);
+            Assert.AreEqual("222", result.ReplacementTmdbId);
+            Assert.AreEqual("111", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual("tt1234567", lookupInfo.ProviderIds[MetadataProvider.Imdb.ToString()]);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenSeriesImdbUniqueMappingProvesOldWrong_ShouldReturnReplacementOnly()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbSeries(tmdbApi, 222, "zh-CN", string.Empty);
+            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "tt7654321", "zh-CN", seriesIds: new[] { 222 });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Series", reason: "public id conflict", evidence: "IMDb evidence")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateSeriesCorrectionLookupInfo("111", imdbId: "tt7654321");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo, mediaType: "Series"), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.ShouldReplace, result.Diagnostic);
+            Assert.AreEqual("222", result.ReplacementTmdbId);
+            Assert.AreEqual("111", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual("tt7654321", lookupInfo.ProviderIds[MetadataProvider.Imdb.ToString()]);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenCandidateVerificationThrows_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+            tmdbApi.Dispose();
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("candidate verification failed", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("ObjectDisposedException", StringComparison.Ordinal), result.Diagnostic);
+            Assert.IsFalse(result.Diagnostic.Contains("/mnt/media", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.IsFalse(result.Diagnostic.Contains("http://", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.AreEqual("111", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenEvidenceVerificationThrows_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            var doubanApi = this.CreateDoubanApi();
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi, doubanApi: doubanApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", doubanId: "1290000");
+            doubanApi.Dispose();
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("evidence verification failed", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("ObjectDisposedException", StringComparison.Ordinal), result.Diagnostic);
+            Assert.IsFalse(result.Diagnostic.Contains("/mnt/media", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.IsFalse(result.Diagnostic.Contains("http://", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.AreEqual("111", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenNewTmdbLookupFails_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedMissingTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "tt1234567", "zh-CN", movieIds: new[] { 222 });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("TMDb movie", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.AreEqual("111", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenCandidateMediaTypeMismatches_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbSeries(tmdbApi, 222, "zh-CN", string.Empty);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Series")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo, mediaType: "Movie"), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("no TMDb candidate", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenCandidatesConflict_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            SeedTmdbMovie(tmdbApi, 333, "zh-CN", string.Empty);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie"), CandidateJson("TMDb", "333", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("AmbiguousCandidates", StringComparison.Ordinal), result.Diagnostic);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenOldTmdbNotProvenWrong_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "tt1234567", "zh-CN", movieIds: new[] { 222, 111 });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("ImdbEvidenceDoesNotAlign", StringComparison.Ordinal), result.Diagnostic);
+        }
+
+        [DataTestMethod]
+        [DataRow(111, DisplayName = "IMDb maps to old TMDb")]
+        [DataRow(333, DisplayName = "IMDb maps to third-party TMDb")]
+        public async Task TryResolveTmdbCorrectionAsync_WhenImdbEvidenceConflicts_ShouldFailClosedWithoutTvdbFallback(int imdbMappedSeriesId)
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbSeries(tmdbApi, 222, "zh-CN", string.Empty);
+            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "tt1234567", "zh-CN", seriesIds: new[] { imdbMappedSeriesId });
+            SeedFindByExternalId(tmdbApi, FindExternalSource.TvDb, "tvdb222", "zh-CN", seriesIds: new[] { 222 });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Series")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateSeriesCorrectionLookupInfo("111", imdbId: "tt1234567", tvdbId: "tvdb222");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo, mediaType: "Series"), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("ImdbEvidenceDoesNotAlign", StringComparison.Ordinal), result.Diagnostic);
+            Assert.AreEqual("111", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenOnlyTitleYearSimilarityExists_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie", reason: "title and year match", evidence: "title and year only")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("StrongEvidenceMissing", StringComparison.Ordinal), result.Diagnostic);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenTvdbMovieEvidenceUnverifiable_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", tvdbId: "321");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("TvdbOwnershipUnverifiable", StringComparison.Ordinal), result.Diagnostic);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenDoubanHasNoVerifiableOwnership_ShouldReturnNoReplacement()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            var doubanApi = this.CreateDoubanApi();
+            SeedDoubanSubject(doubanApi, "1290000", new DoubanSubject { Sid = "1290000", Category = "电影" });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi, doubanApi: doubanApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", doubanId: "1290000");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("DoubanOwnershipUnverifiable", StringComparison.Ordinal), result.Diagnostic);
+        }
+
+        [DataTestMethod]
+        [DataRow(@"{ ""externalIdCandidates"": [] }", "no candidates", DisplayName = "no candidate")]
+        [DataRow(@"{ ""externalIdCandidates"": [{ ""provider"": ""TMDb"", ""id"": ""222"", ""mediaType"": ""Movie"", ""confidence"": 0.5, ""reason"": ""weak"", ""evidence"": ""weak"" }] }", "below threshold", DisplayName = "low confidence")]
+        public async Task TryResolveTmdbCorrectionAsync_WhenLlmHasNoUsableCandidate_ShouldReturnNoReplacement(string responseJson, string expectedDiagnostic)
+        {
+            var llmApi = new RecordingLlmApi(responseJson);
+            var service = this.CreateService(llmApi, this.CreateTmdbApi());
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+        }
+
+        [DataTestMethod]
+        [DataRow(false, true, "LlmTmdbIdCorrectionConfigurationMissing", DisplayName = "correction disabled")]
+        [DataRow(true, false, "LlmTmdbIdCorrectionConfigurationMissing", DisplayName = "global LLM disabled")]
+        public async Task TryResolveTmdbCorrectionAsync_WhenConfigurationDisabled_ShouldNotCallLlm(bool enableCorrection, bool enableAssist, string expectedDiagnostic)
+        {
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, this.CreateTmdbApi());
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+            var request = CreateCorrectionRequest(lookupInfo);
+            request.Configuration!.EnableLlmTmdbIdCorrection = enableCorrection;
+            request.Configuration.EnableLlmAssist = enableAssist;
+
+            var result = await service.TryResolveTmdbCorrectionAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.AreEqual(expectedDiagnostic, result.Diagnostic);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow("Episode")]
+        [DataRow("Season")]
+        public async Task TryResolveTmdbCorrectionAsync_WhenUnsupportedMediaType_ShouldNotCallLlm(string mediaType)
+        {
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, this.CreateTmdbApi());
+            var lookupInfo = new EpisodeInfo { Name = "Episode 1", ProviderIds = new Dictionary<string, string> { [MetadataProvider.Tmdb.ToString()] = "111" } };
+
+            var result = await service.TryResolveTmdbCorrectionAsync(CreateCorrectionRequest(lookupInfo, mediaType: mediaType), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.AreEqual("UnsupportedMediaType", result.Diagnostic);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenNoAllowedTrigger_ShouldNotCallLlm()
+        {
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, this.CreateTmdbApi());
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+            var request = CreateCorrectionRequest(lookupInfo);
+            request.HttpContext = null;
+
+            var result = await service.TryResolveTmdbCorrectionAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
+            Assert.AreEqual("ImplicitRefreshRejected", result.Diagnostic);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+        }
+
+        [TestMethod]
+        public async Task TryResolveTmdbCorrectionAsync_WhenRelativePathContextDisabled_ShouldNotIncludePathsInPrompt()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", string.Empty);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Movie")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = CreateMovieCorrectionLookupInfo("111", imdbId: "tt1234567");
+            lookupInfo.Path = "/mnt/media/Movies/Private Folder/Secret Movie (2020)/Secret.Movie.2020.mkv";
+            var request = CreateCorrectionRequest(lookupInfo);
+            request.Configuration!.LlmAllowRelativePathContext = false;
+            request.RelativePathSamples = new[] { "/mnt/media/Movies/Private Folder/Secret Movie (2020)/sample.mkv", "Movies/Private Folder/Secret Movie (2020)/other.mkv" };
+
+            _ = await service.TryResolveTmdbCorrectionAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            var prompt = llmApi.Prompts.Single();
+            Assert.IsFalse(prompt.Contains("/mnt/media", StringComparison.OrdinalIgnoreCase), prompt);
+            Assert.IsFalse(prompt.Contains("Private Folder", StringComparison.Ordinal), prompt);
+            Assert.IsFalse(prompt.Contains("Secret.Movie", StringComparison.OrdinalIgnoreCase), prompt);
+            Assert.IsFalse(prompt.Contains("sample.mkv", StringComparison.OrdinalIgnoreCase), prompt);
+            using var document = JsonDocument.Parse(prompt);
+            Assert.AreEqual(0, document.RootElement.GetProperty("SafeRelativePathSamples").GetArrayLength());
+        }
+
+        [TestMethod]
         public void ApplyMissingProviderIds_ShouldAddMissingKeepExistingAndRecordSkippedDiagnostics()
         {
             var providerIds = new Dictionary<string, string>
@@ -574,12 +879,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(result.Diagnostics[0].Contains("not overwritten", StringComparison.OrdinalIgnoreCase), result.Diagnostics[0]);
         }
 
-        private LlmExternalIdResolutionService CreateService(RecordingLlmApi llmApi, TmdbApi tmdbApi, TvdbApi? tvdbApi = null, ILlmRequestLimiter? requestLimiter = null)
+        private LlmExternalIdResolutionService CreateService(RecordingLlmApi llmApi, TmdbApi tmdbApi, TvdbApi? tvdbApi = null, DoubanApi? doubanApi = null, ILlmRequestLimiter? requestLimiter = null)
         {
             return new LlmExternalIdResolutionService(
                 llmApi,
                 tmdbApi,
-                new DoubanApi(this.loggerFactory),
+                doubanApi ?? new DoubanApi(this.loggerFactory),
                 tvdbApi ?? this.CreateTvdbApi(),
                 new LlmAssistTriggerPolicy(),
                 new LlmExternalIdCandidateValidator(),
@@ -594,6 +899,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private TvdbApi CreateTvdbApi()
         {
             return new TvdbApi(this.loggerFactory);
+        }
+
+        private DoubanApi CreateDoubanApi()
+        {
+            return new DoubanApi(this.loggerFactory);
         }
 
         private static LlmExternalIdResolutionRequest CreateRequest(ItemLookupInfo lookupInfo, string? mediaType = null)
@@ -633,10 +943,85 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return new PluginConfiguration
             {
                 EnableLlmAssist = true,
+                EnableLlmTmdbIdCorrection = true,
                 LlmBaseUrl = "http://127.0.0.1:11434/v1",
                 LlmModel = "test-model",
                 LlmApiKey = "test-key",
                 LlmConfidenceThreshold = 0.75,
+            };
+        }
+
+        private static LlmTmdbIdCorrectionRequest CreateCorrectionRequest(ItemLookupInfo lookupInfo, string? mediaType = null)
+        {
+            return new LlmTmdbIdCorrectionRequest
+            {
+                Configuration = CreateConfiguration(),
+                LookupInfo = lookupInfo,
+                MediaType = mediaType ?? "Movie",
+                OldTmdbId = lookupInfo.ProviderIds != null && lookupInfo.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var oldTmdbId) ? oldTmdbId : null,
+                Semantic = DefaultScraperSemantic.UserRefresh,
+                HttpContext = CreateRefreshContext(),
+                LibraryRoots = new[] { "/mnt/media" },
+            };
+        }
+
+        private static MovieInfo CreateMovieCorrectionLookupInfo(string oldTmdbId, string? imdbId = null, string? tvdbId = null, string? doubanId = null)
+        {
+            var providerIds = new Dictionary<string, string>
+            {
+                [MetadataProvider.Tmdb.ToString()] = oldTmdbId,
+            };
+            if (!string.IsNullOrWhiteSpace(imdbId))
+            {
+                providerIds[MetadataProvider.Imdb.ToString()] = imdbId;
+            }
+
+            if (!string.IsNullOrWhiteSpace(tvdbId))
+            {
+                providerIds[MetadataProvider.Tvdb.ToString()] = tvdbId;
+            }
+
+            if (!string.IsNullOrWhiteSpace(doubanId))
+            {
+                providerIds[BaseProvider.DoubanProviderId] = doubanId;
+            }
+
+            return new MovieInfo
+            {
+                Name = "Correction Movie",
+                Year = 2020,
+                MetadataLanguage = "zh-CN",
+                ProviderIds = providerIds,
+            };
+        }
+
+        private static SeriesInfo CreateSeriesCorrectionLookupInfo(string oldTmdbId, string? imdbId = null, string? tvdbId = null, string? doubanId = null)
+        {
+            var providerIds = new Dictionary<string, string>
+            {
+                [MetadataProvider.Tmdb.ToString()] = oldTmdbId,
+            };
+            if (!string.IsNullOrWhiteSpace(imdbId))
+            {
+                providerIds[MetadataProvider.Imdb.ToString()] = imdbId;
+            }
+
+            if (!string.IsNullOrWhiteSpace(tvdbId))
+            {
+                providerIds[MetadataProvider.Tvdb.ToString()] = tvdbId;
+            }
+
+            if (!string.IsNullOrWhiteSpace(doubanId))
+            {
+                providerIds[BaseProvider.DoubanProviderId] = doubanId;
+            }
+
+            return new SeriesInfo
+            {
+                Name = "Correction Series",
+                Year = 2020,
+                MetadataLanguage = "zh-CN",
+                ProviderIds = providerIds,
             };
         }
 
@@ -667,7 +1052,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return "{\"externalIdCandidates\":[" + string.Join(",", candidates) + "]}";
         }
 
-        private static string CandidateJson(string provider, string id, string mediaType, double confidence = 0.9)
+        private static string CandidateJson(string provider, string id, string mediaType, double confidence = 0.9, string reason = "title and year match", string evidence = "filename match")
         {
             return JsonSerializer.Serialize(new
             {
@@ -675,8 +1060,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 id,
                 mediaType,
                 confidence,
-                reason = "title and year match",
-                evidence = "filename match",
+                reason,
+                evidence,
             });
         }
 
@@ -711,6 +1096,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 $"series-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}",
                 new TmdbTvShow { Id = tmdbId },
                 TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedFindByExternalId(TmdbApi tmdbApi, FindExternalSource source, string externalId, string language, int[]? movieIds = null, int[]? seriesIds = null)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"find-{source.ToString()}-{externalId}-{language}",
+                new FindContainer
+                {
+                    MovieResults = (movieIds ?? Array.Empty<int>()).Select(id => new SearchMovie { Id = id }).ToList(),
+                    TvResults = (seriesIds ?? Array.Empty<int>()).Select(id => new SearchTv { Id = id }).ToList(),
+                },
+                TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedDoubanSubject(DoubanApi doubanApi, string sid, DoubanSubject? subject)
+        {
+            GetDoubanMemoryCache(doubanApi).Set($"movie_{sid}", subject, TimeSpan.FromMinutes(5));
         }
 
         private TvdbApi CreateTvdbApiWithResponses(string episodesJson, HttpStatusCode episodeResponseStatusCode = HttpStatusCode.OK)
@@ -853,6 +1255,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(memoryCacheField, "TmdbApi.memoryCache 未找到");
             var memoryCache = memoryCacheField!.GetValue(tmdbApi) as MemoryCache;
             Assert.IsNotNull(memoryCache, "TmdbApi.memoryCache 不是有效的 MemoryCache");
+            return memoryCache!;
+        }
+
+        private static MemoryCache GetDoubanMemoryCache(DoubanApi doubanApi)
+        {
+            var memoryCacheField = typeof(DoubanApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(memoryCacheField, "DoubanApi.memoryCache 未找到");
+            var memoryCache = memoryCacheField!.GetValue(doubanApi) as MemoryCache;
+            Assert.IsNotNull(memoryCache, "DoubanApi.memoryCache 不是有效的 MemoryCache");
             return memoryCache!;
         }
 
