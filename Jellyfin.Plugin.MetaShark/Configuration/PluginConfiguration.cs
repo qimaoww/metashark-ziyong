@@ -24,7 +24,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public const string LlmStructuredOutputModeTextJson = "text-json";
 
     private string? defaultScraperMode = DefaultScraperModeDefault;
-    private int llmTimeoutSeconds = 8;
+    private int llmTimeoutSeconds = 15;
     private int llmMaxTokens = 512;
     private double llmConfidenceThreshold = 0.75;
     private double llmEpisodeGroupMappingMinConfidence = 0.80;
@@ -155,7 +155,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public string LlmModel { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the LLM request timeout in seconds.
+    /// Gets or sets the LLM request timeout in seconds. Default is 15, with a 1 to 30 second range.
     /// </summary>
     public int LlmTimeoutSeconds
     {

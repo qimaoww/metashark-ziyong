@@ -19,7 +19,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertProperty("LlmBaseUrl", typeof(string), string.Empty, configuration);
             AssertProperty("LlmApiKey", typeof(string), string.Empty, configuration);
             AssertProperty("LlmModel", typeof(string), string.Empty, configuration);
-            AssertProperty("LlmTimeoutSeconds", typeof(int), 8, configuration);
+            AssertProperty("LlmTimeoutSeconds", typeof(int), 15, configuration);
             AssertProperty("LlmMaxTokens", typeof(int), 512, configuration);
             AssertProperty("LlmAllowRelativePathContext", typeof(bool), true, configuration);
             AssertProperty("LlmAllowTextCompletion", typeof(bool), false, configuration);
@@ -81,7 +81,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 LlmEpisodeGroupMappingMaxCandidateGroups = 0,
             };
 
-            Assert.AreEqual(1, configuration.LlmTimeoutSeconds);
+            Assert.AreEqual(1, configuration.LlmTimeoutSeconds, "LlmTimeoutSeconds 下限必须保持 1 秒。");
             Assert.AreEqual(64, configuration.LlmMaxTokens);
             Assert.AreEqual(0.0, configuration.LlmConfidenceThreshold);
             Assert.AreEqual(0.0, configuration.LlmEpisodeGroupMappingMinConfidence);
@@ -93,7 +93,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             configuration.LlmEpisodeGroupMappingMinConfidence = 1.1;
             configuration.LlmEpisodeGroupMappingMaxCandidateGroups = 51;
 
-            Assert.AreEqual(30, configuration.LlmTimeoutSeconds);
+            Assert.AreEqual(30, configuration.LlmTimeoutSeconds, "LlmTimeoutSeconds 上限必须保持 30 秒。");
             Assert.AreEqual(4096, configuration.LlmMaxTokens);
             Assert.AreEqual(1.0, configuration.LlmConfidenceThreshold);
             Assert.AreEqual(1.0, configuration.LlmEpisodeGroupMappingMinConfidence);

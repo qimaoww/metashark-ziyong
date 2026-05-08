@@ -234,7 +234,7 @@
                                            is="emby-checkbox" />
                                        <span>启用 LLM 辅助建议 TMDb 剧集组映射</span>
                                    </label>
-                                    <div class="fieldDescription">默认关闭。仅在手动识别、手动刷新或搜索缺失元数据触发时辅助判断，并且只能从 TMDb 返回的候选剧集组中选择；不会发送完整本地路径、API Key、cookie 或 token，也不会写入 ProviderIds。只发送相对路径/文件摘要，不会发送绝对路径。</div>
+                                    <div class="fieldDescription">默认关闭。仅在手动识别、手动刷新或搜索缺失元数据触发时辅助判断，并且只能从 TMDb 返回的候选剧集组中选择；不会写入 ProviderIds。关闭相对路径上下文后不会发送相对路径、文件名或目录结构，也不会发送完整本地路径、API Key、cookie 或 token。</div>
                                </div>
                                <div class="checkboxContainer checkboxContainer-withDescription">
                                    <label class="emby-checkbox-label" for="EnableSearchMissingMetadataEpisodeTitleBackfill">
@@ -264,9 +264,9 @@
                                         is="emby-checkbox" />
                                     <span>启用 LLM 辅助刮削</span>
                                 </label>
-                                <div class="fieldDescription">默认关闭。开启后，只在手动识别、手动刷新或搜索缺失元数据等需要重新查询元数据的流程中按配置尝试调用；自动扫描、自动刷新、计划任务、媒体库扫描后任务和覆盖刷新不会触发；不会作为独立元数据源。</div>
+                                <div class="fieldDescription">默认关闭，可选启用。开启后，只在手动识别、手动刷新或搜索缺失元数据等需要重新查询元数据的流程中按配置尝试调用；自动扫描、自动刷新、计划任务、媒体库扫描后任务和覆盖刷新不会触发；不会作为独立元数据源。</div>
                             </div>
-                            <div class="fieldDescription">外部 ID 辅助解析没有单独开关，复用此开关，可把已有公开 ProviderIds（IMDb、TVDB、Douban、TMDb）作为上下文发送给 LLM。LLM 只能提出外部 ID 候选，也可能明确返回无候选；候选 ID 必须再经对应 API 或来源验证才会写入。只补写缺失的 ProviderIds，已有 ID 不会被覆盖。</div>
+                            <div class="fieldDescription">外部 ID 辅助解析没有单独开关，复用此全局开关，不受文本补全开关控制，可把已有公开 ProviderIds（IMDb、TVDB、Douban、TMDb）作为上下文发送给 LLM。LLM 只能提出外部 ID 候选，也可能明确返回无候选；候选 ID 必须再经对应 API 或来源验证才会写入。只补写缺失的 ProviderIds，已有 ID 不会被覆盖。</div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmBaseUrl">Base URL</label>
                                 <input id="LlmBaseUrl" name="LlmBaseUrl" type="text" is="emby-input"
@@ -288,7 +288,7 @@
                                 <label class="inputLabel inputLabelUnfocused" for="LlmTimeoutSeconds">超时秒数</label>
                                 <input id="LlmTimeoutSeconds" name="LlmTimeoutSeconds" type="number" is="emby-input"
                                     class="emby-input" min="1" max="30" step="1" />
-                                <div class="fieldDescription">允许范围 1-30 秒，默认 8 秒。</div>
+                                <div class="fieldDescription">允许范围 1-30 秒，默认 15 秒。超时、结构化输出不符合 schema 或并发限制忙碌时按可选能力关闭处理，不应变成 provider 错误。LLM 请求使用保守并发，同一时间默认只处理一个请求。</div>
                             </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmMaxTokens">最大输出 Tokens</label>
@@ -310,7 +310,7 @@
                                     <option value="json-object">JSON Object</option>
                                     <option value="text-json">Text JSON</option>
                                 </select>
-                                <div class="fieldDescription">默认 json-schema；不支持时可改为 json-object 或 text-json。</div>
+                                <div class="fieldDescription">默认 json-schema；不支持时可改为 json-object 或 text-json。结构化输出不符合 schema 时会跳过 LLM 结果，不写入候选内容。</div>
                             </div>
                             <div class="checkboxContainer checkboxContainer-withDescription">
                                 <label class="emby-checkbox-label" for="LlmAllowRelativePathContext">
@@ -318,7 +318,7 @@
                                         is="emby-checkbox" />
                                     <span>允许发送相对路径上下文</span>
                                 </label>
-                                    <div class="fieldDescription">默认开启。仅发送相对媒体路径、公开 ProviderIds 和必要摘要，不发送完整本地路径、服务器 URL、Jellyfin 私有标识、API Key、cookie 或 token。</div>
+                                    <div class="fieldDescription">默认开启。仅发送相对媒体路径、公开 ProviderIds 和必要摘要，不发送完整本地路径、服务器 URL、Jellyfin 私有标识、API Key、cookie 或 token。关闭后，元数据、外部 ID 和剧集组映射提示都不会发送相对路径、文件名或目录结构。日志和证据不记录 prompt、API Key 或原始响应。</div>
                             </div>
                             <div class="checkboxContainer checkboxContainer-withDescription">
                                 <label class="emby-checkbox-label" for="LlmAllowTextCompletion">
@@ -326,7 +326,7 @@
                                         is="emby-checkbox" />
                                     <span>允许 LLM 生成文本回填</span>
                                 </label>
-                                <div class="fieldDescription">默认关闭。开启后，LLM 生成文本仅可在置信度和合并检查通过后回填空白或低风险的标题、简介类字段；不会覆盖权威元数据。</div>
+                                <div class="fieldDescription">默认关闭。关闭时不会发送元数据文本补全请求。开启后，LLM 生成文本仅可在置信度和合并检查通过后回填空白或低风险的标题、简介类字段；不会覆盖权威元数据。外部 ID 辅助解析仍复用全局 LLM 开关独立运行。</div>
                             </div>
                             </fieldset>
                               <fieldset class="verticalSection verticalSection-extrabottompadding">
