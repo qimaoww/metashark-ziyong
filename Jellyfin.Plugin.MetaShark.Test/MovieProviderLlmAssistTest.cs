@@ -159,7 +159,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var llm = CreateSuccessfulLlm("Explicit Hint Movie", 2025);
             var provider = CreateProvider(
                 loggerFactory,
-                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture)),
                 doubanApi: doubanApi,
                 tmdbApi: tmdbApi,
                 llmMetadataAssistService: llm);
@@ -356,7 +356,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "6201"));
             var provider = CreateProvider(
                 loggerFactory,
-                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture)),
                 doubanApi: doubanApi,
                 tmdbApi: tmdbApi,
                 llmExternalIdResolutionService: externalIdResolver);
@@ -392,7 +392,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var externalIdResolver = CreateExternalIdResolverWithWrites(tvdbWrite);
             var provider = CreateProvider(
                 loggerFactory,
-                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture)),
                 doubanApi: doubanApi,
                 llmExternalIdResolutionService: externalIdResolver);
             var info = CreateMovieInfo("TVDB Ignored Movie", "/mnt/media/Movies/TVDB Ignored Movie/TVDB Ignored Movie.mkv", 2031);
@@ -412,7 +412,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_WhenExistingTmdbIdPresent_DoesNotCallExternalIdResolverOrOverwrite()
+        public async Task GetMetadata_WhenExistingTmdbIdPresentAndCorrectionSwitchOff_DoesNotCallExternalIdResolverOrOverwrite()
         {
             ReplacePluginConfiguration(CreateLlmConfiguration());
             using var loggerFactory = LoggerFactory.Create(builder => { });
@@ -424,7 +424,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "9999"));
             var provider = CreateProvider(
                 loggerFactory,
-                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture)),
                 doubanApi: doubanApi,
                 tmdbApi: tmdbApi,
                 llmExternalIdResolutionService: externalIdResolver);
@@ -439,9 +439,362 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, externalIdResolver.CorrectionRequests.Count);
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("6301", result.Item!.GetProviderId(MetadataProvider.Tmdb));
             Assert.AreEqual("existing-tmdb-douban", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenExistingTmdbIdPresentAndCorrectionDisabled_DoesNotCallCorrectionOrOverwrite()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: false));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("correction-off-douban", "Correction Off Movie", 2036);
+            SeedDoubanSubject(doubanApi, subject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 111, "zh-CN", CreateTmdbMovie(111, "Old TMDb Movie", 2036));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Correction Off Movie", "/mnt/media/Movies/Correction Off Movie/Correction Off Movie.mkv", 2036);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "correction-off-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_correction-off-douban",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdResolver.CorrectionRequests.Count);
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("111", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("correction-off-douban", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenManualRefreshCorrectionVerified_ReplacesOnlyTmdb()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("manual-correction-douban", "Manual Correction Movie", 2037);
+            SeedDoubanSubject(doubanApi, subject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", CreateTmdbMovie(222, "Corrected Manual Movie", 2037));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Manual Correction Movie", "/mnt/media/Movies/Manual Correction Movie/Manual Correction Movie.mkv", 2037);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "manual-correction-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_manual-correction-douban",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+                [MetadataProvider.Imdb.ToString()] = "ttoldimdb",
+                [MetadataProvider.Tvdb.ToString()] = "81001",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.CorrectionRequests.Count);
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("ttoldimdb", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("manual-correction-douban", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("81001", result.Item.GetProviderId(MetadataProvider.Tvdb));
+            Assert.AreEqual("111", externalIdResolver.CorrectionRequests[0].OldTmdbId);
+            Assert.AreEqual(DefaultScraperSemantic.UserRefresh, externalIdResolver.CorrectionRequests[0].Semantic);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenManualIdentifyCorrectionVerified_ReplacesOnlyTmdb()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("manual-identify-correction-douban", "Manual Identify Correction Movie", 2040);
+            SeedDoubanSubject(doubanApi, subject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", CreateTmdbMovie(222, "Manual Identify Corrected Movie", 2040));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Manual Identify Correction Movie", "/mnt/media/Movies/Manual Identify Correction Movie/Manual Identify Correction Movie.mkv", 2040);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "manual-identify-correction-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_manual-identify-correction-douban",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.CorrectionRequests.Count);
+            Assert.AreEqual(DefaultScraperSemantic.ManualMatch, externalIdResolver.CorrectionRequests[0].Semantic);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("manual-identify-correction-douban", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenExplicitSearchMissingCorrectionVerified_ReplacesOnlyTmdb()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("search-missing-correction-douban", "Search Missing Correction Movie", 2041);
+            SeedDoubanSubject(doubanApi, subject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", CreateTmdbMovie(222, "Search Missing Corrected Movie", 2041));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Search Missing Correction Movie", "/mnt/media/Movies/Search Missing Correction Movie/Search Missing Correction Movie.mkv", 2041);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "search-missing-correction-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_search-missing-correction-douban",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.CorrectionRequests.Count);
+            Assert.AreEqual(DefaultScraperSemantic.UserRefresh, externalIdResolver.CorrectionRequests[0].Semantic);
+            Assert.IsFalse(externalIdResolver.CorrectionRequests[0].HttpContext!.Request.QueryString.Value!.Contains("replaceAllMetadata=true", StringComparison.OrdinalIgnoreCase));
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenCorrectionReturnsNoReplacement_PreservesExistingTmdb()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("weak-evidence-douban", "Weak Evidence Movie", 2042);
+            SeedDoubanSubject(doubanApi, subject);
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.NoReplacement("StrongEvidenceMissing"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Weak Evidence Movie", "/mnt/media/Movies/Weak Evidence Movie/Weak Evidence Movie.mkv", 2042);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "weak-evidence-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_weak-evidence-douban",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.CorrectionRequests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("111", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenExistingTmdbAndNoHttpContext_DoesNotCallCorrection()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("no-context-correction-douban", "No Context Correction Movie", 2043);
+            SeedDoubanSubject(doubanApi, subject);
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
+            var provider = CreateProvider(
+                loggerFactory,
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("No Context Correction Movie", "/mnt/media/Movies/No Context Correction Movie/No Context Correction Movie.mkv", 2043);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "no-context-correction-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_no-context-correction-douban",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdResolver.CorrectionRequests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("111", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenGlobalLlmDisabled_DoesNotCallCorrection()
+        {
+            ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableLlmAssist = false,
+                EnableLlmTmdbIdCorrection = true,
+                LlmBaseUrl = "http://127.0.0.1:11434/v1",
+                LlmModel = "test-model",
+                LlmApiKey = "sk-test-secret",
+            });
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("llm-disabled-correction-douban", "LLM Disabled Correction Movie", 2044);
+            SeedDoubanSubject(doubanApi, subject);
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("LLM Disabled Correction Movie", "/mnt/media/Movies/LLM Disabled Correction Movie/LLM Disabled Correction Movie.mkv", 2044);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "llm-disabled-correction-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_llm-disabled-correction-douban",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdResolver.CorrectionRequests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("111", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenCorrectionPathContextDisabled_SendsPublicIdsWithoutPath()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            MetaSharkPlugin.Instance!.Configuration.LlmAllowRelativePathContext = false;
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("privacy-correction-douban", "Privacy Correction Movie", 2045);
+            SeedDoubanSubject(doubanApi, subject);
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.NoReplacement("StrongEvidenceMissing"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Privacy Correction Movie", "/mnt/media/Movies/Private Folder/Privacy Correction Movie/Secret.File.mkv", 2045);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "privacy-correction-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_privacy-correction-douban",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+                [MetadataProvider.Imdb.ToString()] = "tt2045001",
+                [MetadataProvider.Tvdb.ToString()] = "204500",
+                ["apiKey"] = "sk-test-secret",
+            };
+
+            _ = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.CorrectionRequests.Count);
+            var lookup = (MovieInfo)externalIdResolver.CorrectionRequests[0].LookupInfo!;
+            Assert.AreEqual(string.Empty, lookup.Path);
+            Assert.AreEqual("111", lookup.ProviderIds![MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual("tt2045001", lookup.ProviderIds[MetadataProvider.Imdb.ToString()]);
+            Assert.AreEqual("204500", lookup.ProviderIds[MetadataProvider.Tvdb.ToString()]);
+            Assert.AreEqual("privacy-correction-douban", lookup.ProviderIds[BaseProvider.DoubanProviderId]);
+            Assert.IsFalse(lookup.ProviderIds.ContainsKey(MetaSharkPlugin.ProviderId));
+            Assert.IsFalse(lookup.ProviderIds.ContainsKey("apiKey"));
+            LlmProviderFlowTestHelpers.AssertNoSensitiveContent(lookup.Path, externalIdResolver.CorrectionRequests[0].Name);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenOverwriteRefreshCorrectionVerified_DoesNotCallOrdinaryLlmPaths()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            SeedDoubanSearchResults(doubanApi, "Overwrite Corrected Movie", Array.Empty<DoubanSubject>());
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 222, "zh-CN", CreateTmdbMovie(222, "Overwrite Corrected Movie", 2038));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
+            externalIdResolver.EnqueueResult(LlmExternalIdResolutionResult.Succeeded(
+                Array.Empty<LlmExternalIdCandidate>(),
+                new[] { CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "999") },
+                Array.Empty<LlmExternalIdProviderIdWrite>(),
+                "ordinary resolver should not run"));
+            var textLlm = CreateSuccessfulLlm("Ignored Overwrite Movie", 2038);
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmMetadataAssistService: textLlm,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Overwrite Corrected Movie", "/mnt/media/Movies/Overwrite Corrected Movie/Overwrite Corrected Movie.mkv", 2038);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [MetaSharkPlugin.ProviderId] = "Tmdb_111",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.CorrectionRequests.Count);
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, textLlm.Requests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenAutomaticRefreshWithExistingTmdb_DoesNotCallCorrection()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 111, "zh-CN", CreateTmdbMovie(111, "Automatic Correction Rejected Movie", 2039));
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateAutomaticRefreshContextAccessor(),
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Automatic Correction Rejected Movie", "/mnt/media/Movies/Automatic Correction Rejected Movie/Automatic Correction Rejected Movie.mkv", 2039);
+            info.IsAutomated = true;
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [MetaSharkPlugin.ProviderId] = "Tmdb_111",
+                [MetadataProvider.Tmdb.ToString()] = "111",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(0, externalIdResolver.CorrectionRequests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("111", result.Item!.GetProviderId(MetadataProvider.Tmdb));
         }
 
         [TestMethod]
@@ -565,11 +918,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
-        private static PluginConfiguration CreateLlmConfiguration(bool allowTextCompletion = true)
+        private static PluginConfiguration CreateLlmConfiguration(bool allowTextCompletion = true, bool enableTmdbCorrection = false)
         {
             return new PluginConfiguration
             {
                 EnableLlmAssist = true,
+                EnableLlmTmdbIdCorrection = enableTmdbCorrection,
                 LlmBaseUrl = "http://127.0.0.1:11434/v1",
                 LlmModel = "test-model",
                 LlmApiKey = "sk-test-secret",

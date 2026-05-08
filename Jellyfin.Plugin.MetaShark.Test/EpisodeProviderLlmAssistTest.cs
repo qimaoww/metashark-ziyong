@@ -536,6 +536,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_WhenParentSeriesTmdbExists_DoesNotCallTmdbCorrection()
+        {
+            using var harness = CreateHarness(httpContext: LlmProviderFlowTestHelpers.CreateManualMatchHttpContext(TestItemIdString()));
+            harness.ExternalIdService.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("456", "episode path must not correct parent series"));
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual(0, harness.ExternalIdService.CorrectionRequests.Count);
+            Assert.AreEqual("123", harness.Info.SeriesProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual("第 1 集", result.Item!.Name);
+        }
+
+        [TestMethod]
         public async Task GetMetadata_WhenSeriesTmdbMissingAndSearchMissingResolverFails_KeepsEarlyReturnAndWritesNoIds()
         {
             using var harness = CreateHarness(
