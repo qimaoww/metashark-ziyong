@@ -139,6 +139,11 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool EnableLlmAssist { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether LLM can correct wrong TMDb IDs after strong verification.
+    /// </summary>
+    public bool EnableLlmTmdbIdCorrection { get; set; }
+
+    /// <summary>
     /// Gets or sets the OpenAI-compatible LLM base URL.
     /// </summary>
     [SuppressMessage("Design", "CA1056:Uri properties should not be strings", Justification = "XML serialization in Jellyfin cannot handle System.Uri.")]

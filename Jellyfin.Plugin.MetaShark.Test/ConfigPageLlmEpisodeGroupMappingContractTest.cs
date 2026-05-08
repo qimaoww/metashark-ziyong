@@ -30,9 +30,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Regex.IsMatch(block, @"<input[^>]*id=""EnableLlmEpisodeGroupMappingAssist""[^>]*name=""EnableLlmEpisodeGroupMappingAssist""[^>]*type=""checkbox""", RegexOptions.Singleline),
                 "开关必须使用与配置属性一致的 id/name。 ");
             Assert.IsTrue(block.Contains("默认关闭", StringComparison.Ordinal), "说明必须标明默认关闭。");
-            Assert.IsTrue(block.Contains("相对路径/文件摘要", StringComparison.Ordinal), "说明必须标明只发送相对路径/文件摘要。");
+            Assert.IsTrue(block.Contains("关闭相对路径上下文后不会发送相对路径、文件名或目录结构", StringComparison.Ordinal), "说明必须标明关闭相对路径上下文后的发送边界。");
             Assert.IsTrue(block.Contains("TMDb 返回的候选剧集组", StringComparison.Ordinal), "说明必须标明只从 TMDb 候选组中选择。");
-            Assert.IsTrue(block.Contains("不会发送绝对路径", StringComparison.Ordinal), "说明必须标明不会发送绝对路径。");
+            Assert.IsTrue(block.Contains("不会发送完整本地路径、API Key、cookie 或 token", StringComparison.Ordinal), "说明必须标明不会发送完整本地路径和敏感信息。");
             Assert.IsTrue(block.Contains("不会写入 ProviderIds", StringComparison.Ordinal), "说明必须标明不会写入 ProviderIds。");
         }
 

@@ -16,6 +16,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var configuration = new PluginConfiguration();
 
             AssertProperty("EnableLlmAssist", typeof(bool), false, configuration);
+            AssertProperty("EnableLlmTmdbIdCorrection", typeof(bool), false, configuration);
             AssertProperty("LlmBaseUrl", typeof(string), string.Empty, configuration);
             AssertProperty("LlmApiKey", typeof(string), string.Empty, configuration);
             AssertProperty("LlmModel", typeof(string), string.Empty, configuration);
@@ -36,6 +37,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var configuration = new PluginConfiguration
             {
                 EnableLlmAssist = true,
+                EnableLlmTmdbIdCorrection = true,
                 LlmBaseUrl = "https://example.test/v1",
                 LlmApiKey = "test-key",
                 LlmModel = "test-model",
@@ -51,6 +53,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
 
             Assert.IsTrue(configuration.EnableLlmAssist);
+            Assert.IsTrue(configuration.EnableLlmTmdbIdCorrection);
             Assert.AreEqual("https://example.test/v1", configuration.LlmBaseUrl);
             Assert.AreEqual("test-key", configuration.LlmApiKey);
             Assert.AreEqual("test-model", configuration.LlmModel);
@@ -144,6 +147,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var property = typeof(PluginConfiguration).GetProperty("EnableLlmExternalIdResolution", BindingFlags.Public | BindingFlags.Instance);
 
             Assert.IsNull(property, "外部 ID 辅助解析复用 EnableLlmAssist，不应暴露未实现的独立开关。 ");
+        }
+
+        [TestMethod]
+        public void ShouldAllowTogglingTmdbCorrectionSwitchWithoutChangingDefault()
+        {
+            var configuration = new PluginConfiguration();
+
+            Assert.IsFalse(configuration.EnableLlmTmdbIdCorrection, "TMDb 纠错开关默认必须关闭。");
+
+            configuration.EnableLlmTmdbIdCorrection = true;
+            Assert.IsTrue(configuration.EnableLlmTmdbIdCorrection, "TMDb 纠错开关应能保存 true。");
+
+            configuration.EnableLlmTmdbIdCorrection = false;
+            Assert.IsFalse(configuration.EnableLlmTmdbIdCorrection, "TMDb 纠错开关应能读回 false。");
         }
 
         private static void AssertProperty(string propertyName, Type expectedType, object expectedDefault, PluginConfiguration configuration)
