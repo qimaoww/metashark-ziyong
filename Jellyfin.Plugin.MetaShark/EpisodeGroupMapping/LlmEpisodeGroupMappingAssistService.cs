@@ -6,6 +6,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics.CodeAnalysis;
     using System.Globalization;
     using System.Linq;
     using System.Text.Json;
@@ -13,6 +14,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Providers.Llm;
 
     public sealed class LlmEpisodeGroupMappingAssistService : ILlmEpisodeGroupMappingAssistService
     {
@@ -25,17 +27,20 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private readonly ILlmApi llmApi;
         private readonly TmdbApi tmdbApi;
         private readonly EpisodeGroupMapParser parser;
+        private readonly ILlmRequestLimiter requestLimiter;
 
+        [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Compatibility constructor owns a process-local fallback limiter for test-only direct construction.")]
         public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi)
-            : this(llmApi, tmdbApi, EpisodeGroupMapParser.Shared)
+            : this(llmApi, tmdbApi, EpisodeGroupMapParser.Shared, new LlmRequestLimiter())
         {
         }
 
-        public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser)
+        public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser, ILlmRequestLimiter? requestLimiter = null)
         {
             this.llmApi = llmApi ?? throw new ArgumentNullException(nameof(llmApi));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
             this.parser = parser ?? throw new ArgumentNullException(nameof(parser));
+            this.requestLimiter = requestLimiter ?? new LlmRequestLimiter();
         }
 
         public async Task<LlmEpisodeGroupMappingAssistResult> SuggestAndWriteAsync(LlmEpisodeGroupMappingAssistRequest request, CancellationToken cancellationToken)
@@ -65,7 +70,13 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 return LlmEpisodeGroupMappingAssistResult.NotTriggered("CandidateGroupsMissing", currentMapping);
             }
 
-            var apiResult = await this.llmApi.CompleteAsync(BuildPrompt(request, candidates), cancellationToken).ConfigureAwait(false);
+            using var lease = await this.requestLimiter.TryAcquireAsync(cancellationToken).ConfigureAwait(false);
+            if (lease == null)
+            {
+                return LlmEpisodeGroupMappingAssistResult.NotTriggered("LlmRequestLimiterBusy", currentMapping);
+            }
+
+            var apiResult = await this.llmApi.CompleteAsync(BuildPrompt(request, candidates), LlmResponseSchemaKind.EpisodeGroupMapping, cancellationToken).ConfigureAwait(false);
             if (!apiResult.Success || string.IsNullOrWhiteSpace(apiResult.ContentJson))
             {
                 return LlmEpisodeGroupMappingAssistResult.Failed(apiResult.Diagnostic, currentMapping);

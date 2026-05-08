@@ -9,5 +9,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         NotTriggered = 0,
         Failed = 1,
         Succeeded = 2,
+        Skipped = 3,
     }
 }

@@ -34,6 +34,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var assistServiceSecondResolve = serviceProvider.GetRequiredService<ILlmMetadataAssistService>();
             var triggerPolicy = serviceProvider.GetRequiredService<LlmAssistTriggerPolicy>();
             var triggerPolicySecondResolve = serviceProvider.GetRequiredService<LlmAssistTriggerPolicy>();
+            var requestLimiter = serviceProvider.GetRequiredService<ILlmRequestLimiter>();
+            var requestLimiterSecondResolve = serviceProvider.GetRequiredService<ILlmRequestLimiter>();
             var contextBuilder = serviceProvider.GetRequiredService<LlmScrapeContextBuilder>();
             var contextBuilderSecondResolve = serviceProvider.GetRequiredService<LlmScrapeContextBuilder>();
             var validator = serviceProvider.GetRequiredService<LlmSuggestionValidator>();
@@ -58,6 +60,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreSame(assistService, assistServiceConcrete);
             Assert.AreSame(assistService, assistServiceSecondResolve);
             Assert.AreSame(triggerPolicy, triggerPolicySecondResolve);
+            Assert.AreSame(requestLimiter, requestLimiterSecondResolve);
+            Assert.AreEqual(1, requestLimiter.MaxConcurrency);
             Assert.AreSame(contextBuilder, contextBuilderSecondResolve);
             Assert.AreSame(validator, validatorSecondResolve);
             Assert.AreSame(detector, detectorSecondResolve);

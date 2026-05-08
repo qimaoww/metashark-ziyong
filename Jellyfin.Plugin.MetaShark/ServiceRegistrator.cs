@@ -130,8 +130,9 @@ namespace Jellyfin.Plugin.MetaShark
             });
             serviceCollection.AddSingleton<ILlmApi>((ctx) => ctx.GetRequiredService<LlmApi>());
             serviceCollection.AddSingleton<LlmAssistTriggerPolicy>();
+            serviceCollection.AddSingleton<ILlmRequestLimiter, LlmRequestLimiter>();
             serviceCollection.AddSingleton<LlmScrapeContextBuilder>();
-            serviceCollection.AddSingleton<LlmSuggestionValidator>();
+            serviceCollection.AddSingleton<LlmSuggestionValidator>((ctx) => new LlmSuggestionValidator(ctx.GetRequiredService<ILogger<LlmSuggestionValidator>>()));
             serviceCollection.AddSingleton<LlmExternalIdCandidateValidator>();
             serviceCollection.AddSingleton<LlmScrapeMismatchDetector>();
             serviceCollection.AddSingleton<LlmMetadataMergePolicy>();
@@ -144,7 +145,8 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<LlmScrapeContextBuilder>(),
                     ctx.GetRequiredService<LlmSuggestionValidator>(),
                     ctx.GetRequiredService<LlmScrapeMismatchDetector>(),
-                    ctx.GetRequiredService<LlmMetadataMergePolicy>());
+                    ctx.GetRequiredService<LlmMetadataMergePolicy>(),
+                    ctx.GetRequiredService<ILlmRequestLimiter>());
             });
             serviceCollection.AddSingleton<ILlmMetadataAssistService>((ctx) => ctx.GetRequiredService<LlmMetadataAssistService>());
             serviceCollection.AddSingleton<LlmExternalIdResolutionService>((ctx) =>
@@ -155,14 +157,17 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<DoubanApi>(),
                     ctx.GetRequiredService<TvdbApi>(),
                     ctx.GetRequiredService<LlmAssistTriggerPolicy>(),
-                    ctx.GetRequiredService<LlmExternalIdCandidateValidator>());
+                    ctx.GetRequiredService<LlmExternalIdCandidateValidator>(),
+                    ctx.GetRequiredService<ILlmRequestLimiter>());
             });
             serviceCollection.AddSingleton<ILlmExternalIdResolutionService>((ctx) => ctx.GetRequiredService<LlmExternalIdResolutionService>());
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
             {
                 return new LlmEpisodeGroupMappingAssistService(
                     ctx.GetRequiredService<ILlmApi>(),
-                    ctx.GetRequiredService<TmdbApi>());
+                    ctx.GetRequiredService<TmdbApi>(),
+                    EpisodeGroupMapParser.Shared,
+                    ctx.GetRequiredService<ILlmRequestLimiter>());
             });
             serviceCollection.AddSingleton<ILlmEpisodeGroupMappingAssistService>((ctx) => ctx.GetRequiredService<LlmEpisodeGroupMappingAssistService>());
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingProviderAssistService>((ctx) =>

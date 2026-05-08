@@ -39,9 +39,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private readonly TvdbApi tvdbApi;
         private readonly LlmAssistTriggerPolicy triggerPolicy;
         private readonly LlmExternalIdCandidateValidator candidateValidator;
+        private readonly ILlmRequestLimiter requestLimiter;
 
+        [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Compatibility constructor owns a process-local fallback limiter for test-only direct construction.")]
         public LlmExternalIdResolutionService(ILlmApi llmApi, TmdbApi tmdbApi, DoubanApi doubanApi, TvdbApi tvdbApi)
-            : this(llmApi, tmdbApi, doubanApi, tvdbApi, new LlmAssistTriggerPolicy(), new LlmExternalIdCandidateValidator())
+            : this(llmApi, tmdbApi, doubanApi, tvdbApi, new LlmAssistTriggerPolicy(), new LlmExternalIdCandidateValidator(), new LlmRequestLimiter())
         {
         }
 
@@ -51,7 +53,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             DoubanApi doubanApi,
             TvdbApi tvdbApi,
             LlmAssistTriggerPolicy triggerPolicy,
-            LlmExternalIdCandidateValidator candidateValidator)
+            LlmExternalIdCandidateValidator candidateValidator,
+            ILlmRequestLimiter? requestLimiter = null)
         {
             this.llmApi = llmApi ?? throw new ArgumentNullException(nameof(llmApi));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
@@ -59,6 +62,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             this.tvdbApi = tvdbApi ?? throw new ArgumentNullException(nameof(tvdbApi));
             this.triggerPolicy = triggerPolicy ?? throw new ArgumentNullException(nameof(triggerPolicy));
             this.candidateValidator = candidateValidator ?? throw new ArgumentNullException(nameof(candidateValidator));
+            this.requestLimiter = requestLimiter ?? new LlmRequestLimiter();
         }
 
         [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "LLM external ID resolution must fail closed and preserve ProviderIds.")]
@@ -84,11 +88,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 return LlmExternalIdResolutionResult.NotTriggered(triggerDecision.Reason);
             }
 
-            var prompt = LlmPromptContextBuilder.BuildExternalIdPromptJson(request.LookupInfo, mediaType, request.LibraryRoots, request.RelativePathSamples);
+            var allowRelativePathContext = request.Configuration?.LlmAllowRelativePathContext ?? true;
+            var prompt = LlmPromptContextBuilder.BuildExternalIdPromptJson(request.LookupInfo, mediaType, request.LibraryRoots, request.RelativePathSamples, allowRelativePathContext);
             LlmApiResult apiResult;
             try
             {
-                apiResult = await this.llmApi.CompleteAsync(prompt, cancellationToken).ConfigureAwait(false);
+                using var lease = await this.requestLimiter.TryAcquireAsync(cancellationToken).ConfigureAwait(false);
+                if (lease == null)
+                {
+                    return LlmExternalIdResolutionResult.Skipped("LlmRequestLimiterBusy");
+                }
+
+                apiResult = await this.llmApi.CompleteAsync(prompt, LlmResponseSchemaKind.ExternalIdCandidates, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

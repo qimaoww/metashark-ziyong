@@ -112,6 +112,72 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertLoggerDoesNotContainSensitiveValues(loggerStub);
         }
 
+        [TestMethod]
+        public async Task CompleteAsync_WhenPluginTimeoutOccurs_ShouldLogWarningWithoutErrorOrSensitiveValues()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(new PluginConfiguration
+            {
+                LlmBaseUrl = "http://localhost:11434/v1",
+                LlmApiKey = SecretKey,
+                LlmModel = "qwen2.5",
+                LlmStructuredOutputMode = PluginConfiguration.LlmStructuredOutputModeJsonSchema,
+                LlmTimeoutSeconds = 1,
+            });
+            var loggerStub = new Mock<ILogger<LlmApi>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory(loggerStub).Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async (_, cancellationToken) =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(LlmApiTest.CreateSuccessEnvelope("{\"suggestions\":[]}"), Encoding.UTF8, "application/json"),
+                };
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync(RawPrompt, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.Success);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Warning,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>(),
+                originalFormatContains: "[MetaShark] LLM 请求超时. 诊断={Diagnostic}",
+                messageContains: ["[MetaShark]", "LLM 请求超时"]);
+            AssertLoggedEventId(loggerStub, LogLevel.Warning, 4, "LogLlmRequestTimeout");
+            AssertNoErrorLogged(loggerStub);
+            AssertDoesNotContainSensitiveValues(result.Diagnostic);
+            AssertLoggerDoesNotContainSensitiveValues(loggerStub);
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenExceptionContainsFullUrlAndPath_ShouldRedactLoggedDiagnostic()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(new PluginConfiguration
+            {
+                LlmBaseUrl = "http://localhost:11434/v1",
+                LlmApiKey = SecretKey,
+                LlmModel = "qwen2.5",
+                LlmStructuredOutputMode = PluginConfiguration.LlmStructuredOutputModeJsonSchema,
+                LlmTimeoutSeconds = 5,
+            });
+            var loggerStub = new Mock<ILogger<LlmApi>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory(loggerStub).Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(_ =>
+            {
+                throw new HttpRequestException("GET http://localhost:11434/v1/chat/completions failed for /opt/jellyfin/private/movie.mkv");
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync(RawPrompt, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsFalse(result.Success);
+            AssertLoggerDoesNotContainSensitiveValues(loggerStub);
+            Assert.IsFalse(result.Diagnostic.Contains("http://localhost:11434", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.IsFalse(result.Diagnostic.Contains("/opt/jellyfin", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+        }
+
         private static void AssertLoggerDoesNotContainSensitiveValues(Mock loggerStub)
         {
             foreach (var invocation in loggerStub.Invocations.Where(invocation => string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal)))
@@ -132,6 +198,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(text.Contains(SecretKey, StringComparison.Ordinal), text);
             Assert.IsFalse(text.Contains(RawPrompt, StringComparison.Ordinal), text);
             Assert.IsFalse(text.Contains(RawResponse, StringComparison.Ordinal), text);
+            Assert.IsFalse(text.Contains("http://localhost:11434", StringComparison.OrdinalIgnoreCase), text);
+            Assert.IsFalse(text.Contains("/opt/jellyfin", StringComparison.OrdinalIgnoreCase), text);
+        }
+
+        private static void AssertNoErrorLogged(Mock loggerStub)
+        {
+            var hasError = loggerStub.Invocations.Any(invocation => string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal)
+                && invocation.Arguments.Count == 5
+                && invocation.Arguments[0] is LogLevel logLevel
+                && logLevel == LogLevel.Error);
+            Assert.IsFalse(hasError, "LLM optional timeout/network failures must not be logged as Error.");
         }
 
         private static void AssertLoggedEventId(Mock loggerStub, LogLevel level, int expectedId, string? expectedName)

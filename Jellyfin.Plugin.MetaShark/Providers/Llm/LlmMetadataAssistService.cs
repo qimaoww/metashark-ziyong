@@ -18,9 +18,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private readonly LlmSuggestionValidator suggestionValidator;
         private readonly LlmScrapeMismatchDetector mismatchDetector;
         private readonly LlmMetadataMergePolicy mergePolicy;
+        private readonly ILlmRequestLimiter requestLimiter;
 
+        [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Compatibility constructor owns a process-local fallback limiter for test-only direct construction.")]
         public LlmMetadataAssistService(ILlmApi llmApi)
-            : this(llmApi, new LlmAssistTriggerPolicy(), new LlmScrapeContextBuilder(), new LlmSuggestionValidator(), new LlmScrapeMismatchDetector(), new LlmMetadataMergePolicy())
+            : this(llmApi, new LlmAssistTriggerPolicy(), new LlmScrapeContextBuilder(), new LlmSuggestionValidator(), new LlmScrapeMismatchDetector(), new LlmMetadataMergePolicy(), new LlmRequestLimiter())
         {
         }
 
@@ -30,7 +32,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             LlmScrapeContextBuilder contextBuilder,
             LlmSuggestionValidator suggestionValidator,
             LlmScrapeMismatchDetector mismatchDetector,
-            LlmMetadataMergePolicy mergePolicy)
+            LlmMetadataMergePolicy mergePolicy,
+            ILlmRequestLimiter? requestLimiter = null)
         {
             this.llmApi = llmApi ?? throw new ArgumentNullException(nameof(llmApi));
             this.triggerPolicy = triggerPolicy ?? throw new ArgumentNullException(nameof(triggerPolicy));
@@ -38,6 +41,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             this.suggestionValidator = suggestionValidator ?? throw new ArgumentNullException(nameof(suggestionValidator));
             this.mismatchDetector = mismatchDetector ?? throw new ArgumentNullException(nameof(mismatchDetector));
             this.mergePolicy = mergePolicy ?? throw new ArgumentNullException(nameof(mergePolicy));
+            this.requestLimiter = requestLimiter ?? new LlmRequestLimiter();
         }
 
         [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "LLM assist must fail silently and let metadata scraping continue.")]
@@ -63,12 +67,19 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             var mediaType = request.MediaType ?? string.Empty;
-            var context = this.contextBuilder.Build(request.LookupInfo, mediaType, request.LibraryRoots);
-            var prompt = this.contextBuilder.BuildJson(request.LookupInfo, mediaType, request.LibraryRoots);
+            var allowRelativePathContext = request.Configuration?.LlmAllowRelativePathContext ?? true;
+            var context = this.contextBuilder.Build(request.LookupInfo, mediaType, request.LibraryRoots, allowRelativePathContext);
+            var prompt = this.contextBuilder.BuildJson(request.LookupInfo, mediaType, request.LibraryRoots, allowRelativePathContext);
             LlmApiResult apiResult;
             try
             {
-                apiResult = await this.llmApi.CompleteAsync(prompt, cancellationToken).ConfigureAwait(false);
+                using var lease = await this.requestLimiter.TryAcquireAsync(cancellationToken).ConfigureAwait(false);
+                if (lease == null)
+                {
+                    return LlmScrapingAssistResult.Skipped("LlmRequestLimiterBusy", context);
+                }
+
+                apiResult = await this.llmApi.CompleteAsync(prompt, LlmResponseSchemaKind.MetadataSuggestions, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -85,9 +96,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             var validationResult = this.suggestionValidator.ParseAndValidate(apiResult.ContentJson, request.Configuration?.LlmConfidenceThreshold ?? 0.75);
-            if (!validationResult.Success || validationResult.Suggestion == null)
+            if (!validationResult.Success)
             {
                 return LlmScrapingAssistResult.Failed(validationResult.Diagnostic, context);
+            }
+
+            if (validationResult.Suggestion == null)
+            {
+                return LlmScrapingAssistResult.Skipped(validationResult.Diagnostic, context);
             }
 
             var mismatch = this.mismatchDetector.Detect(context, validationResult.Suggestion);

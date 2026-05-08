@@ -37,6 +37,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             };
         }
 
+        public static LlmScrapingAssistResult Skipped(string diagnostic, LlmPromptContext? sanitizedContext = null)
+        {
+            return new LlmScrapingAssistResult(LlmScrapingAssistStatus.Skipped, string.IsNullOrWhiteSpace(diagnostic) ? "Skipped" : diagnostic)
+            {
+                SanitizedContext = sanitizedContext,
+            };
+        }
+
         public static LlmScrapingAssistResult Succeeded(LlmPromptContext sanitizedContext, LlmScrapingSuggestion suggestion, LlmSearchHints searchHints)
         {
             return new LlmScrapingAssistResult(LlmScrapingAssistStatus.Succeeded, "Succeeded")
