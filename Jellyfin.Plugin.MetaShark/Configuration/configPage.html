@@ -236,6 +236,18 @@
                                    </label>
                                     <div class="fieldDescription">默认关闭。仅在手动识别、手动刷新或搜索缺失元数据触发时辅助判断，只能从 TMDb 返回的候选剧集组中选择。命中后会自动写进配置文件，写入成功后刷新受影响条目；不会写入 ProviderIds。关闭相对路径上下文后不会发送相对路径、文件名或目录结构，也不会发送完整本地路径、API Key、cookie 或 token。</div>
                                </div>
+                               <div class="inputContainer">
+                                   <label class="inputLabel inputLabelUnfocused" for="LlmEpisodeGroupMappingMinConfidence">LLM 剧集组映射最低置信度</label>
+                                   <input id="LlmEpisodeGroupMappingMinConfidence" name="LlmEpisodeGroupMappingMinConfidence" type="number"
+                                       is="emby-input" class="emby-input" min="0" max="1" step="0.01" />
+                                   <div class="fieldDescription">用于自动写回 TMDb 剧集组映射的最低置信度，允许范围 0.0-1.0，默认 0.80。</div>
+                               </div>
+                               <div class="inputContainer">
+                                   <label class="inputLabel inputLabelUnfocused" for="LlmEpisodeGroupMappingMaxCandidateGroups">LLM 剧集组候选组上限</label>
+                                   <input id="LlmEpisodeGroupMappingMaxCandidateGroups" name="LlmEpisodeGroupMappingMaxCandidateGroups" type="number"
+                                       is="emby-input" class="emby-input" min="1" max="50" step="1" />
+                                   <div class="fieldDescription">发送给 LLM 的 TMDb 剧集组候选数量上限，允许范围 1-50，默认 8。</div>
+                               </div>
                                <div class="checkboxContainer checkboxContainer-withDescription">
                                    <label class="emby-checkbox-label" for="EnableSearchMissingMetadataEpisodeTitleBackfill">
                                        <input id="EnableSearchMissingMetadataEpisodeTitleBackfill" name="EnableSearchMissingMetadataEpisodeTitleBackfill" type="checkbox"
@@ -494,6 +506,8 @@
                           lastEpisodeGroupMap = config.TmdbEpisodeGroupMap || '';
                           document.querySelector('#TmdbEpisodeGroupMap').value = lastEpisodeGroupMap;
                           document.querySelector('#EnableLlmEpisodeGroupMappingAssist').checked = config.EnableLlmEpisodeGroupMappingAssist;
+                          document.querySelector('#LlmEpisodeGroupMappingMinConfidence').value = config.LlmEpisodeGroupMappingMinConfidence;
+                          document.querySelector('#LlmEpisodeGroupMappingMaxCandidateGroups').value = config.LlmEpisodeGroupMappingMaxCandidateGroups;
                            document.querySelector('#EnableSearchMissingMetadataEpisodeTitleBackfill').checked = config.EnableSearchMissingMetadataEpisodeTitleBackfill;
                            document.querySelector('#EnableLlmAssist').checked = config.EnableLlmAssist;
                            document.querySelector('#EnableLlmTmdbIdCorrection').checked = config.EnableLlmTmdbIdCorrection;
@@ -560,6 +574,8 @@
                           config.TmdbApiKey = document.querySelector('#TmdbApiKey').value;
                           config.TmdbEpisodeGroupMap = document.querySelector('#TmdbEpisodeGroupMap').value;
                           config.EnableLlmEpisodeGroupMappingAssist = document.querySelector('#EnableLlmEpisodeGroupMappingAssist').checked;
+                          config.LlmEpisodeGroupMappingMinConfidence = document.querySelector('#LlmEpisodeGroupMappingMinConfidence').valueAsNumber;
+                          config.LlmEpisodeGroupMappingMaxCandidateGroups = document.querySelector('#LlmEpisodeGroupMappingMaxCandidateGroups').valueAsNumber;
                            config.EnableSearchMissingMetadataEpisodeTitleBackfill = document.querySelector('#EnableSearchMissingMetadataEpisodeTitleBackfill').checked;
                            config.EnableLlmAssist = document.querySelector('#EnableLlmAssist').checked;
                            config.EnableLlmTmdbIdCorrection = document.querySelector('#EnableLlmTmdbIdCorrection').checked;

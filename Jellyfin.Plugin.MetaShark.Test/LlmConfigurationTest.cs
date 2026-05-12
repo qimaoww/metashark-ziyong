@@ -19,6 +19,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertProperty("EnableLlmTmdbIdCorrection", typeof(bool), false, configuration);
             AssertProperty("EnableLlmTmdbCorrectionPersistence", typeof(bool), true, configuration);
             AssertProperty("EnableLlmTmdbCompletionPersistence", typeof(bool), true, configuration);
+            AssertProperty("LlmTmdbCorrectionMap", typeof(string), string.Empty, configuration);
             AssertProperty("LlmTmdbCompletionMap", typeof(string), string.Empty, configuration);
             AssertProperty("LlmBaseUrl", typeof(string), string.Empty, configuration);
             AssertProperty("LlmApiKey", typeof(string), string.Empty, configuration);
@@ -43,6 +44,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 EnableLlmTmdbIdCorrection = true,
                 EnableLlmTmdbCorrectionPersistence = false,
                 EnableLlmTmdbCompletionPersistence = false,
+                LlmTmdbCorrectionMap = "series:douban:26862290=tmdb:65942",
                 LlmTmdbCompletionMap = "series:douban:37291769=tmdb:251782",
                 LlmBaseUrl = "https://example.test/v1",
                 LlmApiKey = "test-key",
@@ -62,6 +64,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(configuration.EnableLlmTmdbIdCorrection);
             Assert.IsFalse(configuration.EnableLlmTmdbCorrectionPersistence);
             Assert.IsFalse(configuration.EnableLlmTmdbCompletionPersistence);
+            Assert.AreEqual("series:douban:26862290=tmdb:65942", configuration.LlmTmdbCorrectionMap);
             Assert.AreEqual("series:douban:37291769=tmdb:251782", configuration.LlmTmdbCompletionMap);
             Assert.AreEqual("https://example.test/v1", configuration.LlmBaseUrl);
             Assert.AreEqual("test-key", configuration.LlmApiKey);

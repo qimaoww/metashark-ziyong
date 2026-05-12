@@ -37,13 +37,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ShouldRoundTripToggleThroughPageshowAndSubmit()
+        public void ShouldRenderTuningInputsBelowEpisodeGroupMappingAssistToggle()
+        {
+            var html = ReadConfigPageHtml();
+            var toggleIndex = html.IndexOf("id=\"EnableLlmEpisodeGroupMappingAssist\"", StringComparison.Ordinal);
+            var minConfidenceIndex = html.IndexOf("id=\"LlmEpisodeGroupMappingMinConfidence\"", StringComparison.Ordinal);
+            var maxCandidateGroupsIndex = html.IndexOf("id=\"LlmEpisodeGroupMappingMaxCandidateGroups\"", StringComparison.Ordinal);
+            var backfillIndex = html.IndexOf("id=\"EnableSearchMissingMetadataEpisodeTitleBackfill\"", StringComparison.Ordinal);
+
+            Assert.IsTrue(minConfidenceIndex > toggleIndex, "剧集组映射专用置信度输入必须位于 LLM 剧集组映射开关下方。");
+            Assert.IsTrue(maxCandidateGroupsIndex > minConfidenceIndex, "剧集组映射候选组上限输入必须位于专用置信度输入下方。");
+            Assert.IsTrue(backfillIndex > maxCandidateGroupsIndex, "剧集组映射调参项应位于其它高级项前。");
+            AssertNumberInput(html, "LlmEpisodeGroupMappingMinConfidence", "0", "1", "0.01");
+            AssertNumberInput(html, "LlmEpisodeGroupMappingMaxCandidateGroups", "1", "50", "1");
+            Assert.IsTrue(html.Contains("用于自动写回 TMDb 剧集组映射的最低置信度，允许范围 0.0-1.0，默认 0.80。", StringComparison.Ordinal), "置信度输入必须说明用途、范围和默认值。");
+            Assert.IsTrue(html.Contains("发送给 LLM 的 TMDb 剧集组候选数量上限，允许范围 1-50，默认 8。", StringComparison.Ordinal), "候选组上限输入必须说明用途、范围和默认值。");
+        }
+
+        [TestMethod]
+        public void ShouldRoundTripEpisodeGroupAssistFieldsThroughPageshowAndSubmit()
         {
             var html = ReadConfigPageHtml();
 
             Assert.AreEqual(2, CountOccurrences(html, "config.EnableLlmEpisodeGroupMappingAssist"), "开关应只在 pageshow 和 submit 各绑定一次。 ");
             Assert.IsTrue(html.Contains("document.querySelector('#EnableLlmEpisodeGroupMappingAssist').checked = config.EnableLlmEpisodeGroupMappingAssist;", StringComparison.Ordinal));
             Assert.IsTrue(html.Contains("config.EnableLlmEpisodeGroupMappingAssist = document.querySelector('#EnableLlmEpisodeGroupMappingAssist').checked;", StringComparison.Ordinal));
+            AssertRoundTripNumber(html, "LlmEpisodeGroupMappingMinConfidence");
+            AssertRoundTripNumber(html, "LlmEpisodeGroupMappingMaxCandidateGroups");
         }
 
         [TestMethod]
@@ -91,6 +111,26 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 count++;
                 startIndex = index + value.Length;
             }
+        }
+
+        private static void AssertNumberInput(string html, string id, string min, string max, string step)
+        {
+            var match = Regex.Match(
+                html,
+                $@"<input[^>]*id=""{id}""[^>]*name=""{id}""[^>]*type=""number""[^>]*>",
+                RegexOptions.Singleline);
+
+            Assert.IsTrue(match.Success, $"配置页缺少 {id} number 输入。");
+            Assert.IsTrue(match.Value.Contains($@"min=""{min}""", StringComparison.Ordinal), $"{id} 必须声明 min={min}。");
+            Assert.IsTrue(match.Value.Contains($@"max=""{max}""", StringComparison.Ordinal), $"{id} 必须声明 max={max}。");
+            Assert.IsTrue(match.Value.Contains($@"step=""{step}""", StringComparison.Ordinal), $"{id} 必须声明 step={step}。");
+        }
+
+        private static void AssertRoundTripNumber(string html, string propertyName)
+        {
+            Assert.AreEqual(2, CountOccurrences(html, $"config.{propertyName}"), $"{propertyName} 应只在 pageshow 和 submit 各绑定一次。");
+            Assert.IsTrue(html.Contains($"document.querySelector('#{propertyName}').value = config.{propertyName};", StringComparison.Ordinal), $"{propertyName} pageshow 必须回填。");
+            Assert.IsTrue(html.Contains($"config.{propertyName} = document.querySelector('#{propertyName}').valueAsNumber;", StringComparison.Ordinal), $"{propertyName} submit 必须保存 number。");
         }
     }
 }
