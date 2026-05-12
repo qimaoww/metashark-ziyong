@@ -27,19 +27,26 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private readonly ILlmApi llmApi;
         private readonly TmdbApi tmdbApi;
         private readonly EpisodeGroupMapParser parser;
+        private readonly ITmdbEpisodeGroupMapPersistenceService persistenceService;
         private readonly ILlmRequestLimiter requestLimiter;
 
         [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Compatibility constructor owns a process-local fallback limiter for test-only direct construction.")]
         public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi)
-            : this(llmApi, tmdbApi, EpisodeGroupMapParser.Shared, new LlmRequestLimiter())
+            : this(llmApi, tmdbApi, EpisodeGroupMapParser.Shared, new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared), new LlmRequestLimiter())
         {
         }
 
         public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser, ILlmRequestLimiter? requestLimiter = null)
+            : this(llmApi, tmdbApi, parser, new TmdbEpisodeGroupMapPersistenceService(parser), requestLimiter)
+        {
+        }
+
+        public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser, ITmdbEpisodeGroupMapPersistenceService persistenceService, ILlmRequestLimiter? requestLimiter = null)
         {
             this.llmApi = llmApi ?? throw new ArgumentNullException(nameof(llmApi));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
             this.parser = parser ?? throw new ArgumentNullException(nameof(parser));
+            this.persistenceService = persistenceService ?? throw new ArgumentNullException(nameof(persistenceService));
             this.requestLimiter = requestLimiter ?? new LlmRequestLimiter();
         }
 
@@ -123,15 +130,26 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 {
                     return LlmEpisodeGroupMappingAssistResult.NoChange("ExistingMappingAlreadyMatches", snapshot.CanonicalText, selectedGroupId);
                 }
-
-                var updatedMapping = this.UpsertCanonicalMapping(snapshot.CanonicalText, seriesIdText, selectedGroupId);
-                configuration.TmdbEpisodeGroupMap = updatedMapping;
-                return LlmEpisodeGroupMappingAssistResult.Updated(updatedMapping, selectedGroupId);
             }
 
             var newMapping = this.UpsertCanonicalMapping(snapshot.CanonicalText, seriesIdText, selectedGroupId);
-            configuration.TmdbEpisodeGroupMap = newMapping;
-            return LlmEpisodeGroupMappingAssistResult.Updated(newMapping, selectedGroupId);
+            var persistenceResult = await this.persistenceService.TrySaveAsync(snapshot.CanonicalText, newMapping, cancellationToken).ConfigureAwait(false);
+            configuration.TmdbEpisodeGroupMap = persistenceResult.CurrentMapping;
+            return MapPersistenceResult(persistenceResult, selectedGroupId);
+        }
+
+        private static LlmEpisodeGroupMappingAssistResult MapPersistenceResult(TmdbEpisodeGroupMapPersistenceResult persistenceResult, string selectedGroupId)
+        {
+            ArgumentNullException.ThrowIfNull(persistenceResult);
+
+            return persistenceResult.Status switch
+            {
+                TmdbEpisodeGroupMapPersistenceStatus.Saved => LlmEpisodeGroupMappingAssistResult.Updated(persistenceResult.PreviousMapping, persistenceResult.CurrentMapping, selectedGroupId),
+                TmdbEpisodeGroupMapPersistenceStatus.NoChange => LlmEpisodeGroupMappingAssistResult.NoChange(persistenceResult.Reason, persistenceResult.CurrentMapping, selectedGroupId, persistenceResult.PreviousMapping),
+                TmdbEpisodeGroupMapPersistenceStatus.Conflict => LlmEpisodeGroupMappingAssistResult.NoChange(persistenceResult.Reason, persistenceResult.CurrentMapping, selectedGroupId, persistenceResult.PreviousMapping),
+                TmdbEpisodeGroupMapPersistenceStatus.Failed => LlmEpisodeGroupMappingAssistResult.Failed(persistenceResult.Reason, persistenceResult.CurrentMapping, selectedGroupId, persistenceResult.PreviousMapping),
+                _ => LlmEpisodeGroupMappingAssistResult.Failed("UnknownPersistenceStatus", persistenceResult.CurrentMapping, selectedGroupId, persistenceResult.PreviousMapping),
+            };
         }
 
         private static List<LlmEpisodeGroupCandidate> NormalizeCandidates(IEnumerable<LlmEpisodeGroupCandidate?> candidates, int maxCandidateGroups)

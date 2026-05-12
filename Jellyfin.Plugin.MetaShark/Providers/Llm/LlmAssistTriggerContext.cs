@@ -18,5 +18,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         public bool IsImageProvider { get; set; }
 
         public HttpContext? HttpContext { get; set; }
+
+        public bool HasBridgedExplicitSearchMissingMetadataRefreshIntent { get; set; }
     }
 }

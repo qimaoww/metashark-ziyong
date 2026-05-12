@@ -1,7 +1,10 @@
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Providers.Llm;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -71,6 +74,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void Evaluate_RejectsOverwriteSemanticWithoutExplicitRefreshRoute()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.OverwriteRefresh, "Movie", null);
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ImplicitRefreshRejectedReason, decision.Reason);
+        }
+
+        [TestMethod]
         public void Evaluate_RejectsAutomaticRefreshEvenWithExplicitSearchMissingQuery()
         {
             var decision = Evaluate(DefaultScraperSemantic.AutomaticRefresh, "Movie", CreateRefreshContext("?metadataRefreshMode=FullRefresh&replaceAllMetadata=false"));
@@ -88,13 +100,29 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ImplicitRefreshRejectedReason, decision.Reason);
         }
 
-        [TestMethod]
-        public void Evaluate_RejectsExplicitRefreshRouteWithoutUserIntentQuery()
+        [DataTestMethod]
+        [DataRow("Movie")]
+        [DataRow("Series")]
+        public void Evaluate_RejectsUserRefreshWithoutQueryStringWhenBridgeIntentIsMissing(string mediaType)
         {
-            var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Series", CreateRefreshContext(string.Empty));
+            var decision = Evaluate(DefaultScraperSemantic.UserRefresh, mediaType, CreateRefreshContext(string.Empty));
 
             Assert.IsFalse(decision.ShouldTrigger);
             Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ImplicitRefreshRejectedReason, decision.Reason);
+        }
+
+        [DataTestMethod]
+        [DataRow("Movie")]
+        [DataRow("Series")]
+        public void Evaluate_AllowsUserRefreshWithoutQueryStringWhenBridgeIntentExists(string mediaType)
+        {
+            var context = CreateContext(DefaultScraperSemantic.UserRefresh, mediaType, CreateRefreshContext(string.Empty));
+            context.HasBridgedExplicitSearchMissingMetadataRefreshIntent = true;
+
+            var decision = new LlmTmdbIdCorrectionTriggerPolicy().Evaluate(context);
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ExplicitSearchMissingMetadataRefreshReason, decision.Reason);
         }
 
         [TestMethod]
@@ -137,9 +165,36 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void Evaluate_RejectsManualMatchWithoutHttpContext()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.ManualMatch, "Movie", null);
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ImplicitRefreshRejectedReason, decision.Reason);
+        }
+
+        [TestMethod]
         public void Evaluate_RejectsSearchMissingWithoutExplicitFalseReplaceAllMetadata()
         {
             var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Movie", CreateRefreshContext("?metadataRefreshMode=FullRefresh"));
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ImplicitRefreshRejectedReason, decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_RejectsFullRefreshThatIsNotSearchMissingOrOverwrite()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Movie", CreateRefreshContext("?metadataRefreshMode=FullRefresh&replaceAllMetadata=unexpected"));
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ImplicitRefreshRejectedReason, decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_RejectsRefreshRouteWithUnrelatedQueryString()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Series", CreateRefreshContext("?foo=bar"));
 
             Assert.IsFalse(decision.ShouldTrigger);
             Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ImplicitRefreshRejectedReason, decision.Reason);
@@ -155,6 +210,76 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsFalse(decision.ShouldTrigger);
             Assert.AreEqual(LlmTmdbIdCorrectionTriggerPolicy.ConfigurationMissingReason, decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_WhenLoggerProvided_ShouldLogAcceptedDecision()
+        {
+            var loggerStub = new Mock<ILogger<LlmTmdbIdCorrectionTriggerPolicy>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var policy = new LlmTmdbIdCorrectionTriggerPolicy(loggerStub.Object);
+
+            var decision = policy.Evaluate(CreateContext(DefaultScraperSemantic.ManualMatch, "Movie", CreateManualApplyContext()));
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ReasonCode"] = LlmTmdbIdCorrectionTriggerPolicy.ManualMatchReason,
+                    ["Accepted"] = true,
+                    ["MediaType"] = "Movie",
+                    ["Semantic"] = DefaultScraperSemantic.ManualMatch.ToString(),
+                    ["IsImageProvider"] = false,
+                },
+                originalFormatContains: "[MetaShark] LLM TMDb 纠错已评估. reason={ReasonCode} accepted={Accepted} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}",
+                messageContains: ["LLM TMDb 纠错已评估"]);
+        }
+
+        [TestMethod]
+        public void Observability_ShouldNormalizeStaleExternalIdConflictRejection()
+        {
+            var loggerStub = new Mock<ILogger<LlmExternalIdResolutionService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            LlmObservabilityLog.LogTmdbCorrectionRejected(loggerStub.Object, "ImdbEvidenceDoesNotAlign", "Series", DefaultScraperSemantic.UserRefresh, false);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ReasonCode"] = "StaleExternalIdConflict",
+                    ["MediaType"] = "Series",
+                    ["Semantic"] = DefaultScraperSemantic.UserRefresh.ToString(),
+                    ["IsImageProvider"] = false,
+                },
+                originalFormatContains: "[MetaShark] LLM TMDb 纠错已拒绝. reason={ReasonCode} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}",
+                messageContains: ["LLM TMDb 纠错已拒绝"]);
+        }
+
+        [TestMethod]
+        public void Observability_ShouldLogAppliedReasonCode()
+        {
+            var loggerStub = new Mock<ILogger<LlmExternalIdResolutionService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            LlmObservabilityLog.LogTmdbCorrectionApplied(loggerStub.Object, "IMDbUniqueMappingVerified", "Movie");
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ReasonCode"] = "IMDbUniqueMappingVerified",
+                    ["MediaType"] = "Movie",
+                },
+                originalFormatContains: "[MetaShark] LLM TMDb 纠错已应用. reason={ReasonCode} mediaType={MediaType}",
+                messageContains: ["LLM TMDb 纠错已应用"]);
         }
 
         [DataTestMethod]

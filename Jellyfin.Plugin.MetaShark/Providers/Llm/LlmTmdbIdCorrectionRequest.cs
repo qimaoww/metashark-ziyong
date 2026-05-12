@@ -30,6 +30,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
         public HttpContext? HttpContext { get; set; }
 
+        public bool HasBridgedExplicitSearchMissingMetadataRefreshIntent { get; set; }
+
         public IEnumerable<string?> LibraryRoots { get; set; } = Array.Empty<string?>();
 
         public IEnumerable<string?> RelativePathSamples { get; set; } = Array.Empty<string?>();

@@ -5,6 +5,7 @@
 namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Globalization;
     using System.Linq;
@@ -12,6 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Providers;
     using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Library;
@@ -24,8 +26,14 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Keep orchestration flow before helper methods.")]
     public sealed class LlmEpisodeGroupMappingProviderAssistService : ILlmEpisodeGroupMappingProviderAssistService
     {
+        private static readonly TimeSpan RefreshLoopGuardWindow = TimeSpan.FromSeconds(30);
+
         private static readonly Action<ILogger, int, Exception?> LogQueuedRefresh =
             LoggerMessage.Define<int>(LogLevel.Information, new EventId(1, nameof(LlmEpisodeGroupMappingProviderAssistService)), "[MetaShark] LLM 剧集组映射变更已排队刷新. Count={Count}.");
+
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> SeriesLocks = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, (string GroupId, DateTimeOffset ExpiresAt)> SuppressedRefreshSeriesIds = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, (string GroupId, DateTimeOffset ExpiresAt)> RecentlyQueuedRefreshSeriesIds = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly ILlmEpisodeGroupMappingAssistService assistService;
         private readonly TmdbApi tmdbApi;
@@ -72,41 +80,69 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         {
             ArgumentNullException.ThrowIfNull(request);
             var currentMapping = request.Configuration?.TmdbEpisodeGroupMap ?? string.Empty;
-            var triggerDecision = this.triggerPolicy.Evaluate(new LlmAssistTriggerContext
+            var seriesTmdbIdText = request.SeriesTmdbId.HasValue && request.SeriesTmdbId.Value > 0
+                ? request.SeriesTmdbId.Value.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+
+            if (ShouldSuppressRefreshLoop(request, seriesTmdbIdText))
             {
-                Configuration = request.Configuration,
-                Semantic = request.Semantic,
-                MediaType = request.MediaType,
-                IsImageProvider = false,
-                HttpContext = request.HttpContext,
-            });
-            if (!triggerDecision.ShouldTrigger)
-            {
-                return LlmEpisodeGroupMappingAssistResult.NotTriggered(triggerDecision.Reason, currentMapping);
+                return LlmEpisodeGroupMappingAssistResult.NoChange("RefreshLoopSuppressed", currentMapping, string.Empty);
             }
 
-            var candidates = await this.GetCandidateGroupsAsync(request.SeriesTmdbId, request.MetadataLanguage, cancellationToken).ConfigureAwait(false);
-            var result = await this.assistService.SuggestAndWriteAsync(
-                    new LlmEpisodeGroupMappingAssistRequest
-                    {
-                        Configuration = request.Configuration,
-                        SeriesTmdbId = request.SeriesTmdbId,
-                        SeriesTitle = request.SeriesTitle,
-                        MetadataLanguage = request.MetadataLanguage,
-                        SafeRelativePathSamples = request.SafeRelativePathSamples,
-                        EpisodeDistribution = request.EpisodeDistribution,
-                        CandidateGroups = candidates,
-                        IsManualTrigger = true,
-                    },
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var seriesLock = GetSeriesLock(seriesTmdbIdText);
+            await seriesLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-            if (result.WroteMapping)
+            try
             {
-                this.QueueAffectedSeriesRefresh(currentMapping, result.MappingText);
-            }
+                currentMapping = request.Configuration?.TmdbEpisodeGroupMap ?? string.Empty;
+                var triggerDecision = this.triggerPolicy.Evaluate(new LlmAssistTriggerContext
+                {
+                    Configuration = request.Configuration,
+                    Semantic = request.Semantic,
+                    MediaType = request.MediaType,
+                    IsImageProvider = false,
+                    HttpContext = request.HttpContext,
+                });
+                if (!triggerDecision.ShouldTrigger
+                    && request.HasBridgedExplicitSearchMissingMetadataRefreshIntent
+                    && request.Semantic == DefaultScraperSemantic.UserRefresh
+                    && string.Equals(triggerDecision.Reason, "ImplicitRefreshRejected", StringComparison.Ordinal))
+                {
+                    triggerDecision = LlmAssistTriggerDecision.Allowed("ExplicitSearchMissingMetadataRefresh");
+                }
 
-            return result;
+                if (!triggerDecision.ShouldTrigger)
+                {
+                    return LlmEpisodeGroupMappingAssistResult.NotTriggered(triggerDecision.Reason, currentMapping);
+                }
+
+                var candidates = await this.GetCandidateGroupsAsync(request.SeriesTmdbId, request.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+                var result = await this.assistService.SuggestAndWriteAsync(
+                        new LlmEpisodeGroupMappingAssistRequest
+                        {
+                            Configuration = request.Configuration,
+                            SeriesTmdbId = request.SeriesTmdbId,
+                            SeriesTitle = request.SeriesTitle,
+                            MetadataLanguage = request.MetadataLanguage,
+                            SafeRelativePathSamples = request.SafeRelativePathSamples,
+                            EpisodeDistribution = request.EpisodeDistribution,
+                            CandidateGroups = candidates,
+                            IsManualTrigger = true,
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (result.WroteMapping)
+                {
+                    this.QueueAffectedSeriesRefresh(result.PreviousMapping, result.MappingText);
+                }
+
+                return result;
+            }
+            finally
+            {
+                seriesLock.Release();
+            }
         }
 
         private async Task<IReadOnlyList<LlmEpisodeGroupCandidate>> GetCandidateGroupsAsync(int? seriesTmdbId, string? metadataLanguage, CancellationToken cancellationToken)
@@ -162,11 +198,98 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                     continue;
                 }
 
+                var newGroupId = refreshResult.NewSnapshot.TryGetGroupId(tmdbId, out var resolvedGroupId)
+                    ? resolvedGroupId
+                    : string.Empty;
+
+                if (IsRecentlyQueuedRefresh(tmdbId, newGroupId))
+                {
+                    continue;
+                }
+
+                MarkRefreshQueued(tmdbId, newGroupId);
                 this.providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.High);
                 queued++;
             }
 
             LogQueuedRefresh(this.logger, queued, null);
+        }
+
+        private static SemaphoreSlim GetSeriesLock(string seriesTmdbId)
+        {
+            return SeriesLocks.GetOrAdd(seriesTmdbId ?? string.Empty, _ => new SemaphoreSlim(1, 1));
+        }
+
+        private static bool ShouldSuppressRefreshLoop(LlmEpisodeGroupMappingProviderAssistRequest request, string seriesTmdbId)
+        {
+            if (request.Semantic != DefaultScraperSemantic.UserRefresh || string.IsNullOrWhiteSpace(seriesTmdbId))
+            {
+                return false;
+            }
+
+            var currentMapping = request.Configuration?.TmdbEpisodeGroupMap ?? string.Empty;
+            var currentSnapshot = EpisodeGroupMapParser.Shared.ParseSnapshot(currentMapping);
+            var currentGroupId = currentSnapshot.TryGetGroupId(seriesTmdbId, out var resolvedGroupId)
+                ? resolvedGroupId
+                : string.Empty;
+
+            return TryConsumeRefreshSuppression(seriesTmdbId, currentGroupId);
+        }
+
+        private static bool TryConsumeRefreshSuppression(string seriesTmdbId, string groupId)
+        {
+            if (!SuppressedRefreshSeriesIds.TryGetValue(seriesTmdbId, out var state))
+            {
+                return false;
+            }
+
+            if (state.ExpiresAt <= DateTimeOffset.UtcNow)
+            {
+                SuppressedRefreshSeriesIds.TryRemove(seriesTmdbId, out _);
+                return false;
+            }
+
+            if (!string.Equals(state.GroupId, groupId ?? string.Empty, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            SuppressedRefreshSeriesIds.TryRemove(seriesTmdbId, out _);
+            return true;
+        }
+
+        private static bool IsRecentlyQueuedRefresh(string seriesTmdbId, string groupId)
+        {
+            if (string.IsNullOrWhiteSpace(seriesTmdbId))
+            {
+                return false;
+            }
+
+            if (!RecentlyQueuedRefreshSeriesIds.TryGetValue(seriesTmdbId, out var state))
+            {
+                return false;
+            }
+
+            if (state.ExpiresAt <= DateTimeOffset.UtcNow)
+            {
+                RecentlyQueuedRefreshSeriesIds.TryRemove(seriesTmdbId, out _);
+                return false;
+            }
+
+            return string.Equals(state.GroupId, groupId ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        private static void MarkRefreshQueued(string seriesTmdbId, string groupId)
+        {
+            if (string.IsNullOrWhiteSpace(seriesTmdbId))
+            {
+                return;
+            }
+
+            var expiresAt = DateTimeOffset.UtcNow.Add(RefreshLoopGuardWindow);
+            var state = (groupId ?? string.Empty, expiresAt);
+            RecentlyQueuedRefreshSeriesIds[seriesTmdbId] = state;
+            SuppressedRefreshSeriesIds[seriesTmdbId] = state;
         }
 
         private static LlmEpisodeGroupCandidate CreateCandidate(TvGroupCollection candidate)

@@ -226,6 +226,56 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void DefaultScraperPolicy_CorrectionMapAutomaticImagesUseCorrectedTmdbBeforeDouban()
+        {
+            EnsurePluginInstance();
+            var configuration = new PluginConfiguration
+            {
+                DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault,
+                EnableTmdb = true,
+                EnableLlmTmdbCorrectionPersistence = true,
+                LlmTmdbCorrectionMap = "series:douban:26862290=tmdb:65942",
+            };
+            ReplacePluginConfiguration(configuration);
+
+            var info = new MediaBrowser.Controller.Entities.TV.Series
+            {
+                Name = "Re：从零开始的异世界生活",
+                PreferredMetadataLanguage = "zh",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, "26862290" },
+                    { MetadataProvider.Tmdb.ToString(), "111" },
+                    { MetaSharkPlugin.ProviderId, "Douban_26862290" },
+                },
+            };
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            SeedDoubanSubject(doubanApi, new DoubanSubject
+            {
+                Sid = "26862290",
+                Name = "Re：从零开始的休息时间",
+                Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p26862290.jpg",
+            });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbImageConfig(tmdbApi);
+            SeedTmdbSeriesDetails(tmdbApi, 65942, "zh");
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            Task.Run(async () =>
+            {
+                var provider = new SeriesImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                Assert.IsTrue(images.Any(image => image.Type == ImageType.Primary && image.Url == tmdbApi.GetPosterUrl("/series-poster.jpg")?.ToString()), "持久化 Douban->TMDb 纠错命中后，自动剧集图片应使用纠正后的 TMDb 海报。");
+                Assert.IsFalse(images.Any(image => image.Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true), "持久化 Douban->TMDb 纠错命中后，自动剧集图片不应再返回残留 Douban 海报。");
+            }).GetAwaiter().GetResult();
+        }
+
+        [TestMethod]
         public void DefaultScraperPolicy_DefaultAutomaticImagesFallbackToTmdbWhenDoubanPosterMissing()
         {
             EnsurePluginInstance();

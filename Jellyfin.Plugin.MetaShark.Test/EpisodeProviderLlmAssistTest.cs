@@ -550,6 +550,36 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_WhenParentSeriesTmdbExists_IgnoresResolvedParentCorrectionCandidateButKeepsEpisodeWrite()
+        {
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateManualMatchHttpContext(TestItemIdString()),
+                seriesProviderIds: new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tmdb.ToString()] = "123",
+                    [MetadataProvider.Tvdb.ToString()] = "321",
+                });
+            var episodeTmdbWrite = CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "9001", "Episode");
+            harness.ExternalIdService.EnqueueResult(LlmExternalIdResolutionResult.Succeeded(
+                new[]
+                {
+                    CreateCandidate("TMDb", "456", "Series"),
+                    episodeTmdbWrite.Candidate,
+                },
+                new[] { episodeTmdbWrite },
+                Array.Empty<LlmExternalIdProviderIdWrite>(),
+                "parent candidate plus episode write"));
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual(1, harness.ExternalIdService.Requests.Count);
+            Assert.AreEqual("123", harness.Info.SeriesProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual("9001", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("第 1 集", result.Item.Name);
+        }
+
+        [TestMethod]
         public async Task GetMetadata_WhenSeriesTmdbMissingAndSearchMissingResolverFails_KeepsEarlyReturnAndWritesNoIds()
         {
             using var harness = CreateHarness(

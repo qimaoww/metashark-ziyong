@@ -6,7 +6,9 @@ namespace Jellyfin.Plugin.MetaShark;
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.IO;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -85,5 +87,52 @@ public class MetaSharkPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         }
 
         return new Uri(this.appHost.GetLocalApiUrl(request.Host.Host, request.Scheme, requestPort), UriKind.Absolute);
+    }
+
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Configuration persistence must translate any serializer or file-system save failure into a recoverable false result and rollback the in-memory/file snapshot.")]
+    public bool TrySaveConfigurationSafely(PluginConfiguration configuration, PluginConfiguration rollbackConfiguration, out Exception? saveException)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(rollbackConfiguration);
+
+        byte[]? originalFileBytes = null;
+        var configurationFilePath = this.ConfigurationFilePath;
+        var fileExisted = File.Exists(configurationFilePath);
+        if (fileExisted)
+        {
+            originalFileBytes = File.ReadAllBytes(configurationFilePath);
+        }
+
+        try
+        {
+            this.SaveConfiguration(configuration);
+            this.Configuration = configuration;
+            saveException = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Exception? rollbackException = null;
+
+            try
+            {
+                this.Configuration = rollbackConfiguration;
+                if (fileExisted)
+                {
+                    File.WriteAllBytes(configurationFilePath, originalFileBytes ?? Array.Empty<byte>());
+                }
+                else if (File.Exists(configurationFilePath))
+                {
+                    File.Delete(configurationFilePath);
+                }
+            }
+            catch (Exception restoreEx)
+            {
+                rollbackException = restoreEx;
+            }
+
+            saveException = rollbackException == null ? ex : new AggregateException(ex, rollbackException);
+            return false;
+        }
     }
 }

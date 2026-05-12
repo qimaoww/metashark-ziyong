@@ -9,6 +9,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Microsoft.Extensions.Logging;
 
     public sealed class LlmMetadataAssistService : ILlmMetadataAssistService
     {
@@ -19,6 +20,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private readonly LlmScrapeMismatchDetector mismatchDetector;
         private readonly LlmMetadataMergePolicy mergePolicy;
         private readonly ILlmRequestLimiter requestLimiter;
+        private readonly ILogger<LlmMetadataAssistService>? logger;
 
         [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Compatibility constructor owns a process-local fallback limiter for test-only direct construction.")]
         public LlmMetadataAssistService(ILlmApi llmApi)
@@ -33,7 +35,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             LlmSuggestionValidator suggestionValidator,
             LlmScrapeMismatchDetector mismatchDetector,
             LlmMetadataMergePolicy mergePolicy,
-            ILlmRequestLimiter? requestLimiter = null)
+            ILlmRequestLimiter? requestLimiter = null,
+            ILogger<LlmMetadataAssistService>? logger = null)
         {
             this.llmApi = llmApi ?? throw new ArgumentNullException(nameof(llmApi));
             this.triggerPolicy = triggerPolicy ?? throw new ArgumentNullException(nameof(triggerPolicy));
@@ -42,6 +45,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             this.mismatchDetector = mismatchDetector ?? throw new ArgumentNullException(nameof(mismatchDetector));
             this.mergePolicy = mergePolicy ?? throw new ArgumentNullException(nameof(mergePolicy));
             this.requestLimiter = requestLimiter ?? new LlmRequestLimiter();
+            this.logger = logger;
         }
 
         [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "LLM assist must fail silently and let metadata scraping continue.")]
@@ -50,6 +54,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             ArgumentNullException.ThrowIfNull(request);
             if (request.LookupInfo == null)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.logger, "LookupInfoMissing", request.MediaType, request.Semantic, request.IsImageProvider);
                 return LlmScrapingAssistResult.NotTriggered("LookupInfoMissing");
             }
 
@@ -76,6 +81,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 using var lease = await this.requestLimiter.TryAcquireAsync(cancellationToken).ConfigureAwait(false);
                 if (lease == null)
                 {
+                    LlmObservabilityLog.LogLlmAssistRejected(this.logger, "LlmRequestLimiterBusy", mediaType, request.Semantic, request.IsImageProvider);
                     return LlmScrapingAssistResult.Skipped("LlmRequestLimiterBusy", context);
                 }
 

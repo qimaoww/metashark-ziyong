@@ -37,6 +37,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             return CreateRefreshHttpContext(itemId, metadataRefreshMode, replaceAllMetadata);
         }
 
+        public static HttpContext CreateQuerylessRefreshHttpContext(string itemId)
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/{itemId}/Refresh";
+            context.Request.QueryString = QueryString.Empty;
+            return context;
+        }
+
         public static HttpContext? CreateAutomaticRefreshHttpContext()
         {
             return null;
@@ -154,12 +163,35 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         internal sealed class RecordingLlmExternalIdResolutionService : ILlmExternalIdResolutionService
         {
+            private readonly Queue<LlmAssistTriggerDecision> queuedExistingProviderDecisions = new Queue<LlmAssistTriggerDecision>();
             private readonly Queue<LlmExternalIdResolutionResult> queuedResults = new Queue<LlmExternalIdResolutionResult>();
             private readonly Queue<LlmTmdbIdCorrectionResult> queuedCorrectionResults = new Queue<LlmTmdbIdCorrectionResult>();
+
+            public List<LlmExternalIdResolutionRequest> ExistingProviderDecisionRequests { get; } = new List<LlmExternalIdResolutionRequest>();
 
             public List<LlmExternalIdResolutionRequest> Requests { get; } = new List<LlmExternalIdResolutionRequest>();
 
             public List<LlmTmdbIdCorrectionRequest> CorrectionRequests { get; } = new List<LlmTmdbIdCorrectionRequest>();
+
+            public bool? LastExistingProviderDecisionBridgedFlag => this.ExistingProviderDecisionRequests.LastOrDefault()?.HasBridgedExplicitSearchMissingMetadataRefreshIntent;
+
+            public bool? LastResolveBridgedFlag => this.Requests.LastOrDefault()?.HasBridgedExplicitSearchMissingMetadataRefreshIntent;
+
+            public bool? LastCorrectionBridgedFlag => this.CorrectionRequests.LastOrDefault()?.HasBridgedExplicitSearchMissingMetadataRefreshIntent;
+
+            public void EnqueueExistingProviderDecision(LlmAssistTriggerDecision decision)
+            {
+                this.queuedExistingProviderDecisions.Enqueue(decision);
+            }
+
+            public Task<LlmAssistTriggerDecision> EvaluateExistingProviderIdsAsync(LlmExternalIdResolutionRequest request, CancellationToken cancellationToken)
+            {
+                this.ExistingProviderDecisionRequests.Add(request);
+                var decision = this.queuedExistingProviderDecisions.Count > 0
+                    ? this.queuedExistingProviderDecisions.Dequeue()
+                    : LlmAssistTriggerDecision.Allowed("No queued test decision.");
+                return Task.FromResult(decision);
+            }
 
             public void EnqueueResult(LlmExternalIdResolutionResult result)
             {

@@ -162,7 +162,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             {
                 externalIdResolutionResult = await this.TryResolveEpisodeExternalIdsWithLlmAsync(info, seriesTmdbId, semantic, cancellationToken).ConfigureAwait(false);
                 var resolvedParentSeriesTmdbId = GetVerifiedParentSeriesTmdbId(externalIdResolutionResult);
-                if (!string.IsNullOrWhiteSpace(resolvedParentSeriesTmdbId))
+                if (string.IsNullOrWhiteSpace(seriesTmdbId)
+                    && !string.IsNullOrWhiteSpace(resolvedParentSeriesTmdbId))
                 {
                     seriesTmdbId = resolvedParentSeriesTmdbId;
                 }
@@ -884,11 +885,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             if (this.llmMetadataAssistService == null)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "LlmConfigurationMissing", nameof(Episode), semantic, false);
                 return (effectiveProviderTitle, overviewDecision);
             }
 
             if (!Config.LlmAllowTextCompletion)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "TextCompletionDisabled", nameof(Episode), semantic, false);
                 return (effectiveProviderTitle, overviewDecision);
             }
 
@@ -902,6 +905,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             });
             if (!triggerDecision.ShouldTrigger)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, triggerDecision.Reason, nameof(Episode), semantic, false);
                 return (effectiveProviderTitle, overviewDecision);
             }
 
@@ -1158,6 +1162,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             if (this.llmExternalIdResolutionService == null)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "LlmExternalIdResolutionServiceMissing", nameof(Episode), semantic, false);
                 return LlmExternalIdResolutionResult.NotTriggered("LlmExternalIdResolutionServiceMissing");
             }
 
@@ -1171,23 +1176,30 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             });
             if (!triggerDecision.ShouldTrigger || (semantic == DefaultScraperSemantic.UserRefresh && this.HttpContextAccessor.HttpContext == null))
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, triggerDecision.Reason, nameof(Episode), semantic, false);
                 return LlmExternalIdResolutionResult.NotTriggered(triggerDecision.Reason);
             }
 
-            return await this.llmExternalIdResolutionService.ResolveAsync(
-                new LlmExternalIdResolutionRequest
-                {
-                    Configuration = Config,
-                    LookupInfo = CreateSafeLlmExternalIdEpisodeLookupInfo(info, seriesTmdbId),
-                    MediaType = nameof(Episode),
-                    Name = info.Name,
-                    Year = info.Year,
-                    Semantic = semantic,
-                    IsImageProvider = false,
-                    HttpContext = this.HttpContextAccessor.HttpContext,
-                    LibraryRoots = Array.Empty<string?>(),
-                },
-                cancellationToken).ConfigureAwait(false);
+            var request = new LlmExternalIdResolutionRequest
+            {
+                Configuration = Config,
+                LookupInfo = CreateSafeLlmExternalIdEpisodeLookupInfo(info, seriesTmdbId),
+                MediaType = nameof(Episode),
+                Name = info.Name,
+                Year = info.Year,
+                Semantic = semantic,
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+                LibraryRoots = Array.Empty<string?>(),
+            };
+            var existingProviderDecision = await this.llmExternalIdResolutionService.EvaluateExistingProviderIdsAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!existingProviderDecision.ShouldTrigger)
+            {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, existingProviderDecision.Reason, nameof(Episode), semantic, false);
+                return LlmExternalIdResolutionResult.NotTriggered(existingProviderDecision.Reason);
+            }
+
+            return await this.llmExternalIdResolutionService.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
 #pragma warning disable SA1204

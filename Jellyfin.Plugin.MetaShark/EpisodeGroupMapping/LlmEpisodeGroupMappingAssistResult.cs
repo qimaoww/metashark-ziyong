@@ -6,10 +6,11 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 {
     public sealed class LlmEpisodeGroupMappingAssistResult
     {
-        private LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus status, string reason, string mappingText, string? selectedGroupId)
+        private LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus status, string reason, string previousMapping, string mappingText, string? selectedGroupId)
         {
             this.Status = status;
             this.Reason = reason;
+            this.PreviousMapping = previousMapping;
             this.MappingText = mappingText;
             this.SelectedGroupId = selectedGroupId;
         }
@@ -17,6 +18,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         public LlmEpisodeGroupMappingAssistStatus Status { get; }
 
         public string Reason { get; }
+
+        public string PreviousMapping { get; }
 
         public string MappingText { get; }
 
@@ -26,27 +29,27 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
         public static LlmEpisodeGroupMappingAssistResult NotTriggered(string reason, string mappingText)
         {
-            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.NotTriggered, NormalizeReason(reason), mappingText, null);
+            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.NotTriggered, NormalizeReason(reason), mappingText, mappingText, null);
         }
 
-        public static LlmEpisodeGroupMappingAssistResult Failed(string reason, string mappingText)
+        public static LlmEpisodeGroupMappingAssistResult Failed(string reason, string mappingText, string? selectedGroupId = null, string? previousMapping = null)
         {
-            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.Failed, NormalizeReason(reason), mappingText, null);
+            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.Failed, NormalizeReason(reason), previousMapping ?? mappingText, mappingText, selectedGroupId);
         }
 
         public static LlmEpisodeGroupMappingAssistResult Rejected(string reason, string mappingText, string? selectedGroupId = null)
         {
-            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.Rejected, NormalizeReason(reason), mappingText, selectedGroupId);
+            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.Rejected, NormalizeReason(reason), mappingText, mappingText, selectedGroupId);
         }
 
-        public static LlmEpisodeGroupMappingAssistResult NoChange(string reason, string mappingText, string selectedGroupId)
+        public static LlmEpisodeGroupMappingAssistResult NoChange(string reason, string mappingText, string selectedGroupId, string? previousMapping = null)
         {
-            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.NoChange, NormalizeReason(reason), mappingText, selectedGroupId);
+            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.NoChange, NormalizeReason(reason), previousMapping ?? mappingText, mappingText, selectedGroupId);
         }
 
-        public static LlmEpisodeGroupMappingAssistResult Updated(string mappingText, string selectedGroupId)
+        public static LlmEpisodeGroupMappingAssistResult Updated(string previousMapping, string mappingText, string selectedGroupId)
         {
-            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.Updated, string.Empty, mappingText, selectedGroupId);
+            return new LlmEpisodeGroupMappingAssistResult(LlmEpisodeGroupMappingAssistStatus.Updated, string.Empty, previousMapping, mappingText, selectedGroupId);
         }
 
         private static string NormalizeReason(string reason)

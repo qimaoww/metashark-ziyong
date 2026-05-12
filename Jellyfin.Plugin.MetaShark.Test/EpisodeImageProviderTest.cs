@@ -222,6 +222,63 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void GetImages_CorrectionMapUsesCorrectedSeriesTmdbId()
+        {
+            RequireOutcomeReporterContract();
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(new Jellyfin.Plugin.MetaShark.Configuration.PluginConfiguration
+            {
+                EnableTmdb = true,
+                EnableLlmTmdbCorrectionPersistence = true,
+                LlmTmdbCorrectionMap = "series:douban:26862290=tmdb:65942",
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var outcomeReporterStub = new Mock<ITvImageRefillOutcomeReporter>();
+
+            WithLibraryManager(libraryManagerStub.Object, () =>
+            {
+                var tmdbApi = CreateConfiguredTmdbApi();
+                SeedTmdbEpisode(tmdbApi, 65942, 4, 1, "zh", "/rezero-corrected-still.jpg", 8.0d, 20);
+                var provider = CreateProvider(libraryManagerStub.Object, outcomeReporterStub.Object, tmdbApi);
+                var info = new MediaBrowser.Controller.Entities.TV.Episode
+                {
+                    Name = "带你出来的原因",
+                    PreferredMetadataLanguage = "zh",
+                    ParentIndexNumber = 4,
+                    IndexNumber = 1,
+                };
+                SetSeries(
+                    info,
+                    libraryManagerStub,
+                    new MediaBrowser.Controller.Entities.TV.Series
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Re：从零开始的异世界生活",
+                        PreferredMetadataLanguage = "zh",
+                        ProviderIds = new Dictionary<string, string>
+                        {
+                            { BaseProvider.DoubanProviderId, "26862290" },
+                            { MetadataProvider.Tmdb.ToString(), "111" },
+                            { MetaSharkPlugin.ProviderId, "Douban_26862290" },
+                        },
+                    });
+
+                List<RemoteImageInfo>? result = null;
+                Task.Run(async () =>
+                {
+                    result = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                }).GetAwaiter().GetResult();
+
+                outcomeReporterStub.Verify(x => x.ReportSuccess(info), Times.Once);
+                outcomeReporterStub.Verify(x => x.ReportHardMiss(It.IsAny<BaseItem>(), It.IsAny<string>()), Times.Never);
+                Assert.IsNotNull(result);
+                Assert.AreEqual(1, result!.Count);
+                Assert.AreEqual("https://image.tmdb.org/t/p/w300/rezero-corrected-still.jpg", result[0].Url);
+            });
+        }
+
+        [TestMethod]
         public void GetImages_ReportsHardMissForSeededFailedEpisodeWithoutStillPath()
         {
             RequireOutcomeReporterContract();
@@ -597,6 +654,59 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     .Any(parameter =>
                         (parameter.ParameterType.Name ?? string.Empty).Contains(fragment, StringComparison.OrdinalIgnoreCase)
                         || (parameter.Name ?? string.Empty).Contains(fragment, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private static void EnsurePluginInstance()
+        {
+            if (MetaSharkPlugin.Instance?.Configuration != null)
+            {
+                return;
+            }
+
+            var appHost = new Mock<MediaBrowser.Controller.IServerApplicationHost>();
+            appHost.Setup(x => x.GetLocalApiUrl(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>())).Returns("http://127.0.0.1:8096");
+            var applicationPaths = new Mock<MediaBrowser.Common.Configuration.IApplicationPaths>();
+            applicationPaths.SetupGet(x => x.PluginsPath).Returns(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "metashark-episode-image-provider-tests", "plugins"));
+            applicationPaths.SetupGet(x => x.PluginConfigurationsPath).Returns(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "metashark-episode-image-provider-tests", "configurations"));
+            var xmlSerializer = new Mock<MediaBrowser.Model.Serialization.IXmlSerializer>();
+
+            _ = new MetaSharkPlugin(appHost.Object, applicationPaths.Object, xmlSerializer.Object);
+            if (MetaSharkPlugin.Instance?.Configuration == null)
+            {
+                ReplacePluginConfiguration(new Jellyfin.Plugin.MetaShark.Configuration.PluginConfiguration());
+            }
+        }
+
+        private static void ReplacePluginConfiguration(Jellyfin.Plugin.MetaShark.Configuration.PluginConfiguration configuration)
+        {
+            var plugin = MetaSharkPlugin.Instance;
+            Assert.IsNotNull(plugin);
+
+            var currentType = plugin!.GetType();
+            while (currentType != null)
+            {
+                var configurationProperty = currentType.GetProperty("Configuration", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (configurationProperty != null
+                    && configurationProperty.PropertyType.IsAssignableFrom(typeof(Jellyfin.Plugin.MetaShark.Configuration.PluginConfiguration))
+                    && configurationProperty.SetMethod != null)
+                {
+                    configurationProperty.SetValue(plugin, configuration);
+                    return;
+                }
+
+                var configurationField = currentType
+                    .GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+                    .FirstOrDefault(field => field.FieldType.IsAssignableFrom(typeof(Jellyfin.Plugin.MetaShark.Configuration.PluginConfiguration)));
+                if (configurationField != null)
+                {
+                    configurationField.SetValue(plugin, configuration);
+                    return;
+                }
+
+                currentType = currentType.BaseType;
+            }
+
+            Assert.Fail("Could not replace MetaSharkPlugin configuration for tests.");
         }
     }
 }

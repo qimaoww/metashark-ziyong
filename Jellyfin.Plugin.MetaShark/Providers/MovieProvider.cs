@@ -35,18 +35,25 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private readonly ILlmMetadataAssistService? llmMetadataAssistService;
         private readonly ILlmExternalIdResolutionService? llmExternalIdResolutionService;
         private readonly LlmAssistTriggerPolicy llmAssistTriggerPolicy = new LlmAssistTriggerPolicy();
-        private readonly LlmTmdbIdCorrectionTriggerPolicy llmTmdbIdCorrectionTriggerPolicy = new LlmTmdbIdCorrectionTriggerPolicy();
+        private readonly LlmTmdbIdCorrectionTriggerPolicy llmTmdbIdCorrectionTriggerPolicy;
         private readonly LlmMetadataMergePolicy llmMetadataMergePolicy = new LlmMetadataMergePolicy();
         private readonly LlmScrapeContextBuilder llmScrapeContextBuilder = new LlmScrapeContextBuilder();
         private readonly LlmScrapeMismatchDetector llmScrapeMismatchDetector = new LlmScrapeMismatchDetector();
         private readonly IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore;
+        private readonly ITmdbCorrectionRefreshIntentStore tmdbCorrectionRefreshIntentStore;
+        private readonly ILlmTmdbCorrectionMapPersistenceService? llmTmdbCorrectionMapPersistenceService;
+        private readonly ILlmTmdbCorrectionMetadataStore? llmTmdbCorrectionMetadataStore;
 
-        public MovieProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmExternalIdResolutionService? llmExternalIdResolutionService = null)
+        public MovieProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmExternalIdResolutionService? llmExternalIdResolutionService = null, ITmdbCorrectionRefreshIntentStore? tmdbCorrectionRefreshIntentStore = null, ILlmTmdbCorrectionMapPersistenceService? llmTmdbCorrectionMapPersistenceService = null, ILlmTmdbCorrectionMetadataStore? llmTmdbCorrectionMetadataStore = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<MovieProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
             this.movieSeriesPeopleOverwriteRefreshCandidateStore = movieSeriesPeopleOverwriteRefreshCandidateStore ?? InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared;
             this.llmMetadataAssistService = llmMetadataAssistService;
             this.llmExternalIdResolutionService = llmExternalIdResolutionService;
+            this.llmTmdbIdCorrectionTriggerPolicy = new LlmTmdbIdCorrectionTriggerPolicy(loggerFactory.CreateLogger<LlmTmdbIdCorrectionTriggerPolicy>());
+            this.tmdbCorrectionRefreshIntentStore = tmdbCorrectionRefreshIntentStore ?? InMemoryTmdbCorrectionRefreshIntentStore.Shared;
+            this.llmTmdbCorrectionMapPersistenceService = llmTmdbCorrectionMapPersistenceService ?? new LlmTmdbCorrectionMapPersistenceService(LlmTmdbCorrectionMapParser.Shared);
+            this.llmTmdbCorrectionMetadataStore = llmTmdbCorrectionMetadataStore;
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -114,26 +121,47 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var originalTmdbId = tmdbId;
             var originalPublicProviderIds = CreatePublicProviderIdCopy(info.ProviderIds);
             var hasVerifiedTmdbCorrection = false;
+            var hasPersistedDoubanTmdbCorrection = TryApplyPersistedDoubanTmdbCorrection(nameof(Movie), sid, ref tmdbId, info);
             var metaSource = info.GetMetaSource(MetaSharkPlugin.ProviderId);
             if (metaSource == MetaSource.Tmdb && string.IsNullOrWhiteSpace(tmdbId))
             {
                 metaSource = MetaSource.None;
             }
 
+            if (hasPersistedDoubanTmdbCorrection)
+            {
+                metaSource = MetaSource.Tmdb;
+            }
+
             var effectiveSid = doubanAllowed ? sid : null;
 
-            var tmdbSourceIsPrimary = metaSource == MetaSource.Tmdb && (!doubanAllowed || semantic == DefaultScraperSemantic.ManualMatch);
+            var tmdbSourceIsPrimary = hasPersistedDoubanTmdbCorrection
+                || (metaSource == MetaSource.Tmdb && (!doubanAllowed || string.IsNullOrWhiteSpace(sid)));
 
             // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
             var hasTmdbMeta = !string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary);
             var hasDoubanMeta = !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid);
             var llmAssistResult = LlmScrapingAssistResult.NotTriggered("AuthoritativeMetadataPresent");
             var externalIdResolutionResult = LlmExternalIdResolutionResult.NotTriggered("AuthoritativeMetadataPresent");
-            var tmdbCorrectionResult = await this.TryResolveMovieTmdbCorrectionAsync(info, semantic, originalTmdbId, cancellationToken).ConfigureAwait(false);
+            var shouldUseTmdbMetadataAfterCorrection = false;
+            if (hasDoubanMeta || hasTmdbMeta)
+            {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "AuthoritativeMetadataPresent", nameof(Movie), semantic, false);
+            }
+
+            var tmdbCorrectionResult = hasPersistedDoubanTmdbCorrection
+                ? LlmTmdbIdCorrectionResult.NoReplacement("PersistedDoubanTmdbCorrectionApplied")
+                : await this.TryResolveMovieTmdbCorrectionAsync(info, semantic, originalTmdbId, cancellationToken).ConfigureAwait(false);
             if (tmdbCorrectionResult.ShouldReplace && !string.IsNullOrWhiteSpace(tmdbCorrectionResult.ReplacementTmdbId))
             {
                 tmdbId = tmdbCorrectionResult.ReplacementTmdbId;
+                info.SetProviderId(MetadataProvider.Tmdb, tmdbId);
                 hasVerifiedTmdbCorrection = true;
+                shouldUseTmdbMetadataAfterCorrection = tmdbCorrectionResult.ShouldUseTmdbMetadata;
+                if (shouldUseTmdbMetadataAfterCorrection)
+                {
+                    _ = await this.TryPersistLlmDoubanTmdbCorrectionMapAsync(nameof(Movie), sid, tmdbId, cancellationToken).ConfigureAwait(false);
+                }
             }
 
             this.Log("开始获取电影元数据. name: {0} fileName: {1} metaSource: {2} enableTmdb: {3}", info.Name, fileName, metaSource, Config.EnableTmdb);
@@ -143,7 +171,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var extraResult = this.HandleExtraType(info);
                 if (extraResult != null)
                 {
-                    return FinalizeMetadataResult(extraResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection);
+                    return FinalizeMetadataResult(extraResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                 }
 
                 llmAssistResult = await this.TryAssistMovieMetadataWithLlmAsync(info, semantic, cancellationToken).ConfigureAwait(false);
@@ -203,7 +231,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 effectiveSid = doubanAllowed ? sid : null;
             }
 
-            if (!tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid))
+            if (!shouldUseTmdbMetadataAfterCorrection && !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid))
             {
                 this.Log("通过 Douban 获取电影元数据. sid: \"{0}\"", effectiveSid);
                 var subject = await this.DoubanApi.GetMovieAsync(effectiveSid, cancellationToken).ConfigureAwait(false);
@@ -223,10 +251,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
                         ApplyLlmExternalProviderIdWrites(tmdbFallbackResult, externalIdResolutionResult);
                         this.ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
-                        return FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection);
+                        return FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                     }
 
-                    return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection);
+                    return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                 }
 
                 var correctionResult = await this.TryCorrectDoubanMismatchWithLlmAsync(subject, info, semantic, llmAssistResult, cancellationToken).ConfigureAwait(false);
@@ -319,29 +347,48 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 this.ApplyLlmTextCompletion(result, llmAssistResult);
 
-                return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection);
+                return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
             }
 
-            if (!string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid)))
+            if (!string.IsNullOrEmpty(tmdbId) && (shouldUseTmdbMetadataAfterCorrection || !doubanAllowed || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid)))
             {
                 var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
                 ApplyLlmExternalProviderIdWrites(tmdbResult, externalIdResolutionResult);
                 this.ApplyLlmTextCompletion(tmdbResult, llmAssistResult);
-                return FinalizeMetadataResult(tmdbResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection);
+                var finalizedResult = FinalizeMetadataResult(tmdbResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                this.TryQueueVerifiedTmdbCorrectionMetadataSnapshot(info, tmdbId, shouldUseTmdbMetadataAfterCorrection, finalizedResult.Item);
+                await this.TryPersistVerifiedTmdbCorrectionMetadataAsync(info, tmdbId, shouldUseTmdbMetadataAfterCorrection, finalizedResult.Item, cancellationToken).ConfigureAwait(false);
+                return finalizedResult;
             }
 
             this.Log("电影匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
-            return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection);
+            return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
         }
 
-        private static MetadataResult<Movie> FinalizeMetadataResult(MetadataResult<Movie> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection)
+        private static MetadataResult<Movie> FinalizeMetadataResult(MetadataResult<Movie> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
         {
             TmdbProviderIdPreservationHelper.PreserveMovieTmdbId(originalTmdbId, result.Item, hasVerifiedCorrection);
-            PreserveNonTmdbProviderIdsAfterCorrection(result.Item, originalPublicProviderIds, hasVerifiedCorrection);
+            PreserveNonTmdbProviderIdsAfterCorrection(result.Item, originalPublicProviderIds, hasVerifiedCorrection, shouldUseTmdbMetadataAfterCorrection);
             return result;
         }
 
-        private static void PreserveNonTmdbProviderIdsAfterCorrection(Movie? movie, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection)
+        private static bool TryApplyPersistedDoubanTmdbCorrection(string mediaType, string? doubanId, ref string? tmdbId, ItemLookupInfo info)
+        {
+            if (!Config.EnableLlmTmdbCorrectionPersistence
+                || string.IsNullOrWhiteSpace(doubanId)
+                || !LlmTmdbCorrectionMapParser.Shared.TryGetDoubanCorrection(Config.LlmTmdbCorrectionMap, mediaType, doubanId, out var correctedTmdbId)
+                || string.IsNullOrWhiteSpace(correctedTmdbId))
+            {
+                return false;
+            }
+
+            tmdbId = correctedTmdbId;
+            info.SetProviderId(MetadataProvider.Tmdb, correctedTmdbId);
+            info.SetProviderId(MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{correctedTmdbId}");
+            return true;
+        }
+
+        private static void PreserveNonTmdbProviderIdsAfterCorrection(Movie? movie, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
         {
             if (!hasVerifiedCorrection || movie == null || originalPublicProviderIds == null)
             {
@@ -350,7 +397,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             PreserveProviderId(movie, originalPublicProviderIds, MetadataProvider.Imdb.ToString());
             PreserveProviderId(movie, originalPublicProviderIds, MetadataProvider.Tvdb.ToString());
-            PreserveProviderId(movie, originalPublicProviderIds, DoubanProviderId);
+            if (!shouldUseTmdbMetadataAfterCorrection)
+            {
+                PreserveProviderId(movie, originalPublicProviderIds, DoubanProviderId);
+            }
         }
 
         private static void PreserveProviderId(Movie movie, IReadOnlyDictionary<string, string> originalProviderIds, string providerIdKey)
@@ -556,6 +606,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             if (this.llmExternalIdResolutionService == null || !HasCompleteLlmConfiguration(Config))
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "LlmConfigurationMissing", nameof(Movie), semantic, false);
                 return LlmExternalIdResolutionResult.NotTriggered("LlmConfigurationMissing");
             }
 
@@ -569,23 +620,30 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             });
             if (!triggerDecision.ShouldTrigger)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, triggerDecision.Reason, nameof(Movie), semantic, false);
                 return LlmExternalIdResolutionResult.NotTriggered(triggerDecision.Reason);
             }
 
-            return await this.llmExternalIdResolutionService.ResolveAsync(
-                new LlmExternalIdResolutionRequest
-                {
-                    Configuration = Config,
-                    LookupInfo = CreateSafeLlmExternalIdLookupInfo(info),
-                    MediaType = nameof(Movie),
-                    Name = info.Name,
-                    Year = info.Year,
-                    Semantic = semantic,
-                    IsImageProvider = false,
-                    HttpContext = this.HttpContextAccessor.HttpContext,
-                    LibraryRoots = Array.Empty<string?>(),
-                },
-                cancellationToken).ConfigureAwait(false);
+            var request = new LlmExternalIdResolutionRequest
+            {
+                Configuration = Config,
+                LookupInfo = CreateSafeLlmExternalIdLookupInfo(info),
+                MediaType = nameof(Movie),
+                Name = info.Name,
+                Year = info.Year,
+                Semantic = semantic,
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+                LibraryRoots = Array.Empty<string?>(),
+            };
+            var existingProviderDecision = await this.llmExternalIdResolutionService.EvaluateExistingProviderIdsAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!existingProviderDecision.ShouldTrigger)
+            {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, existingProviderDecision.Reason, nameof(Movie), semantic, false);
+                return LlmExternalIdResolutionResult.NotTriggered(existingProviderDecision.Reason);
+            }
+
+            return await this.llmExternalIdResolutionService.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<LlmTmdbIdCorrectionResult> TryResolveMovieTmdbCorrectionAsync(MovieInfo info, DefaultScraperSemantic semantic, string? originalTmdbId, CancellationToken cancellationToken)
@@ -595,19 +653,27 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 || !Config.EnableLlmTmdbIdCorrection
                 || !HasCompleteLlmConfiguration(Config))
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement("LlmTmdbIdCorrectionConfigurationMissing");
+                var reason = string.IsNullOrWhiteSpace(originalTmdbId)
+                    ? "OldTmdbMissingOrInvalid"
+                    : "LlmTmdbIdCorrectionConfigurationMissing";
+                LlmObservabilityLog.LogTmdbCorrectionRejected(this.Logger, reason, nameof(Movie), semantic, false);
+                return LlmTmdbIdCorrectionResult.NoReplacement(reason);
             }
 
-            var triggerDecision = this.llmTmdbIdCorrectionTriggerPolicy.Evaluate(new LlmAssistTriggerContext
+            var triggerContext = new LlmAssistTriggerContext
             {
                 Configuration = Config,
                 Semantic = semantic,
                 MediaType = nameof(Movie),
                 IsImageProvider = false,
                 HttpContext = this.HttpContextAccessor.HttpContext,
-            });
+                HasBridgedExplicitSearchMissingMetadataRefreshIntent = this.TryResolveBridgedSearchMissingMetadataRefreshIntent(info),
+            };
+            var hasBridgedExplicitSearchMissingMetadataRefreshIntent = triggerContext.HasBridgedExplicitSearchMissingMetadataRefreshIntent;
+            var triggerDecision = this.llmTmdbIdCorrectionTriggerPolicy.Evaluate(triggerContext);
             if (!triggerDecision.ShouldTrigger)
             {
+                LlmObservabilityLog.LogTmdbCorrectionRejected(this.Logger, triggerDecision.Reason, nameof(Movie), semantic, false);
                 return LlmTmdbIdCorrectionResult.NoReplacement(triggerDecision.Reason);
             }
 
@@ -615,6 +681,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var relativePathSamples = string.IsNullOrWhiteSpace(lookupInfo.Path)
                 ? Array.Empty<string?>()
                 : new[] { lookupInfo.Path };
+            var correctionEntryDecision = await this.TryEvaluateMovieTmdbCorrectionEntryAsync(lookupInfo, semantic, relativePathSamples, triggerDecision, cancellationToken).ConfigureAwait(false);
+            if (!correctionEntryDecision.ShouldTrigger)
+            {
+                LlmObservabilityLog.LogTmdbCorrectionRejected(this.Logger, correctionEntryDecision.Reason, nameof(Movie), semantic, false);
+                return LlmTmdbIdCorrectionResult.NoReplacement(correctionEntryDecision.Reason);
+            }
+
+            LlmObservabilityLog.LogTmdbCorrectionTriggerDecision(this.Logger, triggerContext, correctionEntryDecision);
 
             return await this.llmExternalIdResolutionService.TryResolveTmdbCorrectionAsync(
                 new LlmTmdbIdCorrectionRequest
@@ -628,16 +702,117 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     Semantic = semantic,
                     IsImageProvider = false,
                     HttpContext = this.HttpContextAccessor.HttpContext,
+                    HasBridgedExplicitSearchMissingMetadataRefreshIntent = hasBridgedExplicitSearchMissingMetadataRefreshIntent,
                     LibraryRoots = Array.Empty<string?>(),
                     RelativePathSamples = relativePathSamples,
                 },
                 cancellationToken).ConfigureAwait(false);
         }
 
+        private async Task<bool> TryPersistLlmDoubanTmdbCorrectionMapAsync(string mediaType, string? doubanId, string? tmdbId, CancellationToken cancellationToken)
+        {
+            if (!Config.EnableLlmTmdbCorrectionPersistence
+                || this.llmTmdbCorrectionMapPersistenceService == null
+                || string.IsNullOrWhiteSpace(doubanId)
+                || string.IsNullOrWhiteSpace(tmdbId))
+            {
+                return false;
+            }
+
+            var result = await this.llmTmdbCorrectionMapPersistenceService
+                .TryUpsertDoubanCorrectionAsync(mediaType, doubanId, tmdbId, cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Status is LlmTmdbCorrectionMapPersistenceStatus.Saved or LlmTmdbCorrectionMapPersistenceStatus.NoChange)
+            {
+                this.Log("已持久化 LLM Douban 到 TMDb 纠错来源. mediaType: {0} doubanId: {1} tmdbId: {2}", mediaType, doubanId, tmdbId);
+                return true;
+            }
+
+            if (result.Status == LlmTmdbCorrectionMapPersistenceStatus.Failed)
+            {
+                this.Log("LLM Douban 到 TMDb 纠错来源持久化失败. mediaType: {0} doubanId: {1} tmdbId: {2} reason: {3}", mediaType, doubanId, tmdbId, result.Reason);
+            }
+
+            return false;
+        }
+
+        private void TryQueueVerifiedTmdbCorrectionMetadataSnapshot(MovieInfo info, string? tmdbId, bool shouldUseTmdbMetadataAfterCorrection, Movie? authoritativeMetadataItem)
+        {
+            if (!shouldUseTmdbMetadataAfterCorrection
+                || this.llmTmdbCorrectionMetadataStore == null
+                || authoritativeMetadataItem == null
+                || string.IsNullOrWhiteSpace(tmdbId)
+                || string.IsNullOrWhiteSpace(info.Path))
+            {
+                return;
+            }
+
+            var itemId = Guid.Empty;
+            var existingMovie = this.LibraryManager.FindByPath(info.Path, false) as Movie;
+            if (existingMovie != null)
+            {
+                itemId = existingMovie.Id;
+            }
+            else
+            {
+                _ = TryResolveItemIdFromRequestPath(this.HttpContextAccessor.HttpContext, out itemId);
+            }
+
+            this.llmTmdbCorrectionMetadataStore.Save(new LlmTmdbCorrectionMetadataSnapshot
+            {
+                ItemId = itemId,
+                ItemPath = info.Path,
+                MediaType = nameof(Movie),
+                TmdbId = tmdbId.Trim(),
+                Name = authoritativeMetadataItem.Name,
+                OriginalTitle = authoritativeMetadataItem.OriginalTitle,
+                Overview = authoritativeMetadataItem.Overview,
+                ProductionYear = authoritativeMetadataItem.ProductionYear,
+                PremiereDate = authoritativeMetadataItem.PremiereDate,
+                ProviderIds = (CreatePublicProviderIdCopy(authoritativeMetadataItem.ProviderIds) ?? new Dictionary<string, string>())
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
+            });
+        }
+
+        private async Task<LlmAssistTriggerDecision> TryEvaluateMovieTmdbCorrectionEntryAsync(MovieInfo lookupInfo, DefaultScraperSemantic semantic, IReadOnlyCollection<string?> relativePathSamples, LlmAssistTriggerDecision triggerDecision, CancellationToken cancellationToken)
+        {
+            if (this.llmExternalIdResolutionService == null)
+            {
+                return triggerDecision;
+            }
+
+            var existingProviderDecision = await this.llmExternalIdResolutionService.EvaluateExistingProviderIdsAsync(
+                new LlmExternalIdResolutionRequest
+                {
+                    Configuration = Config,
+                    LookupInfo = lookupInfo,
+                    MediaType = nameof(Movie),
+                    Name = lookupInfo.Name,
+                    Year = lookupInfo.Year,
+                    Semantic = semantic,
+                    IsImageProvider = false,
+                    HttpContext = this.HttpContextAccessor.HttpContext,
+                    LibraryRoots = Array.Empty<string?>(),
+                    RelativePathSamples = relativePathSamples,
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            return existingProviderDecision.ShouldTrigger
+                ? existingProviderDecision
+                : triggerDecision;
+        }
+
         private async Task<LlmScrapingAssistResult> TryAssistMovieMetadataWithLlmAsync(MovieInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
         {
-            if (this.llmMetadataAssistService == null || !Config.LlmAllowTextCompletion || !HasCompleteLlmConfiguration(Config))
+            if (!Config.LlmAllowTextCompletion)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "TextCompletionDisabled", nameof(Movie), semantic, false);
+                return LlmScrapingAssistResult.NotTriggered("TextCompletionDisabled");
+            }
+
+            if (this.llmMetadataAssistService == null || !HasCompleteLlmConfiguration(Config))
+            {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "LlmConfigurationMissing", nameof(Movie), semantic, false);
                 return LlmScrapingAssistResult.NotTriggered("LlmConfigurationMissing");
             }
 
@@ -651,6 +826,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             });
             if (!triggerDecision.ShouldTrigger)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, triggerDecision.Reason, nameof(Movie), semantic, false);
                 return LlmScrapingAssistResult.NotTriggered(triggerDecision.Reason);
             }
 
@@ -793,6 +969,25 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return true;
+        }
+
+        private bool TryResolveBridgedSearchMissingMetadataRefreshIntent(MovieInfo info)
+        {
+            if (TmdbCorrectionRefreshIntentClassifier.IsExplicitSearchMissingMetadataRefresh(this.HttpContextAccessor.HttpContext))
+            {
+                return false;
+            }
+
+            var movie = !string.IsNullOrWhiteSpace(info.Path)
+                ? this.LibraryManager.FindByPath(info.Path, false) as Movie
+                : null;
+            var itemId = movie?.Id ?? Guid.Empty;
+            if (itemId == Guid.Empty)
+            {
+                _ = TryResolveItemIdFromRequestPath(this.HttpContextAccessor.HttpContext, out itemId);
+            }
+
+            return this.tmdbCorrectionRefreshIntentStore.HasPending(itemId, movie?.Path ?? info.Path);
         }
 
         private static bool ShouldRearmQueuedOverwriteCandidate(DefaultScraperSemantic semantic, HttpContext? httpContext, Guid expectedItemId)

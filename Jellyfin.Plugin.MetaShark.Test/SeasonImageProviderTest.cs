@@ -138,6 +138,101 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void DefaultScraperPolicy_CorrectionMapAutomaticImagesUseCorrectedTmdbBeforeDouban()
+        {
+            EnsurePluginInstance();
+            var configuration = new PluginConfiguration
+            {
+                DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault,
+                EnableTmdb = true,
+                EnableLlmTmdbCorrectionPersistence = true,
+                LlmTmdbCorrectionMap = "series:douban:26862290=tmdb:65942",
+            };
+            ReplacePluginConfiguration(configuration);
+
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var info = CreateSeason(libraryManagerStub, "第 4 季", 4, "season-douban", "26862290", "111", MetaSource.Douban);
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            SeedDoubanSubject(doubanApi, new DoubanSubject
+            {
+                Sid = "season-douban",
+                Name = "Re：从零开始的休息时间 第四季",
+                Category = "电视剧",
+                Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/pseason-douban.jpg",
+            });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbImageConfig(tmdbApi);
+            SeedTmdbSeasonImages(tmdbApi, 65942, 4, string.Empty, "Season 4");
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            WithLibraryManager(libraryManagerStub.Object, () =>
+            {
+                Task.Run(async () =>
+                {
+                    var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                    Assert.AreEqual(1, images.Count, "持久化 Douban->TMDb 纠错命中后，自动季图片应直接返回纠正后的 TMDb 季图。");
+                    Assert.AreEqual(tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString(), images[0].Url);
+                    Assert.IsFalse(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "持久化 Douban->TMDb 纠错命中后，自动季图片不应再返回残留 Douban 季图。");
+                }).GetAwaiter().GetResult();
+            });
+        }
+
+        [TestMethod]
+        public void DefaultScraperPolicy_CorrectionMapAutomaticImagesUseCorrectedTmdbWhenSeriesDoubanIdWasRemoved()
+        {
+            EnsurePluginInstance();
+            var configuration = new PluginConfiguration
+            {
+                DefaultScraperMode = PluginConfiguration.DefaultScraperModeDefault,
+                EnableTmdb = true,
+                EnableLlmTmdbCorrectionPersistence = true,
+                LlmTmdbCorrectionMap = "series:douban:26862290=tmdb:65942",
+            };
+            ReplacePluginConfiguration(configuration);
+
+            var httpClientFactory = new DefaultHttpClientFactory();
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var info = CreateSeason(libraryManagerStub, "第 4 季", 4, "season-douban", string.Empty, "65942", MetaSource.Tmdb);
+
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = null };
+            var doubanApi = new DoubanApi(this.loggerFactory);
+            SeedDoubanSubject(doubanApi, new DoubanSubject
+            {
+                Sid = "season-douban",
+                Name = "Re：从零开始的休息时间 第四季",
+                Category = "电视剧",
+                Img = "https://img9.doubanio.com/view/photo/s_ratio_poster/public/pseason-douban.jpg",
+            });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ConfigureTmdbImageConfig(tmdbApi);
+            SeedTmdbSeasonImages(tmdbApi, 65942, 4, string.Empty, "Season 4");
+            var omdbApi = new OmdbApi(this.loggerFactory);
+            var imdbApi = new ImdbApi(this.loggerFactory);
+
+            WithLibraryManager(libraryManagerStub.Object, () =>
+            {
+                Assert.IsNotNull(info.Series, "测试前提失败：season 必须能解析到 parent series。");
+                Assert.IsTrue(string.IsNullOrEmpty(info.Series!.GetProviderId(BaseProvider.DoubanProviderId)), "测试前提失败：parent series 应模拟纠错后已移除 DoubanID 的真实状态。");
+                Assert.AreEqual("65942", info.Series.GetProviderId(MetadataProvider.Tmdb), "测试前提失败：parent series 应保留 LLM 纠错后的 TMDb id。");
+
+                Task.Run(async () =>
+                {
+                    var provider = new SeasonImageProvider(httpClientFactory, this.loggerFactory, libraryManagerStub.Object, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi);
+                    var images = (await provider.GetImages(info, CancellationToken.None)).ToList();
+
+                    Assert.AreEqual(1, images.Count, "parent series 的 DoubanID 被纠错后处理移除时，季图片仍应保持 LLM 纠错后的 TMDb 链路。");
+                    Assert.AreEqual(tmdbApi.GetPosterUrl("/season-poster.jpg")?.ToString(), images[0].Url);
+                    Assert.IsFalse(images[0].Url?.Contains("doubanio.com", StringComparison.OrdinalIgnoreCase) == true, "parent series 已是纠错后的 TMDb id 时，自动季图片不应因为 season 残留 DoubanID 回默认 Douban 图。");
+                }).GetAwaiter().GetResult();
+            });
+        }
+
+        [TestMethod]
         public void DefaultScraperPolicy_DefaultAutomaticImagesFallbackToTmdbWhenDoubanPosterMissing()
         {
             EnsurePluginInstance();

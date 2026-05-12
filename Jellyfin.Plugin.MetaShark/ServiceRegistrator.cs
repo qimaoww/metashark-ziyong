@@ -17,6 +17,7 @@ namespace Jellyfin.Plugin.MetaShark
     using MediaBrowser.Controller.Plugins;
     using MediaBrowser.Controller.Providers;
     using MediaBrowser.Model.IO;
+    using Microsoft.AspNetCore.Hosting;
     using Microsoft.Extensions.DependencyInjection;
     using Microsoft.Extensions.Logging;
 
@@ -43,6 +44,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddHostedService<MovieSeriesPeopleRefreshStateItemUpdatedWorker>();
             serviceCollection.AddHostedService<EpisodeOverviewCleanupItemUpdatedWorker>();
             serviceCollection.AddHostedService<EpisodeOverviewCleanupDeferredRetryWorker>();
+            serviceCollection.AddHostedService<LlmTmdbCorrectionMetadataItemUpdatedWorker>();
             serviceCollection.AddSingleton<ITvImageRefillStateStore>((ctx) =>
             {
                 return new FileTvImageRefillStateStore(
@@ -68,6 +70,9 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<MetaSharkOrdinaryItemLibraryCapabilityResolver>();
             serviceCollection.AddSingleton<MetaSharkSharedEntityLibraryCapabilityResolver>();
             serviceCollection.AddSingleton<IMovieSeriesPeopleOverwriteRefreshCandidateStore>((_) => InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared);
+            serviceCollection.AddSingleton<ITmdbCorrectionRefreshIntentStore>((_) => InMemoryTmdbCorrectionRefreshIntentStore.Shared);
+            serviceCollection.AddSingleton<ILlmTmdbCorrectionMetadataStore, InMemoryLlmTmdbCorrectionMetadataStore>();
+            serviceCollection.AddSingleton<IStartupFilter, TmdbCorrectionRefreshIntentStartupFilter>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore, InMemoryEpisodeTitleBackfillCandidateStore>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPendingResolver, EpisodeTitleBackfillPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPersistence, JellyfinEpisodeTitleBackfillPersistence>();
@@ -104,6 +109,12 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<ILogger<EpisodeOverviewCleanupPostProcessService>>(),
                     ctx.GetRequiredService<MetaSharkOrdinaryItemLibraryCapabilityResolver>());
             });
+            serviceCollection.AddSingleton<ILlmTmdbCorrectionMetadataPostProcessService>((ctx) =>
+            {
+                return new LlmTmdbCorrectionMetadataPostProcessService(
+                    ctx.GetRequiredService<ILlmTmdbCorrectionMetadataStore>(),
+                    ctx.GetRequiredService<ILogger<LlmTmdbCorrectionMetadataPostProcessService>>());
+            });
             serviceCollection.AddSingleton((ctx) =>
             {
                 return new DoubanApi(ctx.GetRequiredService<ILoggerFactory>());
@@ -129,7 +140,8 @@ namespace Jellyfin.Plugin.MetaShark
                 return new LlmApi(ctx.GetRequiredService<ILoggerFactory>());
             });
             serviceCollection.AddSingleton<ILlmApi>((ctx) => ctx.GetRequiredService<LlmApi>());
-            serviceCollection.AddSingleton<LlmAssistTriggerPolicy>();
+            serviceCollection.AddSingleton<LlmAssistTriggerPolicy>((ctx) => new LlmAssistTriggerPolicy(ctx.GetRequiredService<ILogger<LlmAssistTriggerPolicy>>()));
+            serviceCollection.AddSingleton<LlmTmdbIdCorrectionTriggerPolicy>((ctx) => new LlmTmdbIdCorrectionTriggerPolicy(ctx.GetRequiredService<ILogger<LlmTmdbIdCorrectionTriggerPolicy>>()));
             serviceCollection.AddSingleton<ILlmRequestLimiter, LlmRequestLimiter>();
             serviceCollection.AddSingleton<LlmScrapeContextBuilder>();
             serviceCollection.AddSingleton<LlmSuggestionValidator>((ctx) => new LlmSuggestionValidator(ctx.GetRequiredService<ILogger<LlmSuggestionValidator>>()));
@@ -146,7 +158,8 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<LlmSuggestionValidator>(),
                     ctx.GetRequiredService<LlmScrapeMismatchDetector>(),
                     ctx.GetRequiredService<LlmMetadataMergePolicy>(),
-                    ctx.GetRequiredService<ILlmRequestLimiter>());
+                    ctx.GetRequiredService<ILlmRequestLimiter>(),
+                    ctx.GetRequiredService<ILogger<LlmMetadataAssistService>>());
             });
             serviceCollection.AddSingleton<ILlmMetadataAssistService>((ctx) => ctx.GetRequiredService<LlmMetadataAssistService>());
             serviceCollection.AddSingleton<LlmExternalIdResolutionService>((ctx) =>
@@ -157,16 +170,21 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<DoubanApi>(),
                     ctx.GetRequiredService<TvdbApi>(),
                     ctx.GetRequiredService<LlmAssistTriggerPolicy>(),
+                    ctx.GetRequiredService<LlmTmdbIdCorrectionTriggerPolicy>(),
                     ctx.GetRequiredService<LlmExternalIdCandidateValidator>(),
-                    ctx.GetRequiredService<ILlmRequestLimiter>());
+                    ctx.GetRequiredService<ILlmRequestLimiter>(),
+                    ctx.GetRequiredService<ILogger<LlmExternalIdResolutionService>>());
             });
             serviceCollection.AddSingleton<ILlmExternalIdResolutionService>((ctx) => ctx.GetRequiredService<LlmExternalIdResolutionService>());
+            serviceCollection.AddSingleton<ILlmTmdbCorrectionMapPersistenceService>((_) => new LlmTmdbCorrectionMapPersistenceService(LlmTmdbCorrectionMapParser.Shared));
+            serviceCollection.AddSingleton<ITmdbEpisodeGroupMapPersistenceService>((_) => new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared));
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
             {
                 return new LlmEpisodeGroupMappingAssistService(
                     ctx.GetRequiredService<ILlmApi>(),
                     ctx.GetRequiredService<TmdbApi>(),
                     EpisodeGroupMapParser.Shared,
+                    ctx.GetRequiredService<ITmdbEpisodeGroupMapPersistenceService>(),
                     ctx.GetRequiredService<ILlmRequestLimiter>());
             });
             serviceCollection.AddSingleton<ILlmEpisodeGroupMappingAssistService>((ctx) => ctx.GetRequiredService<LlmEpisodeGroupMappingAssistService>());

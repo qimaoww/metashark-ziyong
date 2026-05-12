@@ -49,6 +49,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var episodeGroupMappingAssist = serviceProvider.GetRequiredService<ILlmEpisodeGroupMappingAssistService>();
             var episodeGroupMappingAssistConcrete = serviceProvider.GetRequiredService<LlmEpisodeGroupMappingAssistService>();
             var episodeGroupMappingAssistSecondResolve = serviceProvider.GetRequiredService<ILlmEpisodeGroupMappingAssistService>();
+            var episodeGroupMapPersistenceService = serviceProvider.GetRequiredService<ITmdbEpisodeGroupMapPersistenceService>();
+            var episodeGroupMapPersistenceServiceSecondResolve = serviceProvider.GetRequiredService<ITmdbEpisodeGroupMapPersistenceService>();
             var externalIdValidator = serviceProvider.GetRequiredService<LlmExternalIdCandidateValidator>();
             var externalIdValidatorSecondResolve = serviceProvider.GetRequiredService<LlmExternalIdCandidateValidator>();
             var externalIdResolutionService = serviceProvider.GetRequiredService<ILlmExternalIdResolutionService>();
@@ -69,6 +71,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreSame(sanitizer, sanitizerSecondResolve);
             Assert.AreSame(episodeGroupMappingAssist, episodeGroupMappingAssistConcrete);
             Assert.AreSame(episodeGroupMappingAssist, episodeGroupMappingAssistSecondResolve);
+            Assert.AreSame(episodeGroupMapPersistenceService, episodeGroupMapPersistenceServiceSecondResolve);
+            Assert.IsInstanceOfType(episodeGroupMapPersistenceService, typeof(TmdbEpisodeGroupMapPersistenceService));
             Assert.AreSame(externalIdValidator, externalIdValidatorSecondResolve);
             Assert.AreSame(externalIdResolutionService, externalIdResolutionServiceConcrete);
             Assert.AreSame(externalIdResolutionService, externalIdResolutionServiceSecondResolve);
@@ -80,8 +84,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             using var serviceProvider = CreateServiceProvider();
 
             var hostedServices = serviceProvider.GetServices<IHostedService>().ToArray();
+            var llmHostedServices = hostedServices
+                .Where(service => service.GetType().Name.Contains("Llm", StringComparison.OrdinalIgnoreCase))
+                .Select(service => service.GetType().Name)
+                .ToArray();
 
-            Assert.IsFalse(hostedServices.Any(service => service.GetType().Name.Contains("Llm", StringComparison.OrdinalIgnoreCase)));
+            CollectionAssert.AreEquivalent(
+                new[] { nameof(LlmTmdbCorrectionMetadataItemUpdatedWorker) },
+                llmHostedServices,
+                "Llm hosted services 只应包含新的纠错后处理 worker。");
         }
 
         private static ServiceProvider CreateServiceProvider()

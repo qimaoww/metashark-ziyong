@@ -41,6 +41,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private static readonly Action<ILogger, string, Exception?> LogLlmRequestTimeout =
             LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4, nameof(LogLlmRequestTimeout)), "[MetaShark] LLM 请求超时. 诊断={Diagnostic}");
 
+        private static readonly Action<ILogger, string, int, Exception?> LogLlmRequestStarted =
+            LoggerMessage.Define<string, int>(LogLevel.Information, new EventId(5, "LlmApi.RequestStarted"), "[MetaShark] LLM 请求开始. schema={SchemaKind} attempt={Attempt}");
+
+        private static readonly Action<ILogger, string, int, Exception?> LogLlmRequestSucceeded =
+            LoggerMessage.Define<string, int>(LogLevel.Information, new EventId(6, "LlmApi.RequestSucceeded"), "[MetaShark] LLM 请求成功. schema={SchemaKind} attempt={Attempt}");
+
         private readonly ILogger<LlmApi> logger;
         private readonly HttpClient httpClient;
 
@@ -69,6 +75,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 var requestCancellationToken = timeoutSource.Token;
                 try
                 {
+                    LogLlmRequestStarted(this.logger, responseSchemaKind.ToString(), attempt + 1, null);
                     using var request = CreateRequest(configuration, prompt, responseSchemaKind);
                     using var response = await this.httpClient.SendAsync(request, requestCancellationToken).ConfigureAwait(false);
                     var responseBody = await response.Content.ReadAsStringAsync(requestCancellationToken).ConfigureAwait(false);
@@ -82,6 +89,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                             return LlmApiResult.Failed(diagnostic);
                         }
 
+                        LogLlmRequestSucceeded(this.logger, responseSchemaKind.ToString(), attempt + 1, null);
                         return parsed;
                     }
 

@@ -72,10 +72,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var seasonNumber = info.IndexNumber; // S00/Season 00特典目录会为0
             var seasonSid = info.GetProviderId(DoubanProviderId);
             var fileName = Path.GetFileName(info.Path);
-            var resolvedParentSeriesTmdbId = string.IsNullOrWhiteSpace(seriesTmdbId)
+            var parentSeriesResolution = string.IsNullOrWhiteSpace(seriesTmdbId)
                 ? await this.TryResolveParentSeriesTmdbIdWithLlmAsync(info, seasonNumber, semantic, cancellationToken).ConfigureAwait(false)
-                : null;
-            var seriesTmdbIdForSeasonQuery = string.IsNullOrWhiteSpace(seriesTmdbId) ? resolvedParentSeriesTmdbId : seriesTmdbId;
+                : ParentSeriesLlmResolutionResult.NotTriggered();
+            if (parentSeriesResolution.RequiresManualSeriesCorrection)
+            {
+                return result;
+            }
+
+            var seriesTmdbIdForSeasonQuery = string.IsNullOrWhiteSpace(seriesTmdbId) ? parentSeriesResolution.VerifiedTmdbId : seriesTmdbId;
             this.Log("开始获取季元数据. name: {0} fileName: {1} seasonNumber: {2} seriesTmdbId: {3} sid: {4} metaSource: {5} enableTmdb: {6}", info.Name, fileName, info.IndexNumber, seriesTmdbId, sid, metaSource, Config.EnableTmdb);
             if (!doubanAllowed)
             {
@@ -245,11 +250,24 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ?.Id;
         }
 
-        private async Task<string?> TryResolveParentSeriesTmdbIdWithLlmAsync(SeasonInfo info, int? seasonNumber, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
+        private static bool HasNonTmdbParentSeriesEvidence(SeasonInfo info)
+        {
+            if (info.SeriesProviderIds == null || info.SeriesProviderIds.Count == 0)
+            {
+                return false;
+            }
+
+            return info.SeriesProviderIds.Any(entry => !string.IsNullOrWhiteSpace(entry.Value)
+                && !string.Equals(entry.Key, MetadataProvider.Tmdb.ToString(), StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(entry.Key, MetaSharkPlugin.ProviderId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private async Task<ParentSeriesLlmResolutionResult> TryResolveParentSeriesTmdbIdWithLlmAsync(SeasonInfo info, int? seasonNumber, DefaultScraperSemantic semantic, CancellationToken cancellationToken)
         {
             if (this.llmExternalIdResolutionService == null || !HasCompleteLlmConfiguration(Config))
             {
-                return null;
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "LlmConfigurationMissing", nameof(Season), semantic, false);
+                return ParentSeriesLlmResolutionResult.NotTriggered();
             }
 
             var triggerDecision = this.llmAssistTriggerPolicy.Evaluate(new LlmAssistTriggerContext
@@ -262,25 +280,44 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             });
             if (!triggerDecision.ShouldTrigger)
             {
-                return null;
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, triggerDecision.Reason, nameof(Season), semantic, false);
+                return ParentSeriesLlmResolutionResult.NotTriggered();
             }
 
-            var resolutionResult = await this.llmExternalIdResolutionService.ResolveAsync(
-                new LlmExternalIdResolutionRequest
-                {
-                    Configuration = Config,
-                    LookupInfo = CreateSafeLlmExternalIdSeasonLookupInfo(info, seasonNumber),
-                    MediaType = nameof(Season),
-                    Name = info.Name,
-                    Year = info.Year,
-                    Semantic = semantic,
-                    IsImageProvider = false,
-                    HttpContext = this.HttpContextAccessor.HttpContext,
-                    LibraryRoots = Array.Empty<string?>(),
-                },
-                cancellationToken).ConfigureAwait(false);
+            var request = new LlmExternalIdResolutionRequest
+            {
+                Configuration = Config,
+                LookupInfo = CreateSafeLlmExternalIdSeasonLookupInfo(info, seasonNumber),
+                MediaType = nameof(Season),
+                Name = info.Name,
+                Year = info.Year,
+                Semantic = semantic,
+                IsImageProvider = false,
+                HttpContext = this.HttpContextAccessor.HttpContext,
+                LibraryRoots = Array.Empty<string?>(),
+            };
+            var existingProviderDecision = await this.llmExternalIdResolutionService.EvaluateExistingProviderIdsAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!existingProviderDecision.ShouldTrigger)
+            {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, existingProviderDecision.Reason, nameof(Season), semantic, false);
+                return ParentSeriesLlmResolutionResult.NotTriggered();
+            }
 
-            return GetParentSeriesTmdbIdFromVerifiedCandidates(resolutionResult);
+            var resolutionResult = await this.llmExternalIdResolutionService.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
+            var verifiedParentSeriesTmdbId = GetParentSeriesTmdbIdFromVerifiedCandidates(resolutionResult);
+            if (string.IsNullOrWhiteSpace(verifiedParentSeriesTmdbId))
+            {
+                return ParentSeriesLlmResolutionResult.NotTriggered();
+            }
+
+            if (string.Equals(existingProviderDecision.Reason, "StaleExternalIdConflict", StringComparison.Ordinal)
+                && HasNonTmdbParentSeriesEvidence(info))
+            {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "ParentSeriesCorrectionCandidate", nameof(Season), semantic, false);
+                return ParentSeriesLlmResolutionResult.NeedsManual(null);
+            }
+
+            return ParentSeriesLlmResolutionResult.Verified(verifiedParentSeriesTmdbId);
         }
 
         public async Task<string?> GuessDoubanSeasonId(string? sid, string? seriesTmdbId, int? seasonNumber, ItemLookupInfo info, CancellationToken cancellationToken)
@@ -416,8 +453,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(info);
             ArgumentNullException.ThrowIfNull(fallbackResult);
-            if (this.llmMetadataAssistService == null || !Config.LlmAllowTextCompletion)
+            if (!Config.LlmAllowTextCompletion)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "TextCompletionDisabled", nameof(Season), semantic, false);
+                return fallbackResult;
+            }
+
+            if (this.llmMetadataAssistService == null)
+            {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "LlmConfigurationMissing", nameof(Season), semantic, false);
                 return fallbackResult;
             }
 
@@ -431,6 +475,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             });
             if (!triggerDecision.ShouldTrigger)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.Logger, triggerDecision.Reason, nameof(Season), semantic, false);
                 return fallbackResult;
             }
 
@@ -556,6 +601,34 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 or >= '\u3130' and <= '\u318F'
                 or >= '\uAC00' and <= '\uD7AF'
                 or >= '\uFF66' and <= '\uFF9D';
+        }
+
+        private sealed class ParentSeriesLlmResolutionResult
+        {
+            private ParentSeriesLlmResolutionResult(string? verifiedTmdbId, bool requiresManualSeriesCorrection)
+            {
+                this.VerifiedTmdbId = verifiedTmdbId;
+                this.RequiresManualSeriesCorrection = requiresManualSeriesCorrection;
+            }
+
+            public string? VerifiedTmdbId { get; }
+
+            public bool RequiresManualSeriesCorrection { get; }
+
+            public static ParentSeriesLlmResolutionResult NotTriggered()
+            {
+                return new ParentSeriesLlmResolutionResult(null, false);
+            }
+
+            public static ParentSeriesLlmResolutionResult Verified(string tmdbId)
+            {
+                return new ParentSeriesLlmResolutionResult(tmdbId, false);
+            }
+
+            public static ParentSeriesLlmResolutionResult NeedsManual(string? tmdbId)
+            {
+                return new ParentSeriesLlmResolutionResult(tmdbId, true);
+            }
         }
     }
 }

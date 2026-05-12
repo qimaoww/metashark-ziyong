@@ -46,7 +46,11 @@
     />
   </Target>
 
-  <Target Name="PruneHostSharedAssembliesFromBuildOutput" AfterTargets="ILRepacker" Condition="'$(Configuration)'=='Release' AND '$(DoILRepack)'=='true'">
+  <Target Name="PruneHostSharedAssembliesFromNonRepackedBuildOutput" AfterTargets="Build" Condition="'$(Configuration)'!='Release' OR '$(DoILRepack)'!='true'">
+    <Delete Files="@(MetaSharkHostSharedAssemblyNames->'$(OutputPath)%(Identity)')" />
+  </Target>
+
+  <Target Name="PruneHostSharedAssembliesFromRepackedBuildOutput" AfterTargets="ILRepacker" Condition="'$(Configuration)'=='Release' AND '$(DoILRepack)'=='true'">
     <Delete Files="@(MetaSharkHostSharedAssemblyNames->'$(OutputPath)%(Identity)')" />
   </Target>
 

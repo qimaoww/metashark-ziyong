@@ -5,8 +5,11 @@ using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Providers.Llm;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Controller.Providers;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -35,6 +38,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
         public void Evaluate_AllowsExplicitSearchMissingRefresh()
         {
             var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Episode", CreateRefreshContext("?metadataRefreshMode=FullRefresh&replaceAllMetadata=false"));
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            Assert.AreEqual("ExplicitSearchMissingMetadataRefresh", decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_AllowsExplicitSearchMissingRefreshWithUpperCaseReplaceAllMetadataKey()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Movie", CreateRefreshContext("?metadataRefreshMode=FullRefresh&ReplaceAllMetadata=false"));
 
             Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
             Assert.AreEqual("ExplicitSearchMissingMetadataRefresh", decision.Reason);
@@ -96,6 +108,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("ImplicitRefreshRejected", decision.Reason);
         }
 
+        [TestMethod]
+        public void Evaluate_RejectsManualMatchWithoutManualApplyRoute()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.ManualMatch, "Movie", CreateRefreshContext("?metadataRefreshMode=RefreshMetadata&replaceAllMetadata=false"));
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("ImplicitRefreshRejected", decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_RejectsSearchMissingWithoutExplicitFalseReplaceAllMetadata()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Movie", CreateRefreshContext("?metadataRefreshMode=FullRefresh"));
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("ImplicitRefreshRejected", decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_RejectsFullRefreshThatIsNotSearchMissingOrOverwrite()
+        {
+            var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Movie", CreateRefreshContext("?metadataRefreshMode=FullRefresh&replaceAllMetadata=unexpected"));
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("ImplicitRefreshRejected", decision.Reason);
+        }
+
         [DataTestMethod]
         [DataRow("Person")]
         [DataRow("BoxSet")]
@@ -126,6 +165,84 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsFalse(decision.ShouldTrigger);
             Assert.AreEqual("LlmConfigurationMissing", decision.Reason);
+        }
+
+        [DataTestMethod]
+        [DataRow("TextCompletionDisabled")]
+        [DataRow("ImplicitRefreshRejected")]
+        [DataRow("AutomaticRefreshRejected")]
+        [DataRow("LlmConfigurationMissing")]
+        public void Observability_ShouldLogRejectedReasonCodes(string reasonCode)
+        {
+            var loggerStub = new Mock<ILogger<LlmMetadataAssistService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            LlmObservabilityLog.LogLlmAssistRejected(loggerStub.Object, reasonCode, "Movie", DefaultScraperSemantic.UserRefresh, false);
+
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ReasonCode"] = reasonCode,
+                    ["Accepted"] = false,
+                    ["MediaType"] = "Movie",
+                    ["Semantic"] = DefaultScraperSemantic.UserRefresh.ToString(),
+                    ["IsImageProvider"] = false,
+                },
+                originalFormatContains: "[MetaShark] LLM 触发已评估. reason={ReasonCode} accepted={Accepted} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}",
+                messageContains: ["LLM 触发已评估"]);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ReasonCode"] = reasonCode,
+                    ["MediaType"] = "Movie",
+                    ["Semantic"] = DefaultScraperSemantic.UserRefresh.ToString(),
+                    ["IsImageProvider"] = false,
+                },
+                originalFormatContains: "[MetaShark] LLM 触发已拒绝. reason={ReasonCode} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}",
+                messageContains: ["LLM 触发已拒绝"]);
+        }
+
+        [TestMethod]
+        public void Evaluate_WhenLoggerProvided_ShouldLogAcceptedDecision()
+        {
+            var loggerStub = new Mock<ILogger<LlmAssistTriggerPolicy>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var policy = new LlmAssistTriggerPolicy(loggerStub.Object);
+
+            var decision = policy.Evaluate(CreateContext(DefaultScraperSemantic.ManualMatch, "Movie", CreateManualApplyContext()));
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ReasonCode"] = "ManualMatch",
+                    ["Accepted"] = true,
+                    ["MediaType"] = "Movie",
+                    ["Semantic"] = DefaultScraperSemantic.ManualMatch.ToString(),
+                    ["IsImageProvider"] = false,
+                },
+                originalFormatContains: "[MetaShark] LLM 触发已评估. reason={ReasonCode} accepted={Accepted} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}",
+                messageContains: ["LLM 触发已评估"]);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["ReasonCode"] = "ManualMatch",
+                    ["MediaType"] = "Movie",
+                },
+                originalFormatContains: "[MetaShark] LLM 触发已接受. reason={ReasonCode} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}",
+                messageContains: ["LLM 触发已接受"]);
         }
 
         [TestMethod]

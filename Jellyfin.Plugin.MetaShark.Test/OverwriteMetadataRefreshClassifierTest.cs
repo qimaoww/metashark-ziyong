@@ -1,7 +1,13 @@
 using System;
 using System.Reflection;
+using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
+using Jellyfin.Plugin.MetaShark.Providers;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Providers;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -22,6 +28,24 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             var context = CreateHttpContext(method, path, queryString);
             var result = InvokeIsOverwriteMetadataRefresh(context, Guid.Parse(expectedItemId));
+
+            Assert.AreEqual(expected, result);
+        }
+
+
+        [DataTestMethod]
+        [DataRow("POST", "/Items/RemoteSearch/Apply/11111111-1111-1111-1111-111111111111", "", true, DefaultScraperSemantic.ManualMatch)]
+        [DataRow("POST", "/Items/11111111-1111-1111-1111-111111111111/Refresh", "?metadataRefreshMode=FullRefresh&replaceAllMetadata=true", true, DefaultScraperSemantic.OverwriteRefresh)]
+        [DataRow("POST", "/Items/11111111-1111-1111-1111-111111111111/Refresh", "?metadataRefreshMode=RefreshMetadata&replaceAllMetadata=false", true, DefaultScraperSemantic.AutomaticRefresh)]
+        [DataRow("POST", "/Items/11111111-1111-1111-1111-111111111111/Refresh", "", false, DefaultScraperSemantic.UserRefresh)]
+        [DataRow("POST", "/Items/11111111-1111-1111-1111-111111111111/Refresh", "?metadataRefreshMode=RefreshMetadata&replaceAllMetadata=false", false, DefaultScraperSemantic.UserRefresh)]
+        public void ResolveMetadataSemantic_HonorsExplicitRouteEvidenceBeforeAutomation(string method, string path, string queryString, bool isAutomated, DefaultScraperSemantic expected)
+        {
+            var context = CreateHttpContext(method, path, queryString);
+            var provider = new BaseProviderProbe(new HttpContextAccessor { HttpContext = context });
+            var info = new ItemLookupInfo { IsAutomated = isAutomated };
+
+            var result = provider.InvokeResolveMetadataSemantic(info);
 
             Assert.AreEqual(expected, result);
         }
@@ -60,5 +84,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
             context.Request.QueryString = new QueryString(queryString);
             return context;
         }
+
+
+        private sealed class BaseProviderProbe : BaseProvider
+        {
+            public BaseProviderProbe(IHttpContextAccessor httpContextAccessor)
+                : base(null!, NullLogger.Instance, new Mock<ILibraryManager>().Object, httpContextAccessor, new DoubanApi(NullLoggerFactory.Instance), new TmdbApi(NullLoggerFactory.Instance), new OmdbApi(NullLoggerFactory.Instance), new ImdbApi(NullLoggerFactory.Instance))
+            {
+            }
+
+            public DefaultScraperSemantic InvokeResolveMetadataSemantic(ItemLookupInfo info)
+            {
+                return this.ResolveMetadataSemantic(info);
+            }
+        }
+
     }
 }

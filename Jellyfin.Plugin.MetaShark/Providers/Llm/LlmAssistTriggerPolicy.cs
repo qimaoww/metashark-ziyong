@@ -8,60 +8,84 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
     using System.Diagnostics.CodeAnalysis;
     using Jellyfin.Plugin.MetaShark.Configuration;
     using Microsoft.AspNetCore.Http;
+    using Microsoft.Extensions.Logging;
 
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Policy is intentionally injectable for provider composition tests.")]
+    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before instance members", Justification = "Policy flow is kept ahead of helpers for readability.")]
     public sealed class LlmAssistTriggerPolicy
     {
+        private readonly ILogger<LlmAssistTriggerPolicy>? logger;
+
+        public LlmAssistTriggerPolicy(ILogger<LlmAssistTriggerPolicy>? logger = null)
+        {
+            this.logger = logger;
+        }
+
         public LlmAssistTriggerDecision Evaluate(LlmAssistTriggerContext context)
         {
             ArgumentNullException.ThrowIfNull(context);
 
             if (!HasCompleteConfiguration(context.Configuration))
             {
-                return LlmAssistTriggerDecision.Rejected("LlmConfigurationMissing");
+                return this.Rejected(context, "LlmConfigurationMissing");
             }
 
             if (!IsSupportedMediaType(context.MediaType))
             {
-                return LlmAssistTriggerDecision.Rejected("UnsupportedMediaType");
+                return this.Rejected(context, "UnsupportedMediaType");
             }
 
             if (context.IsImageProvider)
             {
-                return LlmAssistTriggerDecision.Rejected("ImageProviderRejected");
+                return this.Rejected(context, "ImageProviderRejected");
             }
 
             if (context.Semantic == DefaultScraperSemantic.AutomaticRefresh)
             {
-                return LlmAssistTriggerDecision.Rejected("AutomaticRefreshRejected");
+                return this.Rejected(context, "AutomaticRefreshRejected");
             }
 
             if (context.Semantic == DefaultScraperSemantic.OverwriteRefresh || IsOverwriteRefresh(context.HttpContext))
             {
-                return LlmAssistTriggerDecision.Rejected("OverwriteRefreshRejected");
+                return this.Rejected(context, "OverwriteRefreshRejected");
             }
 
-            if (context.Semantic == DefaultScraperSemantic.ManualMatch)
+            if (IsExplicitManualMatch(context.HttpContext, context.Semantic))
             {
-                return LlmAssistTriggerDecision.Allowed("ManualMatch");
+                return this.Allowed(context, "ManualMatch");
             }
 
-            if (IsExplicitSearchMissingMetadataRefresh(context.HttpContext))
+            if (context.Semantic == DefaultScraperSemantic.UserRefresh
+                && IsExplicitSearchMissingMetadataRefresh(context.HttpContext))
             {
-                return LlmAssistTriggerDecision.Allowed("ExplicitSearchMissingMetadataRefresh");
+                return this.Allowed(context, "ExplicitSearchMissingMetadataRefresh");
             }
 
             if (IsExplicitUserRefresh(context.HttpContext, context.Semantic))
             {
-                return LlmAssistTriggerDecision.Allowed("ExplicitUserRefresh");
+                return this.Allowed(context, "ExplicitUserRefresh");
             }
 
-            return LlmAssistTriggerDecision.Rejected("ImplicitRefreshRejected");
+            return this.Rejected(context, "ImplicitRefreshRejected");
         }
 
         public bool ShouldEvaluateDeterministicMismatch(LlmAssistTriggerContext context)
         {
             return this.Evaluate(context).ShouldTrigger;
+        }
+
+        private LlmAssistTriggerDecision Allowed(LlmAssistTriggerContext context, string reason)
+        {
+            var decision = LlmAssistTriggerDecision.Allowed(reason);
+            LlmObservabilityLog.LogLlmAssistTriggerDecision(this.logger, context, decision);
+            return decision;
+        }
+
+        private LlmAssistTriggerDecision Rejected(LlmAssistTriggerContext context, string reason)
+        {
+            var decision = LlmAssistTriggerDecision.Rejected(reason);
+            LlmObservabilityLog.LogLlmAssistTriggerDecision(this.logger, context, decision);
+            return decision;
         }
 
         private static bool HasCompleteConfiguration(PluginConfiguration? configuration)
@@ -81,6 +105,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 || string.Equals(mediaType, "Episode", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static bool IsExplicitManualMatch(HttpContext? httpContext, DefaultScraperSemantic semantic)
+        {
+            var request = httpContext?.Request;
+            return semantic == DefaultScraperSemantic.ManualMatch
+                && request != null
+                && HttpMethods.IsPost(request.Method)
+                && IsManualMatchRoute(request.Path.Value);
+        }
+
         private static bool IsExplicitUserRefresh(HttpContext? httpContext, DefaultScraperSemantic semantic)
         {
             var request = httpContext?.Request;
@@ -89,6 +122,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 && HttpMethods.IsPost(request.Method)
                 && IsRefreshRoute(request.Path.Value)
                 && !IsExplicitSearchMissingMetadataRefresh(httpContext)
+                && !HasQueryValue(request, "metadataRefreshMode", "FullRefresh")
                 && HasAnyQueryKey(request, "metadataRefreshMode", "replaceAllMetadata", "ReplaceAllMetadata");
         }
 
@@ -101,7 +135,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             return HasQueryValue(request, "metadataRefreshMode", "FullRefresh")
-                && HasQueryValue(request, "replaceAllMetadata", "false");
+                && HasQueryValue(request, "false", "replaceAllMetadata", "ReplaceAllMetadata");
         }
 
         private static bool IsOverwriteRefresh(HttpContext? httpContext)
@@ -111,6 +145,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 && HttpMethods.IsPost(request.Method)
                 && IsRefreshRoute(request.Path.Value)
                 && HasTrueQueryValue(request, "replaceAllMetadata", "ReplaceAllMetadata");
+        }
+
+        private static bool IsManualMatchRoute(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            return segments.Length >= 3
+                && string.Equals(segments[0], "Items", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(segments[1], "RemoteSearch", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(segments[2], "Apply", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsRefreshRoute(string? path)
@@ -150,6 +198,19 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             foreach (var value in values)
             {
                 if (string.Equals(value?.Trim(), expectedValue, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasQueryValue(HttpRequest request, string expectedValue, params string[] keys)
+        {
+            foreach (var key in keys)
+            {
+                if (HasQueryValue(request, key, expectedValue))
                 {
                     return true;
                 }

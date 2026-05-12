@@ -13,13 +13,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Configuration;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Providers;
     using MediaBrowser.Model.Entities;
+    using Microsoft.Extensions.Logging;
     using TMDbLib.Objects.Find;
     using TMDbLib.Objects.TvShows;
 
+    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1201:Elements should appear in the correct order", Justification = "Internal helper types stay near the logic they support for this orchestration-heavy service.")]
     [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Keep orchestration flow before helper methods.")]
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Verification methods are intentionally instance methods for testable service composition.")]
     public sealed class LlmExternalIdResolutionService : ILlmExternalIdResolutionService
@@ -41,6 +44,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private readonly LlmTmdbIdCorrectionTriggerPolicy tmdbCorrectionTriggerPolicy;
         private readonly LlmExternalIdCandidateValidator candidateValidator;
         private readonly ILlmRequestLimiter requestLimiter;
+        private readonly LlmScrapeContextBuilder scrapeContextBuilder = new LlmScrapeContextBuilder();
+        private readonly LlmScrapeMismatchDetector mismatchDetector = new LlmScrapeMismatchDetector();
+        private readonly ILogger<LlmExternalIdResolutionService>? logger;
 
         [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Compatibility constructor owns a process-local fallback limiter for test-only direct construction.")]
         public LlmExternalIdResolutionService(ILlmApi llmApi, TmdbApi tmdbApi, DoubanApi doubanApi, TvdbApi tvdbApi)
@@ -68,7 +74,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             LlmAssistTriggerPolicy triggerPolicy,
             LlmTmdbIdCorrectionTriggerPolicy tmdbCorrectionTriggerPolicy,
             LlmExternalIdCandidateValidator candidateValidator,
-            ILlmRequestLimiter? requestLimiter = null)
+            ILlmRequestLimiter? requestLimiter = null,
+            ILogger<LlmExternalIdResolutionService>? logger = null)
         {
             this.llmApi = llmApi ?? throw new ArgumentNullException(nameof(llmApi));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
@@ -78,6 +85,42 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             this.tmdbCorrectionTriggerPolicy = tmdbCorrectionTriggerPolicy ?? throw new ArgumentNullException(nameof(tmdbCorrectionTriggerPolicy));
             this.candidateValidator = candidateValidator ?? throw new ArgumentNullException(nameof(candidateValidator));
             this.requestLimiter = requestLimiter ?? new LlmRequestLimiter();
+            this.logger = logger;
+        }
+
+        public async Task<LlmAssistTriggerDecision> EvaluateExistingProviderIdsAsync(LlmExternalIdResolutionRequest request, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            if (request.LookupInfo == null)
+            {
+                return LlmAssistTriggerDecision.Allowed("LookupInfoMissing");
+            }
+
+            var mediaType = NormalizeMediaType(request.MediaType ?? GetMediaTypeFromLookupInfo(request.LookupInfo));
+            var existingProviderIds = EnumerateExistingProviderIds(request.LookupInfo, mediaType).ToArray();
+            if (existingProviderIds.Length == 0)
+            {
+                return LlmAssistTriggerDecision.Allowed("NoExistingProviderIds");
+            }
+
+            var allowRelativePathContext = request.Configuration?.LlmAllowRelativePathContext ?? true;
+            var localContext = this.scrapeContextBuilder.Build(request.LookupInfo, mediaType, request.LibraryRoots, allowRelativePathContext);
+            var externalIdPromptContext = LlmPromptContextBuilder.BuildExternalIdPromptContext(request.LookupInfo, mediaType, request.LibraryRoots, request.RelativePathSamples, allowRelativePathContext);
+            if (externalIdPromptContext.SafeRelativePathSamples.Count > 0)
+            {
+                localContext.ParentFolderName = string.Join(" ", externalIdPromptContext.SafeRelativePathSamples);
+            }
+
+            foreach (var existingProviderId in existingProviderIds)
+            {
+                var assessment = await this.AssessExistingProviderIdAsync(existingProviderId, request.LookupInfo, mediaType, localContext, cancellationToken).ConfigureAwait(false);
+                if (assessment == ExistingProviderIdAssessment.Conflict)
+                {
+                    return LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict");
+                }
+            }
+
+            return LlmAssistTriggerDecision.Rejected("ExistingProviderIdsConsistent");
         }
 
         [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "LLM external ID resolution must fail closed and preserve ProviderIds.")]
@@ -86,6 +129,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             ArgumentNullException.ThrowIfNull(request);
             if (request.LookupInfo == null)
             {
+                LlmObservabilityLog.LogLlmAssistRejected(this.logger, "LookupInfoMissing", request.MediaType, request.Semantic, request.IsImageProvider);
                 return LlmExternalIdResolutionResult.NotTriggered("LookupInfoMissing");
             }
 
@@ -97,6 +141,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 MediaType = mediaType,
                 IsImageProvider = request.IsImageProvider,
                 HttpContext = request.HttpContext,
+                HasBridgedExplicitSearchMissingMetadataRefreshIntent = request.HasBridgedExplicitSearchMissingMetadataRefreshIntent,
             });
             if (!triggerDecision.ShouldTrigger)
             {
@@ -111,6 +156,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 using var lease = await this.requestLimiter.TryAcquireAsync(cancellationToken).ConfigureAwait(false);
                 if (lease == null)
                 {
+                    LlmObservabilityLog.LogLlmAssistRejected(this.logger, "LlmRequestLimiterBusy", mediaType, request.Semantic, request.IsImageProvider);
                     return LlmExternalIdResolutionResult.Skipped("LlmRequestLimiterBusy");
                 }
 
@@ -206,7 +252,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             ArgumentNullException.ThrowIfNull(request);
             if (request.LookupInfo == null)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement("LookupInfoMissing");
+                return this.RejectTmdbCorrection("LookupInfoMissing", request.MediaType, request.Semantic, request.IsImageProvider);
             }
 
             var mediaType = NormalizeMediaType(request.MediaType ?? GetMediaTypeFromLookupInfo(request.LookupInfo));
@@ -217,15 +263,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 MediaType = mediaType,
                 IsImageProvider = request.IsImageProvider,
                 HttpContext = request.HttpContext,
+                HasBridgedExplicitSearchMissingMetadataRefreshIntent = request.HasBridgedExplicitSearchMissingMetadataRefreshIntent,
             });
             if (!triggerDecision.ShouldTrigger)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement(triggerDecision.Reason);
+                return this.RejectTmdbCorrection(triggerDecision.Reason, mediaType, request.Semantic, request.IsImageProvider);
             }
 
             if (!IsTmdbCorrectionSupportedMediaType(mediaType))
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement("UnsupportedMediaType");
+                return this.RejectTmdbCorrection("UnsupportedMediaType", mediaType, request.Semantic, request.IsImageProvider);
             }
 
             var providerIds = GetProviderIds(request.LookupInfo);
@@ -237,7 +284,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
             if (!TryParsePositiveInt(oldTmdbId, out var oldTmdbNumericId))
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement("OldTmdbMissingOrInvalid");
+                return this.RejectTmdbCorrection("OldTmdbMissingOrInvalid", mediaType, request.Semantic, request.IsImageProvider);
             }
 
             var allowRelativePathContext = request.Configuration?.LlmAllowRelativePathContext ?? true;
@@ -248,7 +295,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 using var lease = await this.requestLimiter.TryAcquireAsync(cancellationToken).ConfigureAwait(false);
                 if (lease == null)
                 {
-                    return LlmTmdbIdCorrectionResult.NoReplacement("LlmRequestLimiterBusy");
+                    return this.RejectTmdbCorrection("LlmRequestLimiterBusy", mediaType, request.Semantic, request.IsImageProvider);
                 }
 
                 apiResult = await this.llmApi.CompleteAsync(prompt, LlmResponseSchemaKind.ExternalIdCandidates, cancellationToken).ConfigureAwait(false);
@@ -259,18 +306,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
             catch (Exception ex)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement($"LLM TMDb correction request failed: {ex.GetType().Name}");
+                return this.RejectTmdbCorrection($"LLM TMDb correction request failed: {ex.GetType().Name}", mediaType, request.Semantic, request.IsImageProvider);
             }
 
             if (!apiResult.Success || string.IsNullOrWhiteSpace(apiResult.ContentJson))
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement(apiResult.Diagnostic);
+                return this.RejectTmdbCorrection(apiResult.Diagnostic, mediaType, request.Semantic, request.IsImageProvider);
             }
 
             var validationResult = this.candidateValidator.ParseAndValidateResponse(apiResult.ContentJson, request.Configuration?.LlmConfidenceThreshold ?? new PluginConfiguration().LlmConfidenceThreshold);
             if (!validationResult.Success)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement(validationResult.Diagnostic);
+                return this.RejectTmdbCorrection(validationResult.Diagnostic, mediaType, request.Semantic, request.IsImageProvider);
             }
 
             var tmdbCandidates = validationResult.Candidates
@@ -279,24 +326,19 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 .ToArray();
             if (tmdbCandidates.Length == 0)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement(JoinDiagnostics(validationResult.Diagnostics, "LLM TMDb correction response contains no TMDb candidate."));
+                return this.RejectTmdbCorrection(JoinDiagnostics(validationResult.Diagnostics, "LLM TMDb correction response contains no TMDb candidate."), mediaType, request.Semantic, request.IsImageProvider);
             }
 
             var candidateIds = tmdbCandidates.Select(candidate => candidate.Id).Distinct(StringComparer.Ordinal).ToArray();
             if (candidateIds.Length > 1)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement("AmbiguousCandidates: LLM TMDb correction candidates conflict.");
+                return this.RejectTmdbCorrection("AmbiguousCandidates: LLM TMDb correction candidates conflict.", mediaType, request.Semantic, request.IsImageProvider);
             }
 
             var candidate = tmdbCandidates[0];
             if (!TryParsePositiveInt(candidate.Id, out var candidateTmdbId))
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement("CandidateTmdbInvalid");
-            }
-
-            if (candidateTmdbId == oldTmdbNumericId)
-            {
-                return LlmTmdbIdCorrectionResult.NoReplacement("CandidateMatchesOldTmdb");
+                return this.RejectTmdbCorrection("CandidateTmdbInvalid", mediaType, request.Semantic, request.IsImageProvider);
             }
 
             LlmExternalIdVerificationResult newTmdbVerified;
@@ -310,12 +352,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
             catch (Exception ex)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement($"TMDb correction candidate verification failed: {ex.GetType().Name}");
+                return this.RejectTmdbCorrection($"TMDb correction candidate verification failed: {ex.GetType().Name}", mediaType, request.Semantic, request.IsImageProvider);
             }
 
             if (!newTmdbVerified.Success)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement(newTmdbVerified.Diagnostic);
+                return this.RejectTmdbCorrection(newTmdbVerified.Diagnostic, mediaType, request.Semantic, request.IsImageProvider);
+            }
+
+            if (candidateTmdbId == oldTmdbNumericId)
+            {
+                LlmObservabilityLog.LogTmdbCorrectionApplied(this.logger, "ExistingTmdbVerified", mediaType);
+                return LlmTmdbIdCorrectionResult.VerifiedExistingTmdb(candidate.Id!, "ExistingTmdbVerified");
             }
 
             TmdbCorrectionEvidenceResult strongEvidence;
@@ -329,12 +377,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
             catch (Exception ex)
             {
-                return LlmTmdbIdCorrectionResult.NoReplacement($"TMDb correction evidence verification failed: {ex.GetType().Name}");
+                return this.RejectTmdbCorrection($"TMDb correction evidence verification failed: {ex.GetType().Name}", mediaType, request.Semantic, request.IsImageProvider);
             }
 
-            return strongEvidence.Success
-                ? LlmTmdbIdCorrectionResult.Verified(candidate.Id!, strongEvidence.Diagnostic)
-                : LlmTmdbIdCorrectionResult.NoReplacement(strongEvidence.Diagnostic);
+            if (strongEvidence.Success)
+            {
+                LlmObservabilityLog.LogTmdbCorrectionApplied(this.logger, NormalizePublicTmdbCorrectionReason(strongEvidence.Diagnostic), mediaType);
+                return LlmTmdbIdCorrectionResult.Verified(candidate.Id!, strongEvidence.Diagnostic);
+            }
+
+            LlmObservabilityLog.LogTmdbCorrectionRejected(this.logger, NormalizePublicTmdbCorrectionReason(strongEvidence.Diagnostic), mediaType, request.Semantic, request.IsImageProvider);
+            return LlmTmdbIdCorrectionResult.NoReplacement(strongEvidence.Diagnostic);
         }
 
         public static LlmExternalIdProviderIdApplyResult ApplyMissingProviderIds(IDictionary<string, string> providerIds, IEnumerable<LlmExternalIdProviderIdWrite> writes)
@@ -359,6 +412,52 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             return new LlmExternalIdProviderIdApplyResult(applied, skipped, diagnostics);
+        }
+
+        private LlmTmdbIdCorrectionResult RejectTmdbCorrection(string diagnostic, string? mediaType, DefaultScraperSemantic semantic, bool isImageProvider)
+        {
+            LlmObservabilityLog.LogTmdbCorrectionRejected(this.logger, NormalizePublicTmdbCorrectionReason(diagnostic), mediaType, semantic, isImageProvider);
+            return LlmTmdbIdCorrectionResult.NoReplacement(diagnostic);
+        }
+
+        private static string NormalizePublicTmdbCorrectionReason(string? diagnostic)
+        {
+            if (string.IsNullOrWhiteSpace(diagnostic))
+            {
+                return "Unknown";
+            }
+
+            var trimmed = diagnostic.Trim();
+            if (trimmed.Contains("AmbiguousCandidates", StringComparison.Ordinal))
+            {
+                return "AmbiguousCandidates";
+            }
+
+            if (trimmed.Contains("candidate verification failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return "CandidateVerificationFailed";
+            }
+
+            if (trimmed.Contains("TMDb movie detail was not found", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("TMDb series detail was not found", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("TMDb parent series detail was not found", StringComparison.OrdinalIgnoreCase))
+            {
+                return "CandidateVerificationFailed";
+            }
+
+            if (trimmed.Contains("evidence verification failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return "EvidenceVerificationFailed";
+            }
+
+            if (trimmed.Contains("no TMDb candidate", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("no candidates", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("below threshold", StringComparison.OrdinalIgnoreCase))
+            {
+                return "NoTmdbCandidate";
+            }
+
+            return LlmObservabilityLog.NormalizeReasonCode(trimmed);
         }
 
         private static string GetMediaTypeFromLookupInfo(ItemLookupInfo lookupInfo)
@@ -399,6 +498,61 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         {
             return string.Equals(mediaType, MovieMediaType, StringComparison.Ordinal)
                 || string.Equals(mediaType, SeriesMediaType, StringComparison.Ordinal);
+        }
+
+        private static IEnumerable<ExistingProviderIdReference> EnumerateExistingProviderIds(ItemLookupInfo lookupInfo, string targetMediaType)
+        {
+            foreach (var providerId in EnumerateExistingProviderIdsFromDictionary(lookupInfo.ProviderIds, targetMediaType))
+            {
+                yield return providerId;
+            }
+
+            if (lookupInfo is EpisodeInfo episodeInfo)
+            {
+                foreach (var providerId in EnumerateExistingProviderIdsFromDictionary(episodeInfo.SeriesProviderIds, SeriesMediaType))
+                {
+                    yield return providerId;
+                }
+            }
+        }
+
+        private static IEnumerable<ExistingProviderIdReference> EnumerateExistingProviderIdsFromDictionary(Dictionary<string, string>? providerIds, string semanticMediaType)
+        {
+            if (providerIds == null)
+            {
+                yield break;
+            }
+
+            foreach (var providerId in providerIds)
+            {
+                if (string.IsNullOrWhiteSpace(providerId.Value))
+                {
+                    continue;
+                }
+
+                if (string.Equals(providerId.Key, MetadataProvider.Tmdb.ToString(), StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return new ExistingProviderIdReference(TmdbProvider, providerId.Value, semanticMediaType);
+                    continue;
+                }
+
+                if (string.Equals(providerId.Key, MetadataProvider.Imdb.ToString(), StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return new ExistingProviderIdReference(ImdbProvider, providerId.Value, semanticMediaType);
+                    continue;
+                }
+
+                if (string.Equals(providerId.Key, MetadataProvider.Tvdb.ToString(), StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return new ExistingProviderIdReference(TvdbProvider, providerId.Value, semanticMediaType);
+                    continue;
+                }
+
+                if (string.Equals(providerId.Key, BaseProvider.DoubanProviderId, StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return new ExistingProviderIdReference(DoubanProvider, providerId.Value, semanticMediaType);
+                }
+            }
         }
 
         private static string? NormalizeProviderIdValue(string? value)
@@ -505,6 +659,171 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         {
             var joined = string.Join(" ", diagnostics.Where(diagnostic => !string.IsNullOrWhiteSpace(diagnostic)).Distinct(StringComparer.Ordinal));
             return string.IsNullOrWhiteSpace(joined) ? fallback : joined;
+        }
+
+        private async Task<ExistingProviderIdAssessment> AssessExistingProviderIdAsync(ExistingProviderIdReference existingProviderId, ItemLookupInfo lookupInfo, string targetMediaType, LlmPromptContext localContext, CancellationToken cancellationToken)
+        {
+            if (string.Equals(existingProviderId.Provider, TmdbProvider, StringComparison.Ordinal))
+            {
+                return await this.AssessExistingTmdbProviderIdAsync(existingProviderId, lookupInfo, targetMediaType, localContext, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (string.Equals(existingProviderId.Provider, ImdbProvider, StringComparison.Ordinal))
+            {
+                return await this.AssessExistingMappedProviderIdAsync(existingProviderId, FindExternalSource.Imdb, localContext, lookupInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (string.Equals(existingProviderId.Provider, TvdbProvider, StringComparison.Ordinal))
+            {
+                if (string.Equals(existingProviderId.MediaType, EpisodeMediaType, StringComparison.Ordinal))
+                {
+                    var verification = await this.VerifyCandidateAsync(CreateCandidate(TvdbProvider, existingProviderId.Id, EpisodeMediaType), lookupInfo, targetMediaType, cancellationToken).ConfigureAwait(false);
+                    return verification.Success ? ExistingProviderIdAssessment.Consistent : ExistingProviderIdAssessment.Conflict;
+                }
+
+                return await this.AssessExistingMappedProviderIdAsync(existingProviderId, FindExternalSource.TvDb, localContext, lookupInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (string.Equals(existingProviderId.Provider, DoubanProvider, StringComparison.Ordinal))
+            {
+                return await this.AssessExistingDoubanProviderIdAsync(existingProviderId, localContext, cancellationToken).ConfigureAwait(false);
+            }
+
+            return ExistingProviderIdAssessment.Inconclusive;
+        }
+
+        private async Task<ExistingProviderIdAssessment> AssessExistingTmdbProviderIdAsync(ExistingProviderIdReference existingProviderId, ItemLookupInfo lookupInfo, string targetMediaType, LlmPromptContext localContext, CancellationToken cancellationToken)
+        {
+            if (string.Equals(existingProviderId.MediaType, EpisodeMediaType, StringComparison.Ordinal))
+            {
+                var verification = await this.VerifyCandidateAsync(CreateCandidate(TmdbProvider, existingProviderId.Id, EpisodeMediaType), lookupInfo, targetMediaType, cancellationToken).ConfigureAwait(false);
+                return verification.Success ? ExistingProviderIdAssessment.Consistent : ExistingProviderIdAssessment.Conflict;
+            }
+
+            var suggestion = await this.CreateTmdbSemanticSuggestionAsync(existingProviderId.Id, existingProviderId.MediaType, lookupInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+            return suggestion == null ? ExistingProviderIdAssessment.Inconclusive : this.EvaluateSemanticSuggestion(localContext, suggestion);
+        }
+
+        private async Task<ExistingProviderIdAssessment> AssessExistingMappedProviderIdAsync(ExistingProviderIdReference existingProviderId, FindExternalSource externalSource, LlmPromptContext localContext, string language, CancellationToken cancellationToken)
+        {
+            var find = await this.tmdbApi.FindByExternalIdAsync(existingProviderId.Id, externalSource, language, cancellationToken).ConfigureAwait(false);
+            if (!TryResolveMappedTmdbId(find, existingProviderId.MediaType, out var mappedTmdbId))
+            {
+                return ExistingProviderIdAssessment.Inconclusive;
+            }
+
+            var suggestion = await this.CreateTmdbSemanticSuggestionAsync(mappedTmdbId.ToString(CultureInfo.InvariantCulture), existingProviderId.MediaType, language, cancellationToken).ConfigureAwait(false);
+            return suggestion == null ? ExistingProviderIdAssessment.Inconclusive : this.EvaluateSemanticSuggestion(localContext, suggestion);
+        }
+
+        private async Task<ExistingProviderIdAssessment> AssessExistingDoubanProviderIdAsync(ExistingProviderIdReference existingProviderId, LlmPromptContext localContext, CancellationToken cancellationToken)
+        {
+            if (!string.Equals(existingProviderId.MediaType, MovieMediaType, StringComparison.Ordinal) && !string.Equals(existingProviderId.MediaType, SeriesMediaType, StringComparison.Ordinal))
+            {
+                return ExistingProviderIdAssessment.Inconclusive;
+            }
+
+            DoubanSubject? subject;
+            try
+            {
+                subject = await this.doubanApi.GetMovieAsync(existingProviderId.Id, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                return ExistingProviderIdAssessment.Inconclusive;
+            }
+
+            if (subject == null)
+            {
+                return ExistingProviderIdAssessment.Inconclusive;
+            }
+
+            return this.EvaluateSemanticSuggestion(localContext, new LlmScrapingSuggestion
+            {
+                MediaType = existingProviderId.MediaType,
+                Title = subject.Name,
+                OriginalTitle = subject.OriginalName,
+                Year = subject.Year > 0 ? subject.Year : null,
+                Confidence = 1,
+            });
+        }
+
+        private async Task<LlmScrapingSuggestion?> CreateTmdbSemanticSuggestionAsync(string tmdbId, string mediaType, string language, CancellationToken cancellationToken)
+        {
+            if (!TryParsePositiveInt(tmdbId, out var tmdbNumericId))
+            {
+                return null;
+            }
+
+            if (string.Equals(mediaType, MovieMediaType, StringComparison.Ordinal))
+            {
+                var movie = await this.tmdbApi.GetMovieAsync(tmdbNumericId, language, string.Empty, cancellationToken).ConfigureAwait(false);
+                return movie == null ? null : new LlmScrapingSuggestion
+                {
+                    MediaType = MovieMediaType,
+                    Title = movie.Title,
+                    OriginalTitle = movie.OriginalTitle,
+                    Year = movie.ReleaseDate?.Year,
+                    Confidence = 1,
+                };
+            }
+
+            var series = await this.tmdbApi.GetSeriesAsync(tmdbNumericId, language, string.Empty, cancellationToken).ConfigureAwait(false);
+            return series == null ? null : new LlmScrapingSuggestion
+            {
+                MediaType = SeriesMediaType,
+                Title = series.Name,
+                OriginalTitle = series.OriginalName,
+                Year = series.FirstAirDate?.Year,
+                Confidence = 1,
+            };
+        }
+
+        private static bool TryResolveMappedTmdbId(FindContainer? find, string mediaType, out int tmdbId)
+        {
+            tmdbId = 0;
+            if (find == null)
+            {
+                return false;
+            }
+
+            if (string.Equals(mediaType, MovieMediaType, StringComparison.Ordinal))
+            {
+                if (find.MovieResults?.Count == 1 && (find.TvResults == null || find.TvResults.Count == 0))
+                {
+                    tmdbId = find.MovieResults[0].Id;
+                    return tmdbId > 0;
+                }
+
+                return false;
+            }
+
+            if (find.TvResults?.Count == 1 && (find.MovieResults == null || find.MovieResults.Count == 0))
+            {
+                tmdbId = find.TvResults[0].Id;
+                return tmdbId > 0;
+            }
+
+            return false;
+        }
+
+        private ExistingProviderIdAssessment EvaluateSemanticSuggestion(LlmPromptContext localContext, LlmScrapingSuggestion suggestion)
+        {
+            var mismatch = this.mismatchDetector.Detect(localContext, suggestion);
+            return mismatch.IsMismatch ? ExistingProviderIdAssessment.Conflict : ExistingProviderIdAssessment.Consistent;
+        }
+
+        private static LlmExternalIdCandidate CreateCandidate(string provider, string id, string mediaType)
+        {
+            return new LlmExternalIdCandidate
+            {
+                Provider = provider,
+                Id = id,
+                MediaType = mediaType,
+                Confidence = 1,
+                Reason = "existing provider id semantics evaluation",
+                Evidence = "existing provider id semantics evaluation",
+            };
         }
 
         private static LlmExternalIdVerificationResult VerificationFailed(string diagnostic, LlmExternalIdCandidate candidate)
@@ -870,6 +1189,29 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             {
                 return new LlmExternalIdVerificationResult(false, Array.Empty<LlmExternalIdCandidate>(), diagnostic);
             }
+        }
+
+        private sealed class ExistingProviderIdReference
+        {
+            public ExistingProviderIdReference(string provider, string id, string mediaType)
+            {
+                this.Provider = provider;
+                this.Id = id;
+                this.MediaType = mediaType;
+            }
+
+            public string Provider { get; }
+
+            public string Id { get; }
+
+            public string MediaType { get; }
+        }
+
+        private enum ExistingProviderIdAssessment
+        {
+            Inconclusive = 0,
+            Consistent = 1,
+            Conflict = 2,
         }
     }
 }

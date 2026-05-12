@@ -55,8 +55,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var imageSemantic = this.ResolveImageSemantic();
             var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
+            var hasPersistedSeriesTmdbCorrection = TryResolvePersistedSeriesTmdbCorrection(sid, tmdbId, out var correctedSeriesTmdbId);
+            if (hasPersistedSeriesTmdbCorrection)
+            {
+                tmdbId = correctedSeriesTmdbId;
+                metaSource = MetaSource.Tmdb;
+            }
+
             this.Log("开始获取剧集图片. name: {0} lang: {1} metaSource: {2}", item.Name, item.GetPreferredMetadataLanguage(), metaSource);
-            if (doubanAllowed && !string.IsNullOrEmpty(sid))
+            if (!hasPersistedSeriesTmdbCorrection && doubanAllowed && !string.IsNullOrEmpty(sid))
             {
                 var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (primary != null && !string.IsNullOrEmpty(primary.Img))
@@ -184,9 +191,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var sid = item.GetProviderId(DoubanProviderId);
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var list = new List<RemoteImageInfo>();
+            var hasPersistedSeriesTmdbCorrection = TryResolvePersistedSeriesTmdbCorrection(sid, tmdbId, out var correctedSeriesTmdbId);
+            if (hasPersistedSeriesTmdbCorrection)
+            {
+                tmdbId = correctedSeriesTmdbId;
+            }
 
             // 从豆瓣获取背景图
-            if (doubanAllowed && !string.IsNullOrEmpty(sid))
+            if (!hasPersistedSeriesTmdbCorrection && doubanAllowed && !string.IsNullOrEmpty(sid))
             {
                 var photo = await this.DoubanApi.GetWallpaperBySidAsync(sid, cancellationToken).ConfigureAwait(false);
                 if (photo != null && photo.Count > 0)
@@ -249,6 +261,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var language = item.GetPreferredMetadataLanguage();
             var list = new List<RemoteImageInfo>();
+            if (TryResolvePersistedSeriesTmdbCorrection(item.GetProviderId(DoubanProviderId), tmdbId, out var correctedSeriesTmdbId))
+            {
+                tmdbId = correctedSeriesTmdbId;
+            }
+
             if (Config.EnableTmdbLogo && !string.IsNullOrEmpty(tmdbId))
             {
                 this.Log("开始获取 TMDb Logo. tmdbId: {0}", tmdbId);

@@ -1,4 +1,4 @@
-﻿// <copyright file="BaseProvider.cs" company="PlaceholderCompany">
+// <copyright file="BaseProvider.cs" company="PlaceholderCompany">
 // Copyright (c) PlaceholderCompany. All rights reserved.
 // </copyright>
 
@@ -21,7 +21,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Jellyfin.Plugin.MetaShark.Configuration;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
+    using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using MediaBrowser.Controller.Entities;
+    using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
@@ -338,6 +340,42 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return DefaultScraperPolicy.IsDoubanAllowed(Config, semantic);
         }
 
+        protected static bool TryResolvePersistedSeriesTmdbCorrection(string? seriesDoubanId, out string correctedTmdbId)
+        {
+            correctedTmdbId = string.Empty;
+            return Config.EnableLlmTmdbCorrectionPersistence
+                && !string.IsNullOrWhiteSpace(seriesDoubanId)
+                && LlmTmdbCorrectionMapParser.Shared.TryGetDoubanCorrection(Config.LlmTmdbCorrectionMap, nameof(Series), seriesDoubanId, out correctedTmdbId)
+                && !string.IsNullOrWhiteSpace(correctedTmdbId);
+        }
+
+        protected static bool TryResolvePersistedSeriesTmdbCorrection(string? seriesDoubanId, string? seriesTmdbId, out string correctedTmdbId)
+        {
+            if (TryResolvePersistedSeriesTmdbCorrection(seriesDoubanId, out correctedTmdbId))
+            {
+                return true;
+            }
+
+            correctedTmdbId = string.Empty;
+            if (!Config.EnableLlmTmdbCorrectionPersistence || string.IsNullOrWhiteSpace(seriesTmdbId))
+            {
+                return false;
+            }
+
+            var snapshot = LlmTmdbCorrectionMapParser.Shared.ParseSnapshot(Config.LlmTmdbCorrectionMap);
+            var trimmedSeriesTmdbId = seriesTmdbId.Trim();
+            var matchedEntry = snapshot.EntriesByKey.Values.FirstOrDefault(entry =>
+                string.Equals(entry.MediaType, "series", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(entry.TmdbId, trimmedSeriesTmdbId, StringComparison.OrdinalIgnoreCase));
+            if (matchedEntry == null)
+            {
+                return false;
+            }
+
+            correctedTmdbId = matchedEntry.TmdbId;
+            return true;
+        }
+
         /// <summary>
          /// Adjusts the image's language code preferring the 5 letter language code eg. en-US.
          /// </summary>
@@ -471,6 +509,69 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         protected static bool SupportsSearchMissingMetadataOverwriteCandidate(DefaultScraperSemantic semantic)
         {
             return semantic is DefaultScraperSemantic.ManualMatch or DefaultScraperSemantic.OverwriteRefresh;
+        }
+
+        protected async Task TryPersistVerifiedTmdbCorrectionMetadataAsync(
+            ItemLookupInfo info,
+            string tmdbId,
+            bool shouldUseTmdbMetadataAfterCorrection,
+            BaseItem? authoritativeMetadataItem,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(info);
+
+            if (!shouldUseTmdbMetadataAfterCorrection
+                || authoritativeMetadataItem == null
+                || string.IsNullOrWhiteSpace(tmdbId)
+                || string.IsNullOrWhiteSpace(info.Path))
+            {
+                return;
+            }
+
+            var item = info switch
+            {
+                MovieInfo => this.LibraryManager.FindByPath(info.Path, false) as BaseItem,
+                SeriesInfo => this.LibraryManager.FindByPath(info.Path, true) as BaseItem,
+                _ => null,
+            };
+            if (item == null)
+            {
+                return;
+            }
+
+            var metadataChanged = false;
+            metadataChanged |= SetTextIfDifferent(item.Name, authoritativeMetadataItem.Name, value => item.Name = value);
+            metadataChanged |= SetTextIfDifferent(item.OriginalTitle, authoritativeMetadataItem.OriginalTitle, value => item.OriginalTitle = value);
+            metadataChanged |= SetTextIfDifferent(item.Overview, authoritativeMetadataItem.Overview, value => item.Overview = value);
+            metadataChanged |= SetProductionYearIfDifferent(item, authoritativeMetadataItem);
+            metadataChanged |= SetPremiereDateIfDifferent(item, authoritativeMetadataItem);
+
+            var removedDouban = RemoveProviderIdIfPresent(item, DoubanProviderId);
+            var changed = removedDouban;
+            changed |= SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), tmdbId.Trim());
+            changed |= SetProviderIdIfDifferent(item, MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{tmdbId.Trim()}");
+            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString());
+            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString());
+            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString());
+            changed |= metadataChanged;
+            if (!changed)
+            {
+                return;
+            }
+
+            var updateReason = item.OnMetadataChanged();
+            if (updateReason == ItemUpdateType.None)
+            {
+                updateReason = ItemUpdateType.MetadataEdit;
+            }
+
+            await item.UpdateToRepositoryAsync(updateReason, cancellationToken).ConfigureAwait(false);
+            this.Log(
+                "已持久化 LLM TMDb 纠错后的权威元数据. itemId: {0} tmdbId: {1} removedDouban: {2} metadataChanged: {3}",
+                item.Id,
+                tmdbId,
+                removedDouban,
+                metadataChanged);
         }
 
         protected static TmdbAuthoritativePeopleSnapshot? CreateTmdbAuthoritativePeopleSnapshot(string itemType, string? tmdbId, IEnumerable<PersonInfo>? people)
@@ -976,6 +1077,73 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return value.Trim();
+        }
+
+        private static bool RemoveProviderIdIfPresent(BaseItem item, string providerIdKey)
+        {
+            if (item.ProviderIds == null || !item.ProviderIds.ContainsKey(providerIdKey))
+            {
+                return false;
+            }
+
+            item.RemoveProviderId(providerIdKey);
+            return true;
+        }
+
+        private static bool SetProviderIdIfDifferent(BaseItem item, string providerIdKey, string providerIdValue)
+        {
+            if (string.Equals(item.GetProviderId(providerIdKey), providerIdValue, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            item.SetProviderId(providerIdKey, providerIdValue);
+            return true;
+        }
+
+        private static bool CopyProviderIdIfPresent(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey)
+        {
+            var providerIdValue = authoritativeMetadataItem.GetProviderId(providerIdKey);
+            if (string.IsNullOrWhiteSpace(providerIdValue))
+            {
+                return false;
+            }
+
+            return SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
+        }
+
+        private static bool SetTextIfDifferent(string? currentValue, string? authoritativeValue, Action<string> assign)
+        {
+            var trimmedValue = GetTrimmedNonEmptyText(authoritativeValue);
+            if (trimmedValue == null || string.Equals(currentValue, trimmedValue, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            assign(trimmedValue);
+            return true;
+        }
+
+        private static bool SetProductionYearIfDifferent(BaseItem item, BaseItem authoritativeMetadataItem)
+        {
+            if (!authoritativeMetadataItem.ProductionYear.HasValue || item.ProductionYear == authoritativeMetadataItem.ProductionYear)
+            {
+                return false;
+            }
+
+            item.ProductionYear = authoritativeMetadataItem.ProductionYear;
+            return true;
+        }
+
+        private static bool SetPremiereDateIfDifferent(BaseItem item, BaseItem authoritativeMetadataItem)
+        {
+            if (!authoritativeMetadataItem.PremiereDate.HasValue || item.PremiereDate == authoritativeMetadataItem.PremiereDate)
+            {
+                return false;
+            }
+
+            item.PremiereDate = authoritativeMetadataItem.PremiereDate;
+            return true;
         }
 
         private static bool IsMatchingPeopleTranslationLanguage(Translation translation, string requestedLanguage)

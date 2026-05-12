@@ -355,6 +355,47 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_WhenParentSeriesConflictCandidateDetected_DoesNotUseResolvedParentAndLogsNeedsManualBoundary()
+        {
+            var configuration = CreateBaseConfiguration(enableLlmAssist: true);
+            configuration.EnableTmdb = true;
+            configuration.DefaultScraperMode = PluginConfiguration.DefaultScraperModeTmdbOnly;
+            ReplacePluginConfiguration(configuration);
+            var llm = new LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService();
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
+            externalIdResolver.EnqueueResult(CreateVerifiedParentSeriesTmdbResult("34860"));
+
+            using var loggerFactory = RecordingLoggerFactory.Create();
+            var provider = new SeasonProvider(
+                new DefaultHttpClientFactory(),
+                loggerFactory,
+                new Mock<ILibraryManager>().Object,
+                LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString()),
+                new DoubanApi(loggerFactory),
+                new TmdbApi(loggerFactory),
+                new OmdbApi(loggerFactory),
+                new ImdbApi(loggerFactory),
+                llm,
+                externalIdResolver);
+
+            var info = CreateExternalMissingInfo();
+            info.SeriesProviderIds = new Dictionary<string, string>
+            {
+                { MetadataProvider.Tvdb.ToString(), "81189" },
+                { BaseProvider.DoubanProviderId, "series-douban-ctx" },
+                { MetaSharkPlugin.ProviderId, "Douban_series-douban-ctx" },
+            };
+
+            _ = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, llm.Requests.Count);
+            Assert.IsFalse(info.SeriesProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString()), "Season 不应把父级纠错候选写回 SeriesProviderIds。 ");
+            loggerFactory.ExpectRejectedReason("ParentSeriesCorrectionCandidate", "Season");
+        }
+
+        [TestMethod]
         public async Task GetMetadata_WhenOverwriteRefresh_DoesNotCallExternalIdResolverOrTextLlm()
         {
             var llm = new LlmProviderFlowTestHelpers.RecordingLlmMetadataAssistService();
@@ -516,6 +557,112 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 LlmAllowTextCompletion = true,
                 LlmConfidenceThreshold = 0.75,
             };
+        }
+
+        private sealed class RecordingLoggerFactory : ILoggerFactory
+        {
+            private readonly RecordingLoggerProvider provider = new RecordingLoggerProvider();
+
+            private RecordingLoggerFactory()
+            {
+            }
+
+            public static RecordingLoggerFactory Create()
+            {
+                return new RecordingLoggerFactory();
+            }
+
+            public void AddProvider(ILoggerProvider loggerProvider)
+            {
+                _ = loggerProvider;
+            }
+
+            public ILogger CreateLogger(string categoryName)
+            {
+                return this.provider.CreateLogger(categoryName);
+            }
+
+            public void Dispose()
+            {
+                this.provider.Dispose();
+            }
+
+            public void ExpectRejectedReason(string reasonCode, string mediaType)
+            {
+                Assert.IsTrue(
+                    this.provider.Entries.Any(entry =>
+                        entry.Level == LogLevel.Information
+                        && string.Equals(entry.EventId.Name, "LlmAssistTrigger.Rejected", StringComparison.Ordinal)
+                        && entry.State.TryGetValue("ReasonCode", out var actualReason)
+                        && string.Equals(actualReason?.ToString(), reasonCode, StringComparison.Ordinal)
+                        && entry.State.TryGetValue("MediaType", out var actualMediaType)
+                        && string.Equals(actualMediaType?.ToString(), mediaType, StringComparison.Ordinal)),
+                    $"Expected captured LLM rejection reason {reasonCode} for {mediaType}.");
+            }
+        }
+
+        private sealed class RecordingLoggerProvider : ILoggerProvider
+        {
+            public List<RecordingLogEntry> Entries { get; } = new List<RecordingLogEntry>();
+
+            public ILogger CreateLogger(string categoryName)
+            {
+                return new RecordingLogger(categoryName, this.Entries);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class RecordingLogger : ILogger
+        {
+            private readonly string categoryName;
+            private readonly List<RecordingLogEntry> entries;
+
+            public RecordingLogger(string categoryName, List<RecordingLogEntry> entries)
+            {
+                this.categoryName = categoryName;
+                this.entries = entries;
+            }
+
+            public IDisposable BeginScope<TState>(TState state)
+                where TState : notnull
+            {
+                _ = state;
+                return NullScope.Instance;
+            }
+
+            public bool IsEnabled(LogLevel logLevel)
+            {
+                return true;
+            }
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                var structuredState = state as IEnumerable<KeyValuePair<string, object?>>;
+                this.entries.Add(new RecordingLogEntry(
+                    this.categoryName,
+                    logLevel,
+                    eventId,
+                    structuredState?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.Ordinal) ?? new Dictionary<string, object?>(StringComparer.Ordinal),
+                    formatter(state, exception)));
+            }
+        }
+
+        private sealed record RecordingLogEntry(string CategoryName, LogLevel Level, EventId EventId, Dictionary<string, object?> State, string Message);
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new NullScope();
+
+            private NullScope()
+            {
+            }
+
+            public void Dispose()
+            {
+            }
         }
 
         private static void SeedDoubanSubject(DoubanApi doubanApi, DoubanSubject subject)

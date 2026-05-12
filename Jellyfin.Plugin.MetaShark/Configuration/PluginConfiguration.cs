@@ -129,6 +129,16 @@ public class PluginConfiguration : BasePluginConfiguration
     public string TmdbEpisodeGroupMap { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets LLM verified Douban to TMDB correction mapping.
+    /// </summary>
+    public string LlmTmdbCorrectionMap { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether LLM verified Douban to TMDB corrections should be persisted and reused.
+    /// </summary>
+    public bool EnableLlmTmdbCorrectionPersistence { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets a value indicating whether LLM can suggest TMDB episode group mappings.
     /// </summary>
     public bool EnableLlmEpisodeGroupMappingAssist { get; set; }
@@ -183,7 +193,8 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool LlmAllowRelativePathContext { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether text completion output is allowed.
+    /// Gets or sets a value indicating whether title and overview text completion output is allowed.
+    /// This remains disabled by default and is separate from the global LLM assist switch.
     /// </summary>
     public bool LlmAllowTextCompletion { get; set; }
 

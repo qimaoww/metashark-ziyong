@@ -52,11 +52,19 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var imageSemantic = this.ResolveImageSemantic();
             var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
+            var currentSeriesTmdbId = series?.GetProviderId(MetadataProvider.Tmdb);
+            var hasPersistedSeriesTmdbCorrection = TryResolvePersistedSeriesTmdbCorrection(series?.GetProviderId(DoubanProviderId), currentSeriesTmdbId, out var correctedSeriesTmdbId);
+            if (hasPersistedSeriesTmdbCorrection)
+            {
+                metaSource = MetaSource.Tmdb;
+            }
+
             var allowManualDoubanForSeasonImage = this.ShouldAllowDoubanForManualSeasonImageRequest(season, metaSource, imageSemantic);
 
             // get image from douban
             var sid = item.GetProviderId(DoubanProviderId);
             var shouldUseDoubanImage = !string.IsNullOrEmpty(sid)
+                && !hasPersistedSeriesTmdbCorrection
                 && (allowManualDoubanForSeasonImage
                     || doubanAllowed);
             if (shouldUseDoubanImage)
@@ -79,8 +87,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // get image form TMDB
-            var seriesTmdbId = Convert.ToInt32(series?.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
-            if (seriesTmdbId <= 0 || season?.IndexNumber == null)
+            var seriesTmdbIdText = hasPersistedSeriesTmdbCorrection
+                ? correctedSeriesTmdbId
+                : currentSeriesTmdbId;
+            if (!int.TryParse(seriesTmdbIdText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seriesTmdbId)
+                || seriesTmdbId <= 0
+                || season?.IndexNumber == null)
             {
                 return Enumerable.Empty<RemoteImageInfo>();
             }

@@ -26,6 +26,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
         public HttpContext? HttpContext { get; set; }
 
+        public bool HasBridgedExplicitSearchMissingMetadataRefreshIntent { get; set; }
+
         public IEnumerable<string?> SafeRelativePathSamples { get; set; } = Array.Empty<string?>();
 
         public IEnumerable<LlmEpisodeDistributionItem?> EpisodeDistribution { get; set; } = Array.Empty<LlmEpisodeDistributionItem?>();

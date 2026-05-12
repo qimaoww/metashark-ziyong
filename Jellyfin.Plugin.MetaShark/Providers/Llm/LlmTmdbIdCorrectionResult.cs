@@ -6,11 +6,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 {
     public sealed class LlmTmdbIdCorrectionResult
     {
-        private LlmTmdbIdCorrectionResult(bool shouldReplace, string? replacementTmdbId, string diagnostic)
+        private LlmTmdbIdCorrectionResult(bool shouldReplace, string? replacementTmdbId, string diagnostic, bool shouldUseTmdbMetadata)
         {
             this.ShouldReplace = shouldReplace;
             this.ReplacementTmdbId = replacementTmdbId;
             this.Diagnostic = string.IsNullOrWhiteSpace(diagnostic) ? "LLM TMDb correction returned no replacement." : diagnostic;
+            this.ShouldUseTmdbMetadata = shouldUseTmdbMetadata;
         }
 
         public bool ShouldReplace { get; }
@@ -19,14 +20,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
         public string Diagnostic { get; }
 
+        public bool ShouldUseTmdbMetadata { get; }
+
         public static LlmTmdbIdCorrectionResult Verified(string replacementTmdbId, string diagnostic)
         {
-            return new LlmTmdbIdCorrectionResult(true, replacementTmdbId, diagnostic);
+            return new LlmTmdbIdCorrectionResult(true, replacementTmdbId, diagnostic, shouldUseTmdbMetadata: true);
+        }
+
+        public static LlmTmdbIdCorrectionResult VerifiedExistingTmdb(string tmdbId, string diagnostic)
+        {
+            return new LlmTmdbIdCorrectionResult(true, tmdbId, diagnostic, shouldUseTmdbMetadata: true);
         }
 
         public static LlmTmdbIdCorrectionResult NoReplacement(string diagnostic)
         {
-            return new LlmTmdbIdCorrectionResult(false, null, diagnostic);
+            return new LlmTmdbIdCorrectionResult(false, null, diagnostic, shouldUseTmdbMetadata: false);
         }
     }
 }

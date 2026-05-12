@@ -17,6 +17,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             AssertProperty("EnableLlmAssist", typeof(bool), false, configuration);
             AssertProperty("EnableLlmTmdbIdCorrection", typeof(bool), false, configuration);
+            AssertProperty("EnableLlmTmdbCorrectionPersistence", typeof(bool), true, configuration);
             AssertProperty("LlmBaseUrl", typeof(string), string.Empty, configuration);
             AssertProperty("LlmApiKey", typeof(string), string.Empty, configuration);
             AssertProperty("LlmModel", typeof(string), string.Empty, configuration);
@@ -38,6 +39,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             {
                 EnableLlmAssist = true,
                 EnableLlmTmdbIdCorrection = true,
+                EnableLlmTmdbCorrectionPersistence = false,
                 LlmBaseUrl = "https://example.test/v1",
                 LlmApiKey = "test-key",
                 LlmModel = "test-model",
@@ -54,6 +56,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsTrue(configuration.EnableLlmAssist);
             Assert.IsTrue(configuration.EnableLlmTmdbIdCorrection);
+            Assert.IsFalse(configuration.EnableLlmTmdbCorrectionPersistence);
             Assert.AreEqual("https://example.test/v1", configuration.LlmBaseUrl);
             Assert.AreEqual("test-key", configuration.LlmApiKey);
             Assert.AreEqual("test-model", configuration.LlmModel);

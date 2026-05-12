@@ -33,6 +33,59 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task CompleteAsync_WhenRequestSucceeds_ShouldLogStartedAndSucceededWithoutSensitiveValues()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(new PluginConfiguration
+            {
+                LlmBaseUrl = "http://localhost:11434/v1?secret=hidden",
+                LlmApiKey = SecretKey,
+                LlmModel = "qwen2.5",
+                LlmStructuredOutputMode = PluginConfiguration.LlmStructuredOutputModeJsonSchema,
+                LlmTimeoutSeconds = 5,
+            });
+            var loggerStub = new Mock<ILogger<LlmApi>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory(loggerStub).Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(_ =>
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(LlmApiTest.CreateSuccessEnvelope("{\"suggestions\":[]}"), Encoding.UTF8, "application/json"),
+                });
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync(RawPrompt, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["SchemaKind"] = LlmResponseSchemaKind.MetadataSuggestions.ToString(),
+                    ["Attempt"] = 1,
+                },
+                originalFormatContains: "[MetaShark] LLM 请求开始. schema={SchemaKind} attempt={Attempt}",
+                messageContains: ["[MetaShark]", "LLM 请求开始"]);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Information,
+                expectException: false,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["SchemaKind"] = LlmResponseSchemaKind.MetadataSuggestions.ToString(),
+                    ["Attempt"] = 1,
+                },
+                originalFormatContains: "[MetaShark] LLM 请求成功. schema={SchemaKind} attempt={Attempt}",
+                messageContains: ["[MetaShark]", "LLM 请求成功"]);
+            AssertLoggedEventId(loggerStub, LogLevel.Information, 5, "LlmApi.RequestStarted");
+            AssertLoggedEventId(loggerStub, LogLevel.Information, 6, "LlmApi.RequestSucceeded");
+            AssertLoggerDoesNotContainSensitiveValues(loggerStub);
+            AssertLoggerDoesNotContain(loggerStub, "?secret=hidden", "/v1", "/chat/completions", "Authorization", "Cookie");
+        }
+
+        [TestMethod]
         public async Task CompleteAsync_WhenHttpErrorContainsSecretPromptAndResponse_ShouldRedactLogsAndDiagnostics()
         {
             LlmApiTestSupport.ReplacePluginConfiguration(new PluginConfiguration
@@ -209,6 +262,21 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 && invocation.Arguments[0] is LogLevel logLevel
                 && logLevel == LogLevel.Error);
             Assert.IsFalse(hasError, "LLM optional timeout/network failures must not be logged as Error.");
+        }
+
+        private static void AssertLoggerDoesNotContain(Mock loggerStub, params string[] forbiddenValues)
+        {
+            foreach (var invocation in loggerStub.Invocations.Where(invocation => string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal)))
+            {
+                foreach (var argument in invocation.Arguments)
+                {
+                    var text = argument?.ToString() ?? string.Empty;
+                    foreach (var forbiddenValue in forbiddenValues)
+                    {
+                        Assert.IsFalse(text.Contains(forbiddenValue, StringComparison.OrdinalIgnoreCase), text);
+                    }
+                }
+            }
         }
 
         private static void AssertLoggedEventId(Mock loggerStub, LogLevel level, int expectedId, string? expectedName)
