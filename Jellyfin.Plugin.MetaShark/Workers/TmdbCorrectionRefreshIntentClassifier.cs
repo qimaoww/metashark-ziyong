@@ -14,6 +14,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return TryResolveExplicitSearchMissingMetadataRefreshItemId(httpContext, out _);
         }
 
+        public static bool IsExplicitOverwriteMetadataRefresh(HttpContext? httpContext)
+        {
+            return TryResolveExplicitOverwriteMetadataRefreshItemId(httpContext, out _);
+        }
+
         public static bool TryResolveExplicitSearchMissingMetadataRefreshItemId(HttpContext? httpContext, out Guid itemId)
         {
             itemId = Guid.Empty;
@@ -26,6 +31,19 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             return HasQueryValue(request, "metadataRefreshMode", "FullRefresh")
                 && HasQueryValue(request, "replaceAllMetadata", "false", "ReplaceAllMetadata");
+        }
+
+        public static bool TryResolveExplicitOverwriteMetadataRefreshItemId(HttpContext? httpContext, out Guid itemId)
+        {
+            itemId = Guid.Empty;
+            var request = httpContext?.Request;
+            if (request == null || !HttpMethods.IsPost(request.Method) || !TryResolveRefreshItemId(request.Path.Value, out itemId))
+            {
+                itemId = Guid.Empty;
+                return false;
+            }
+
+            return HasQueryValue(request, "replaceAllMetadata", "true", "ReplaceAllMetadata");
         }
 
         private static bool TryResolveRefreshItemId(string? path, out Guid itemId)

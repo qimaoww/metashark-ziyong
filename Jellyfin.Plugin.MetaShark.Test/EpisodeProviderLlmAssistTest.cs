@@ -41,6 +41,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestCleanup]
         public void Cleanup()
         {
+            ClearEpisodeGroupMappingRefreshLoopState();
             EnsurePluginInstance();
             MetaSharkPlugin.Instance!.Configuration.EnableLlmAssist = false;
             MetaSharkPlugin.Instance.Configuration.EnableLlmEpisodeGroupMappingAssist = false;
@@ -53,8 +54,19 @@ namespace Jellyfin.Plugin.MetaShark.Test
             MetaSharkPlugin.Instance.Configuration.EnableSearchMissingMetadataEpisodeTitleBackfill = false;
             MetaSharkPlugin.Instance.Configuration.EnableTvdbSpecialsWithinSeasons = true;
             MetaSharkPlugin.Instance.Configuration.TmdbEpisodeGroupMap = string.Empty;
+            MetaSharkPlugin.Instance.Configuration.LlmTmdbEpisodeGroupMap = string.Empty;
             MetaSharkPlugin.Instance.Configuration.TvdbApiKey = string.Empty;
             MetaSharkPlugin.Instance.Configuration.TvdbHost = string.Empty;
+        }
+
+        private static void ClearEpisodeGroupMappingRefreshLoopState()
+        {
+            foreach (var fieldName in new[] { "SuppressedRefreshSeriesIds", "RecentlyQueuedRefreshSeriesIds" })
+            {
+                var field = typeof(LlmEpisodeGroupMappingProviderAssistService).GetField(fieldName, BindingFlags.Static | BindingFlags.NonPublic);
+                var value = field?.GetValue(null) as System.Collections.IDictionary;
+                value?.Clear();
+            }
         }
 
         [TestMethod]
@@ -84,12 +96,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_WhenOverwriteRefresh_DoesNotCallExternalIdResolverOrEpisodeGroupMappingAssist()
+        public async Task GetMetadata_WhenOverwriteRefresh_DoesNotCallTextOrExternalIdButAllowsEpisodeGroupMappingAssist()
         {
+            ClearEpisodeGroupMappingRefreshLoopState();
             using var harness = CreateHarness(
                 httpContext: LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(TestItemIdString(), replaceAllMetadata: true),
                 allowTextCompletion: true,
                 allowEpisodeGroupMappingAssist: true);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(harness.TmdbApi, "candidate-group", "zh-CN");
             harness.LlmService.EnqueueResult(CreateSuccessResult(title: "启程"));
             harness.ExternalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "456", "Series", null));
             harness.LlmEpisodeGroupMappingApi.Enqueue("candidate-group", 0.95);
@@ -98,8 +112,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(0, harness.LlmService.Requests.Count);
             Assert.AreEqual(0, harness.ExternalIdService.Requests.Count);
-            Assert.AreEqual(0, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
+            Assert.AreEqual(1, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
             Assert.AreEqual(0, harness.QueueRefreshCalls.Count);
+            Assert.AreEqual("123=candidate-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual("第 1 集", result.Item!.Name);
         }
 
@@ -430,7 +445,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             _ = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.AreEqual(1, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
-            Assert.AreEqual("123=candidate-group", MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("123=candidate-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             AssertQueuedSeries(harness.QueueRefreshCalls, mappedSeries.Id);
             var prompt = harness.LlmEpisodeGroupMappingApi.Prompts.Single();
             LlmProviderFlowTestHelpers.AssertNoSensitiveContent(prompt);
@@ -476,7 +491,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.AreEqual(1, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
-            Assert.AreEqual("123=candidate-group", MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("123=candidate-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("映射后命中的正片", result.Item!.Name);
             Assert.AreEqual(2, result.Item.ParentIndexNumber);
@@ -531,7 +546,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(harness.Info.SeriesProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString()), "EpisodeProvider 不应把解析到的父级 TMDbId 写回 SeriesProviderIds。 ");
             Assert.IsNull(result.Item.GetProviderId(MetadataProvider.Tmdb), "只有父级解析成功时不应写 Episode TMDbId。 ");
             Assert.AreEqual(1, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
-            Assert.AreEqual("456=resolved-parent-group", MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("456=resolved-parent-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             AssertQueuedSeries(harness.QueueRefreshCalls, mappedSeries.Id);
         }
 
@@ -667,7 +682,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(0, harness.ExternalIdService.Requests.Count);
             Assert.AreEqual(0, harness.LlmEpisodeGroupMappingApi.Prompts.Count);
-            Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(0, harness.QueueRefreshCalls.Count);
         }
 
@@ -705,6 +720,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             configuration.EnableSearchMissingMetadataEpisodeTitleBackfill = true;
             configuration.EnableTvdbSpecialsWithinSeasons = true;
             configuration.TmdbEpisodeGroupMap = string.Empty;
+            configuration.LlmTmdbEpisodeGroupMap = string.Empty;
             configuration.TvdbApiKey = string.Empty;
             configuration.TvdbHost = string.Empty;
 

@@ -28,6 +28,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
         public bool HasBridgedExplicitSearchMissingMetadataRefreshIntent { get; set; }
 
+        public bool HasBridgedExplicitOverwriteMetadataRefreshIntent { get; set; }
+
         public IEnumerable<string?> SafeRelativePathSamples { get; set; } = Array.Empty<string?>();
 
         public IEnumerable<LlmEpisodeDistributionItem?> EpisodeDistribution { get; set; } = Array.Empty<LlmEpisodeDistributionItem?>();

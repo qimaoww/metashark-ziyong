@@ -14,6 +14,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Providers.Llm;
 
     public sealed class LlmEpisodeGroupMappingAssistService : ILlmEpisodeGroupMappingAssistService
@@ -24,6 +25,31 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         };
 
+        private static readonly string[] BasePromptConstraints =
+        {
+            "selectedGroupId must exactly equal one candidate groupId",
+            "do not invent group ids",
+            "use only relative path/file summaries",
+            "DO NOT: invent group ids, use group names as ids, select by popularity, or select a group that is not present in candidateGroups.",
+            "DO NOT: output metadata, ProviderIds, extra TMDb series/movie/season/episode IDs, titles, images, people, scraper mode changes, refresh actions, or configuration text.",
+            "DO NOT: request a metadata refresh, change scraper source, or treat the selected episode group as proof that another TMDb series id is correct.",
+            "If no candidate clearly matches, return selectedGroupId as an empty string with confidence 0.0 and a reason.",
+        };
+
+        private static readonly string[] DistributionPromptConstraints =
+        {
+            "DO: select exactly one selectedGroupId from candidateGroups only when it matches the supplied episodeDistribution.",
+            "DO: set confidence from 0.0 to 1.0 and explain the season/episode distribution evidence in reason.",
+            "DO NOT: treat relative paths or filenames as authoritative when they conflict with candidateGroups or episodeDistribution.",
+        };
+
+        private static readonly string[] MissingDistributionPromptConstraints =
+        {
+            "When episodeDistribution is empty, DO: choose the best candidateGroup by candidate type, groupCount, episodeCount, group name, seriesTitle, metadataLanguage, and safeRelativePathSamples.",
+            "When episodeDistribution is empty, DO NOT return an empty selectedGroupId merely because episodeDistribution is unavailable.",
+            "When episodeDistribution is empty, DO: explain the candidate-only evidence used in reason.",
+        };
+
         private readonly ILlmApi llmApi;
         private readonly TmdbApi tmdbApi;
         private readonly EpisodeGroupMapParser parser;
@@ -32,12 +58,12 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
         [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Compatibility constructor owns a process-local fallback limiter for test-only direct construction.")]
         public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi)
-            : this(llmApi, tmdbApi, EpisodeGroupMapParser.Shared, new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared), new LlmRequestLimiter())
+            : this(llmApi, tmdbApi, EpisodeGroupMapParser.Shared, new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared, saveLlmMapping: true), new LlmRequestLimiter())
         {
         }
 
         public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser, ILlmRequestLimiter? requestLimiter = null)
-            : this(llmApi, tmdbApi, parser, new TmdbEpisodeGroupMapPersistenceService(parser), requestLimiter)
+            : this(llmApi, tmdbApi, parser, new TmdbEpisodeGroupMapPersistenceService(parser, saveLlmMapping: true), requestLimiter)
         {
         }
 
@@ -55,7 +81,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             ArgumentNullException.ThrowIfNull(request);
 
             var configuration = request.Configuration;
-            var currentMapping = configuration?.TmdbEpisodeGroupMap ?? string.Empty;
+            var currentMapping = configuration?.LlmTmdbEpisodeGroupMap ?? string.Empty;
             if (configuration == null || !configuration.EnableLlmAssist || !configuration.EnableLlmEpisodeGroupMappingAssist)
             {
                 return LlmEpisodeGroupMappingAssistResult.NotTriggered("LlmEpisodeGroupMappingAssistDisabled", currentMapping);
@@ -69,6 +95,12 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             if (!request.SeriesTmdbId.HasValue || request.SeriesTmdbId.Value <= 0)
             {
                 return LlmEpisodeGroupMappingAssistResult.NotTriggered("SeriesTmdbIdMissing", currentMapping);
+            }
+
+            var seriesIdText = request.SeriesTmdbId.Value.ToString(CultureInfo.InvariantCulture);
+            if (TmdbEpisodeGroupMapping.TryGetGroupId(configuration.TmdbEpisodeGroupMap, seriesIdText, out var manualGroupId))
+            {
+                return LlmEpisodeGroupMappingAssistResult.NoChange("ManualMappingAlreadyExists", currentMapping, manualGroupId);
             }
 
             var candidates = NormalizeCandidates(request.CandidateGroups, configuration.LlmEpisodeGroupMappingMaxCandidateGroups);
@@ -122,7 +154,6 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 return LlmEpisodeGroupMappingAssistResult.Rejected("SelectedGroupValidationFailed", currentMapping, selectedGroupId);
             }
 
-            var seriesIdText = request.SeriesTmdbId.Value.ToString(CultureInfo.InvariantCulture);
             var snapshot = this.parser.ParseSnapshot(currentMapping);
             if (snapshot.TryGetGroupId(seriesIdText, out var existingGroupId))
             {
@@ -134,7 +165,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
             var newMapping = this.UpsertCanonicalMapping(snapshot.CanonicalText, seriesIdText, selectedGroupId);
             var persistenceResult = await this.persistenceService.TrySaveAsync(snapshot.CanonicalText, newMapping, cancellationToken).ConfigureAwait(false);
-            configuration.TmdbEpisodeGroupMap = persistenceResult.CurrentMapping;
+            configuration.LlmTmdbEpisodeGroupMap = persistenceResult.CurrentMapping;
             return MapPersistenceResult(persistenceResult, selectedGroupId);
         }
 
@@ -184,6 +215,10 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
         private static string BuildPrompt(LlmEpisodeGroupMappingAssistRequest request, IReadOnlyList<LlmEpisodeGroupCandidate> candidates)
         {
+            var episodeDistribution = NormalizeDistribution(request.EpisodeDistribution);
+            var distributionConstraints = episodeDistribution.Length > 0
+                ? DistributionPromptConstraints
+                : MissingDistributionPromptConstraints;
             var payload = new
             {
                 task = "Select one TMDB episode group id from candidateGroups for this series. Return JSON only with selectedGroupId, confidence, reason.",
@@ -191,21 +226,9 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 seriesTitle = NormalizeText(request.SeriesTitle),
                 metadataLanguage = NormalizeText(request.MetadataLanguage),
                 safeRelativePathSamples = NormalizeSamples(request.SafeRelativePathSamples),
-                episodeDistribution = NormalizeDistribution(request.EpisodeDistribution),
+                episodeDistribution,
                 candidateGroups = candidates,
-                constraints = new[]
-                {
-                    "selectedGroupId must exactly equal one candidate groupId",
-                    "do not invent group ids",
-                    "use only relative path/file summaries",
-                    "DO: select exactly one selectedGroupId from candidateGroups only when it matches the supplied episodeDistribution.",
-                    "DO: set confidence from 0.0 to 1.0 and explain the season/episode distribution evidence in reason.",
-                    "DO NOT: invent group ids, use group names as ids, select by popularity, or select a group that is not present in candidateGroups.",
-                    "DO NOT: output metadata, ProviderIds, extra TMDb series/movie/season/episode IDs, titles, images, people, scraper mode changes, refresh actions, or configuration text.",
-                    "DO NOT: request a metadata refresh, change scraper source, or treat the selected episode group as proof that another TMDb series id is correct.",
-                    "DO NOT: treat relative paths or filenames as authoritative when they conflict with candidateGroups or episodeDistribution.",
-                    "If no candidate clearly matches, return selectedGroupId as an empty string with confidence 0.0 and a reason.",
-                },
+                constraints = BasePromptConstraints.Concat(distributionConstraints).ToArray(),
             };
 
             return JsonSerializer.Serialize(payload, JsonOptions);

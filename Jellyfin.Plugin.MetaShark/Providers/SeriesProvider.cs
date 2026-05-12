@@ -172,6 +172,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var effectiveSid = doubanAllowed ? sid : null;
             var hasBridgedExplicitSearchMissingMetadataRefreshIntent = this.TryResolveBridgedSearchMissingMetadataRefreshIntent(info);
+            var hasBridgedExplicitOverwriteMetadataRefreshIntent = this.TryResolveBridgedOverwriteMetadataRefreshIntent(info);
 
             var tmdbSourceIsPrimary = hasPersistedDoubanTmdbCorrection
                 || (metaSource == MetaSource.Tmdb && (!doubanAllowed || string.IsNullOrWhiteSpace(sid)));
@@ -379,7 +380,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 if (!string.IsNullOrEmpty(tmdbId))
                 {
                     await this.TryPopulateTvExternalIdsFromTmdbAsync(item, tmdbId, info, cancellationToken).ConfigureAwait(false);
-                    await this.TryAssistEpisodeGroupMappingWithLlmAsync(tmdbId, item.Name, info, semantic, hasBridgedExplicitSearchMissingMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
+                    await this.TryAssistEpisodeGroupMappingWithLlmAsync(tmdbId, item.Name, info, semantic, hasBridgedExplicitSearchMissingMetadataRefreshIntent, hasBridgedExplicitOverwriteMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
                 }
 
                 // 通过imdb获取电影分级信息
@@ -429,7 +430,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
                 if (tmdbResult.HasMetadata)
                 {
-                    await this.TryAssistEpisodeGroupMappingWithLlmAsync(tmdbId, tmdbResult.Item?.Name, info, semantic, hasBridgedExplicitSearchMissingMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
+                    await this.TryAssistEpisodeGroupMappingWithLlmAsync(tmdbId, tmdbResult.Item?.Name, info, semantic, hasBridgedExplicitSearchMissingMetadataRefreshIntent, hasBridgedExplicitOverwriteMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
                 }
 
                 ApplyLlmExternalIdWrites(tmdbResult, llmExternalIdResolutionResult);
@@ -1054,7 +1055,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return await this.GuestByTmdbAsync(title, searchHints.Year, info, cancellationToken).ConfigureAwait(false);
         }
 
-        private async Task TryAssistEpisodeGroupMappingWithLlmAsync(string? tmdbId, string? seriesTitle, SeriesInfo info, DefaultScraperSemantic semantic, bool hasBridgedExplicitSearchMissingMetadataRefreshIntent, CancellationToken cancellationToken)
+        private async Task TryAssistEpisodeGroupMappingWithLlmAsync(string? tmdbId, string? seriesTitle, SeriesInfo info, DefaultScraperSemantic semantic, bool hasBridgedExplicitSearchMissingMetadataRefreshIntent, bool hasBridgedExplicitOverwriteMetadataRefreshIntent, CancellationToken cancellationToken)
         {
             if (this.llmEpisodeGroupMappingProviderAssistService == null
                 || !int.TryParse(tmdbId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seriesTmdbId))
@@ -1076,6 +1077,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         Semantic = semantic,
                         HttpContext = this.HttpContextAccessor.HttpContext,
                         HasBridgedExplicitSearchMissingMetadataRefreshIntent = hasBridgedExplicitSearchMissingMetadataRefreshIntent,
+                        HasBridgedExplicitOverwriteMetadataRefreshIntent = hasBridgedExplicitOverwriteMetadataRefreshIntent,
                         SafeRelativePathSamples = string.IsNullOrWhiteSpace(safePath) ? Array.Empty<string?>() : new[] { safePath },
                     },
                     cancellationToken)
@@ -1147,7 +1149,26 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 _ = TryResolveItemIdFromRequestPath(this.HttpContextAccessor.HttpContext, out itemId);
             }
 
-            return this.tmdbCorrectionRefreshIntentStore.HasPending(itemId, series?.Path ?? info.Path);
+            return this.tmdbCorrectionRefreshIntentStore.HasPendingSearchMissing(itemId, series?.Path ?? info.Path);
+        }
+
+        private bool TryResolveBridgedOverwriteMetadataRefreshIntent(SeriesInfo info)
+        {
+            if (TmdbCorrectionRefreshIntentClassifier.IsExplicitOverwriteMetadataRefresh(this.HttpContextAccessor.HttpContext))
+            {
+                return false;
+            }
+
+            var series = !string.IsNullOrWhiteSpace(info.Path)
+                ? this.LibraryManager.FindByPath(info.Path, true) as Series
+                : null;
+            var itemId = series?.Id ?? Guid.Empty;
+            if (itemId == Guid.Empty)
+            {
+                _ = TryResolveItemIdFromRequestPath(this.HttpContextAccessor.HttpContext, out itemId);
+            }
+
+            return this.tmdbCorrectionRefreshIntentStore.HasPendingOverwrite(itemId, series?.Path ?? info.Path);
         }
 
         private static bool ShouldRearmQueuedOverwriteCandidate(DefaultScraperSemantic semantic, HttpContext? httpContext, Guid expectedItemId)

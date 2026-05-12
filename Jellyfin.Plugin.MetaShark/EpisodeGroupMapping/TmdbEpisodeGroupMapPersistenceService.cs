@@ -15,10 +15,12 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     {
         private readonly object syncRoot = new object();
         private readonly EpisodeGroupMapParser parser;
+        private readonly bool saveLlmMapping;
 
-        public TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser? parser = null)
+        public TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser? parser = null, bool saveLlmMapping = false)
         {
             this.parser = parser ?? EpisodeGroupMapParser.Shared;
+            this.saveLlmMapping = saveLlmMapping;
         }
 
         public Task<TmdbEpisodeGroupMapPersistenceResult> TrySaveAsync(string? expectedOldMapping, string? newMapping, CancellationToken cancellationToken)
@@ -40,7 +42,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var currentConfiguration = plugin.Configuration;
-                var currentSnapshot = this.parser.ParseSnapshot(currentConfiguration.TmdbEpisodeGroupMap);
+                var currentSnapshot = this.parser.ParseSnapshot(this.saveLlmMapping ? currentConfiguration.LlmTmdbEpisodeGroupMap : currentConfiguration.TmdbEpisodeGroupMap);
                 var expectedSnapshot = this.parser.ParseSnapshot(expectedOldMapping);
                 var newSnapshot = this.parser.ParseSnapshot(newMapping);
 
@@ -56,7 +58,14 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
                 var previousConfiguration = CloneConfiguration(currentConfiguration);
                 var updatedConfiguration = CloneConfiguration(currentConfiguration);
-                updatedConfiguration.TmdbEpisodeGroupMap = newSnapshot.CanonicalText;
+                if (this.saveLlmMapping)
+                {
+                    updatedConfiguration.LlmTmdbEpisodeGroupMap = newSnapshot.CanonicalText;
+                }
+                else
+                {
+                    updatedConfiguration.TmdbEpisodeGroupMap = newSnapshot.CanonicalText;
+                }
 
                 if (plugin.TrySaveConfigurationSafely(updatedConfiguration, previousConfiguration, out var saveException))
                 {

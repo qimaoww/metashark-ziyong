@@ -20,5 +20,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         public HttpContext? HttpContext { get; set; }
 
         public bool HasBridgedExplicitSearchMissingMetadataRefreshIntent { get; set; }
+
+        public bool HasBridgedExplicitOverwriteMetadataRefreshIntent { get; set; }
+
+        public bool AllowOverwriteRefresh { get; set; }
     }
 }

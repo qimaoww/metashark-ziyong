@@ -12,6 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
     using Jellyfin.Plugin.MetaShark.Model;
     using MediaBrowser.Common.Extensions;
@@ -140,7 +141,10 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         [HttpPost]
         public ApiResult RefreshSeriesByEpisodeGroupMap([FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] TmdbEpisodeGroupRefreshRequest? request = null)
         {
-            var currentMapping = MetaSharkPlugin.Instance?.Configuration.TmdbEpisodeGroupMap ?? string.Empty;
+            var configuration = MetaSharkPlugin.Instance?.Configuration;
+            var currentMapping = TmdbEpisodeGroupMapping.GetEffectiveMappingText(
+                configuration?.TmdbEpisodeGroupMap,
+                configuration?.LlmTmdbEpisodeGroupMap);
             var refreshResult = this.episodeGroupRefreshService.CreateRefreshResult(
                 request?.OldMapping ?? string.Empty,
                 request?.NewMapping ?? currentMapping);

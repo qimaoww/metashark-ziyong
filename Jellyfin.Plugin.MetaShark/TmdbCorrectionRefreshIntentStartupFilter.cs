@@ -32,7 +32,11 @@ namespace Jellyfin.Plugin.MetaShark
                 {
                     if (TmdbCorrectionRefreshIntentClassifier.TryResolveExplicitSearchMissingMetadataRefreshItemId(context, out var itemId))
                     {
-                        this.refreshIntentStore.Save(itemId, ResolveItemPath(this.libraryManager.GetItemById(itemId)));
+                        this.refreshIntentStore.SaveSearchMissing(itemId, ResolveItemPath(this.libraryManager.GetItemById(itemId)));
+                    }
+                    else if (TmdbCorrectionRefreshIntentClassifier.TryResolveExplicitOverwriteMetadataRefreshItemId(context, out itemId))
+                    {
+                        this.refreshIntentStore.SaveOverwrite(itemId, ResolveItemPath(this.libraryManager.GetItemById(itemId)));
                     }
 
                     await nextMiddleware().ConfigureAwait(false);

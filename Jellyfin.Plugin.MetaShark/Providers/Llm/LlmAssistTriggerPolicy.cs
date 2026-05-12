@@ -45,6 +45,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 return this.Rejected(context, "AutomaticRefreshRejected");
             }
 
+            if (context.AllowOverwriteRefresh && IsOverwriteRefresh(context.HttpContext))
+            {
+                return this.Allowed(context, "ExplicitOverwriteRefresh");
+            }
+
+            if (context.AllowOverwriteRefresh
+                && context.HasBridgedExplicitOverwriteMetadataRefreshIntent
+                && context.Semantic == DefaultScraperSemantic.UserRefresh)
+            {
+                return this.Allowed(context, "ExplicitOverwriteRefresh");
+            }
+
             if (context.Semantic == DefaultScraperSemantic.OverwriteRefresh || IsOverwriteRefresh(context.HttpContext))
             {
                 return this.Rejected(context, "OverwriteRefreshRejected");

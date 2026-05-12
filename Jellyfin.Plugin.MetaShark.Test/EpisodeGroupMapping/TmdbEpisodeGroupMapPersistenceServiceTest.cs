@@ -53,6 +53,25 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
         }
 
         [TestMethod]
+        public async Task TrySaveAsync_WhenSavingLlmMapping_ShouldPersistLlmFieldAndLeaveManualFieldUnchanged()
+        {
+            ReplacePluginConfiguration(CreateConfiguration(existingMapping: "65942=manual-group", existingLlmMapping: "70000=llm-group"));
+            var service = new TmdbEpisodeGroupMapPersistenceService(saveLlmMapping: true);
+            Assert.IsNotNull(currentSerializer);
+
+            var result = await service.TrySaveAsync("70000=llm-group", "65942=llm-group\n70000=llm-group", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(TmdbEpisodeGroupMapPersistenceStatus.Saved, result.Status);
+            Assert.AreEqual("65942=manual-group", MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("65942=llm-group\n70000=llm-group", MetaSharkPlugin.Instance.Configuration.LlmTmdbEpisodeGroupMap);
+            Assert.AreEqual(MetaSharkPlugin.Instance.ConfigurationFilePath, currentSerializer!.LastSerializedFilePath);
+            var fileContent = File.ReadAllText(MetaSharkPlugin.Instance.ConfigurationFilePath);
+            StringAssert.Contains(fileContent, "<TmdbEpisodeGroupMap>65942=manual-group</TmdbEpisodeGroupMap>");
+            StringAssert.Contains(fileContent, "<LlmTmdbEpisodeGroupMap>65942=llm-group");
+            StringAssert.Contains(fileContent, "70000=llm-group</LlmTmdbEpisodeGroupMap>");
+        }
+
+        [TestMethod]
         public async Task TrySaveAsync_WhenExpectedAndNewMappingsAreSemanticallySame_ShouldReturnNoChangeWithoutSaving()
         {
             ReplacePluginConfiguration(CreateConfiguration(existingMapping: "65942=group-a\n70000=group-b"));
@@ -102,13 +121,14 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.AreEqual("<PluginConfiguration><TmdbEpisodeGroupMap>65942=old-group</TmdbEpisodeGroupMap></PluginConfiguration>", File.ReadAllText(originalFilePath));
         }
 
-        private static PluginConfiguration CreateConfiguration(string existingMapping)
+        private static PluginConfiguration CreateConfiguration(string existingMapping, string existingLlmMapping = "")
         {
             return new PluginConfiguration
             {
                 EnableLlmAssist = true,
                 EnableLlmEpisodeGroupMappingAssist = true,
                 TmdbEpisodeGroupMap = existingMapping,
+                LlmTmdbEpisodeGroupMap = existingLlmMapping,
             };
         }
 
@@ -188,10 +208,10 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 this.SerializeToFileCallCount++;
                 this.LastSerializedFilePath = file;
                 Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-                var mapping = obj is PluginConfiguration configuration
-                    ? configuration.TmdbEpisodeGroupMap
-                    : string.Empty;
-                File.WriteAllText(file, $"<PluginConfiguration><TmdbEpisodeGroupMap>{mapping}</TmdbEpisodeGroupMap></PluginConfiguration>");
+                var configuration = obj as PluginConfiguration;
+                File.WriteAllText(
+                    file,
+                    $"<PluginConfiguration><TmdbEpisodeGroupMap>{configuration?.TmdbEpisodeGroupMap ?? string.Empty}</TmdbEpisodeGroupMap><LlmTmdbEpisodeGroupMap>{configuration?.LlmTmdbEpisodeGroupMap ?? string.Empty}</LlmTmdbEpisodeGroupMap></PluginConfiguration>");
             }
 
             public object DeserializeFromFile(Type type, string file)

@@ -81,5 +81,22 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.AreEqual(1, result.NewInvalidWarningCount);
             Assert.IsFalse(result.IsNoOp);
         }
+
+        [TestMethod]
+        public void CreateRefreshResult_ForEffectiveMappings_ManualDeletionFallsBackToLlmAsChangedSeries()
+        {
+            var oldEffectiveMapping = Jellyfin.Plugin.MetaShark.Core.TmdbEpisodeGroupMapping.GetEffectiveMappingText(
+                manualMapping: "65942=manual-group",
+                llmMapping: "65942=llm-group");
+            var newEffectiveMapping = Jellyfin.Plugin.MetaShark.Core.TmdbEpisodeGroupMapping.GetEffectiveMappingText(
+                manualMapping: string.Empty,
+                llmMapping: "65942=llm-group");
+
+            var result = this.service.CreateRefreshResult(oldEffectiveMapping, newEffectiveMapping);
+
+            CollectionAssert.AreEqual(new[] { "65942" }, result.ChangedSeriesIds.ToArray());
+            CollectionAssert.AreEqual(new[] { "65942" }, result.AffectedSeriesIds.ToArray());
+            Assert.IsFalse(result.IsNoOp);
+        }
     }
 }

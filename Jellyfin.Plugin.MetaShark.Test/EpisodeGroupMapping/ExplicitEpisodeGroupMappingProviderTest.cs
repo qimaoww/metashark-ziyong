@@ -116,6 +116,85 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
         }
 
         [TestMethod]
+        public void ResolveEpisodeRequestAsync_WhenManualMissing_UsesLlmGroupMapping()
+        {
+            ExplicitEpisodeGroupMappingTestHelper.ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableTmdb = true,
+                TmdbEpisodeGroupMap = string.Empty,
+                LlmTmdbEpisodeGroupMap = "65942=llm-group",
+            });
+
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                tmdbApi,
+                "llm-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 1,
+                    name: "LLM 映射季",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 0, seasonNumber: 3, episodeNumber: 8)));
+            ExplicitEpisodeGroupMappingTestHelper.SeedDisplayOrderGroup(
+                tmdbApi,
+                65942,
+                "absolute",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 1,
+                    name: "绝对顺序",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 0, seasonNumber: 9, episodeNumber: 9)));
+
+            var provider = ExplicitEpisodeGroupMappingTestHelper.CreateResolver(this.loggerFactory, tmdbApi);
+
+            var resolved = Task.Run(async () =>
+                    await provider.ResolveAsync(65942, 1, 1, "absolute", "zh-CN", "zh-CN", CancellationToken.None).ConfigureAwait(false))
+                .GetAwaiter().GetResult();
+
+            Assert.IsNotNull(resolved);
+            Assert.AreEqual(3, resolved.Value.SeasonNumber, "手动映射为空时，应允许 LLM 自动映射先于 displayOrder 生效。 ");
+            Assert.AreEqual(8, resolved.Value.EpisodeNumber);
+        }
+
+        [TestMethod]
+        public void ResolveEpisodeRequestAsync_WhenManualAndLlmBothExist_ManualWins()
+        {
+            ExplicitEpisodeGroupMappingTestHelper.ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableTmdb = true,
+                TmdbEpisodeGroupMap = "65942=manual-group",
+                LlmTmdbEpisodeGroupMap = "65942=llm-group",
+            });
+
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                tmdbApi,
+                "manual-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 1,
+                    name: "手动映射季",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 0, seasonNumber: 2, episodeNumber: 5)));
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                tmdbApi,
+                "llm-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 1,
+                    name: "LLM 映射季",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 0, seasonNumber: 3, episodeNumber: 8)));
+
+            var provider = ExplicitEpisodeGroupMappingTestHelper.CreateResolver(this.loggerFactory, tmdbApi);
+
+            var resolved = Task.Run(async () =>
+                    await provider.ResolveAsync(65942, 1, 1, string.Empty, "zh-CN", "zh-CN", CancellationToken.None).ConfigureAwait(false))
+                .GetAwaiter().GetResult();
+
+            Assert.IsNotNull(resolved);
+            Assert.AreEqual(2, resolved.Value.SeasonNumber, "手动映射必须覆盖同 seriesId 的 LLM 自动映射。 ");
+            Assert.AreEqual(5, resolved.Value.EpisodeNumber);
+        }
+
+        [TestMethod]
         public void ResolveEpisodeRequestAsync_WhenGroupIdIsInvalid_FallsBackToDisplayOrder()
         {
             ExplicitEpisodeGroupMappingTestHelper.ReplacePluginConfiguration(new PluginConfiguration

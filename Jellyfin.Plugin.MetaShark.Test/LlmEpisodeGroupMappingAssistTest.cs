@@ -24,7 +24,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.NotTriggered, result.Status);
             Assert.AreEqual(0, llmApi.Prompts.Count);
-            Assert.AreEqual(string.Empty, configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual(string.Empty, configuration.LlmTmdbEpisodeGroupMap);
         }
 
         [TestMethod]
@@ -72,8 +72,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await service.SuggestAndWriteAsync(request, CancellationToken.None).ConfigureAwait(false);
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Updated, result.Status);
-            Assert.AreEqual("65942=candidate-group\n70000=group-b", configuration.TmdbEpisodeGroupMap);
-            Assert.AreEqual(configuration.TmdbEpisodeGroupMap, result.MappingText);
+            Assert.AreEqual("65942=candidate-group\n70000=group-b", configuration.LlmTmdbEpisodeGroupMap);
+            Assert.AreEqual(configuration.LlmTmdbEpisodeGroupMap, result.MappingText);
             Assert.AreEqual(1, llmApi.Prompts.Count);
             AssertPromptIsSafeAndCandidateOnly(llmApi.Prompts[0]);
         }
@@ -89,7 +89,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Rejected, result.Status);
             Assert.AreEqual("SelectedGroupNotInCandidates", result.Reason);
-            Assert.AreEqual(string.Empty, configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual(string.Empty, configuration.LlmTmdbEpisodeGroupMap);
         }
 
         [TestMethod]
@@ -105,7 +105,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Rejected, result.Status);
             Assert.AreEqual("SelectedGroupValidationFailed", result.Reason);
-            Assert.AreEqual(string.Empty, configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual(string.Empty, configuration.LlmTmdbEpisodeGroupMap);
         }
 
         [TestMethod]
@@ -119,7 +119,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Rejected, result.Status);
             Assert.AreEqual("ConfidenceBelowThreshold", result.Reason);
-            Assert.AreEqual(string.Empty, configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual(string.Empty, configuration.LlmTmdbEpisodeGroupMap);
         }
 
         [TestMethod]
@@ -136,13 +136,34 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.NoChange, result.Status);
             Assert.AreEqual("65942=candidate-group", result.PreviousMapping);
-            Assert.AreEqual("65942=candidate-group", configuration.TmdbEpisodeGroupMap);
-            Assert.AreEqual(1, configuration.TmdbEpisodeGroupMap.Split('\n').Length);
+            Assert.AreEqual("65942=candidate-group", configuration.LlmTmdbEpisodeGroupMap);
+            Assert.AreEqual(1, configuration.LlmTmdbEpisodeGroupMap.Split('\n').Length);
             Assert.AreEqual(0, persistenceService.Calls.Count);
         }
 
         [TestMethod]
-        public async Task SuggestAndWriteAsync_WhenDifferentMappingExistsAndManual_ShouldUpdateCanonicalMapping()
+        public async Task SuggestAndWriteAsync_WhenManualMappingExists_ShouldNotOverwriteManualOrWriteLlmMap()
+        {
+            var llmApi = new RecordingLlmApi("candidate-group", 0.95);
+            var configuration = CreateConfiguration(existingMapping: "70000=llm-existing");
+            configuration.TmdbEpisodeGroupMap = "65942=manual-group";
+            var tmdbApi = CreateTmdbApi();
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(tmdbApi, "candidate-group", "zh-CN");
+            var persistenceService = new RecordingPersistenceService();
+            var service = CreateService(llmApi, tmdbApi, persistenceService);
+
+            var result = await service.SuggestAndWriteAsync(CreateRequest(configuration), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.NoChange, result.Status);
+            Assert.AreEqual("ManualMappingAlreadyExists", result.Reason);
+            Assert.AreEqual("65942=manual-group", configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("70000=llm-existing", configuration.LlmTmdbEpisodeGroupMap);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+            Assert.AreEqual(0, persistenceService.Calls.Count);
+        }
+
+        [TestMethod]
+        public async Task SuggestAndWriteAsync_WhenDifferentLlmMappingExists_ShouldUpdateCanonicalMapping()
         {
             var llmApi = new RecordingLlmApi("candidate-group", 0.95);
             var configuration = CreateConfiguration(existingMapping: "70000=group-b\n65942=old-group");
@@ -155,7 +176,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Updated, result.Status);
             Assert.AreEqual("65942=old-group\n70000=group-b", result.PreviousMapping);
-            Assert.AreEqual("65942=candidate-group\n70000=group-b", configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("65942=candidate-group\n70000=group-b", configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(1, persistenceService.Calls.Count);
             Assert.AreEqual("65942=old-group\n70000=group-b", persistenceService.Calls[0].ExpectedOldMapping);
             Assert.AreEqual("65942=candidate-group\n70000=group-b", persistenceService.Calls[0].NewMapping);
@@ -177,7 +198,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("MappingChangedBeforeSave", result.Reason);
             Assert.AreEqual("65942=old-group\n70000=group-b", result.PreviousMapping);
             Assert.AreEqual("65942=other-group\n70000=group-b", result.MappingText);
-            Assert.AreEqual("65942=other-group\n70000=group-b", configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("65942=other-group\n70000=group-b", configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(1, persistenceService.Calls.Count);
         }
 
@@ -196,7 +217,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Failed, result.Status);
             Assert.AreEqual("SaveConfigurationFailed", result.Reason);
             Assert.AreEqual("65942=old-group\n70000=group-b", result.PreviousMapping);
-            Assert.AreEqual("65942=old-group\n70000=group-b", configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("65942=old-group\n70000=group-b", configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(1, persistenceService.Calls.Count);
         }
 
@@ -234,9 +255,30 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Updated, result.Status);
             Assert.AreEqual("candidate-group-2", result.SelectedGroupId);
-            Assert.AreEqual("65942=candidate-group-2\n70000=group-b", configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("65942=candidate-group-2\n70000=group-b", configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(1, persistenceService.Calls.Count);
             Assert.AreEqual("65942=candidate-group-2\n70000=group-b", persistenceService.Calls[0].NewMapping);
+        }
+
+        [TestMethod]
+        public async Task SuggestAndWriteAsync_WhenEpisodeDistributionMissing_ShouldPromptFallbackToCandidateSelection()
+        {
+            var llmApi = new RecordingLlmApi("candidate-group", 0.95);
+            var configuration = CreateConfiguration();
+            var tmdbApi = CreateTmdbApi();
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(tmdbApi, "candidate-group", "zh-CN");
+            var service = CreateService(llmApi, tmdbApi);
+            var request = CreateRequest(configuration);
+            request.EpisodeDistribution = Array.Empty<LlmEpisodeDistributionItem?>();
+
+            var result = await service.SuggestAndWriteAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Updated, result.Status);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
+            using var document = JsonDocument.Parse(llmApi.Prompts[0]);
+            var constraints = string.Join("\n", document.RootElement.GetProperty("constraints").EnumerateArray().Select(constraint => constraint.GetString()));
+            Assert.IsTrue(constraints.Contains("When episodeDistribution is empty", StringComparison.Ordinal), constraints);
+            Assert.IsFalse(constraints.Contains("only when it matches the supplied episodeDistribution", StringComparison.Ordinal), constraints);
         }
 
         [TestMethod]
@@ -252,7 +294,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.NotTriggered, result.Status);
             Assert.AreEqual("NonManualTriggerRejected", result.Reason);
-            Assert.AreEqual("65942=old-group", configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("65942=old-group", configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(0, llmApi.Prompts.Count);
         }
 
@@ -283,7 +325,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 EnableLlmAssist = true,
                 EnableLlmEpisodeGroupMappingAssist = enableMappingAssist,
                 LlmEpisodeGroupMappingMinConfidence = 0.80,
-                TmdbEpisodeGroupMap = existingMapping,
+                LlmTmdbEpisodeGroupMap = existingMapping,
             };
         }
 

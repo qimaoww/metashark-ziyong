@@ -13,6 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Providers;
     using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using MediaBrowser.Controller.Entities;
@@ -30,6 +31,9 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
         private static readonly Action<ILogger, int, Exception?> LogQueuedRefresh =
             LoggerMessage.Define<int>(LogLevel.Information, new EventId(1, nameof(LlmEpisodeGroupMappingProviderAssistService)), "[MetaShark] LLM 剧集组映射变更已排队刷新. Count={Count}.");
+
+        private static readonly Action<ILogger, string, string, string, string, int, bool, Exception?> LogAssistCompleted =
+            LoggerMessage.Define<string, string, string, string, int, bool>(LogLevel.Information, new EventId(2, "EpisodeGroupMappingAssist.Completed"), "[MetaShark] LLM 剧集组映射辅助完成. status={Status} reason={ReasonCode} seriesTmdbId={SeriesTmdbId} selectedGroupId={SelectedGroupId} candidateCount={CandidateCount} wroteMapping={WroteMapping}.");
 
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> SeriesLocks = new(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, (string GroupId, DateTimeOffset ExpiresAt)> SuppressedRefreshSeriesIds = new(StringComparer.OrdinalIgnoreCase);
@@ -79,7 +83,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         public async Task<LlmEpisodeGroupMappingAssistResult> SuggestWriteAndRefreshAsync(LlmEpisodeGroupMappingProviderAssistRequest request, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(request);
-            var currentMapping = request.Configuration?.TmdbEpisodeGroupMap ?? string.Empty;
+            var currentMapping = request.Configuration?.LlmTmdbEpisodeGroupMap ?? string.Empty;
             var seriesTmdbIdText = request.SeriesTmdbId.HasValue && request.SeriesTmdbId.Value > 0
                 ? request.SeriesTmdbId.Value.ToString(CultureInfo.InvariantCulture)
                 : string.Empty;
@@ -94,7 +98,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
             try
             {
-                currentMapping = request.Configuration?.TmdbEpisodeGroupMap ?? string.Empty;
+                currentMapping = request.Configuration?.LlmTmdbEpisodeGroupMap ?? string.Empty;
                 var triggerDecision = this.triggerPolicy.Evaluate(new LlmAssistTriggerContext
                 {
                     Configuration = request.Configuration,
@@ -102,13 +106,17 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                     MediaType = request.MediaType,
                     IsImageProvider = false,
                     HttpContext = request.HttpContext,
+                    AllowOverwriteRefresh = true,
+                    HasBridgedExplicitOverwriteMetadataRefreshIntent = request.HasBridgedExplicitOverwriteMetadataRefreshIntent,
                 });
-                if (!triggerDecision.ShouldTrigger
-                    && request.HasBridgedExplicitSearchMissingMetadataRefreshIntent
-                    && request.Semantic == DefaultScraperSemantic.UserRefresh
-                    && string.Equals(triggerDecision.Reason, "ImplicitRefreshRejected", StringComparison.Ordinal))
+                if (!triggerDecision.ShouldTrigger && IsBridgedExplicitSearchMissingRefresh(request, triggerDecision))
                 {
                     triggerDecision = LlmAssistTriggerDecision.Allowed("ExplicitSearchMissingMetadataRefresh");
+                }
+
+                if (!triggerDecision.ShouldTrigger && IsBridgedExplicitOverwriteRefresh(request, triggerDecision))
+                {
+                    triggerDecision = LlmAssistTriggerDecision.Allowed("ExplicitOverwriteRefresh");
                 }
 
                 if (!triggerDecision.ShouldTrigger)
@@ -132,9 +140,12 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                         cancellationToken)
                     .ConfigureAwait(false);
 
+                LogAssistResult(this.logger, result, seriesTmdbIdText, candidates.Count);
                 if (result.WroteMapping)
                 {
-                    this.QueueAffectedSeriesRefresh(result.PreviousMapping, result.MappingText);
+                    this.QueueAffectedSeriesRefresh(
+                        TmdbEpisodeGroupMapping.GetEffectiveMappingText(request.Configuration?.TmdbEpisodeGroupMap, result.PreviousMapping),
+                        TmdbEpisodeGroupMapping.GetEffectiveMappingText(request.Configuration?.TmdbEpisodeGroupMap, result.MappingText));
                 }
 
                 return result;
@@ -142,6 +153,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             finally
             {
                 seriesLock.Release();
+                ReleaseSeriesLock(seriesTmdbIdText, seriesLock);
             }
         }
 
@@ -160,6 +172,21 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                     .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Id))
                     .Select(CreateCandidate)
                     .ToArray();
+        }
+
+        private static void LogAssistResult(ILogger logger, LlmEpisodeGroupMappingAssistResult result, string seriesTmdbId, int candidateCount)
+        {
+            ArgumentNullException.ThrowIfNull(result);
+
+            LogAssistCompleted(
+                logger,
+                result.Status.ToString(),
+                string.IsNullOrWhiteSpace(result.Reason) ? "Updated" : result.Reason,
+                string.IsNullOrWhiteSpace(seriesTmdbId) ? "Unknown" : seriesTmdbId,
+                string.IsNullOrWhiteSpace(result.SelectedGroupId) ? string.Empty : result.SelectedGroupId!,
+                candidateCount,
+                result.WroteMapping,
+                null);
         }
 
         private void QueueAffectedSeriesRefresh(string oldMapping, string newMapping)
@@ -220,6 +247,27 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             return SeriesLocks.GetOrAdd(seriesTmdbId ?? string.Empty, _ => new SemaphoreSlim(1, 1));
         }
 
+        private static void ReleaseSeriesLock(string seriesTmdbId, SemaphoreSlim seriesLock)
+        {
+            if (seriesLock.CurrentCount == 1)
+            {
+                SeriesLocks.TryRemove(new KeyValuePair<string, SemaphoreSlim>(seriesTmdbId ?? string.Empty, seriesLock));
+            }
+        }
+
+        private static bool IsBridgedExplicitSearchMissingRefresh(LlmEpisodeGroupMappingProviderAssistRequest request, LlmAssistTriggerDecision triggerDecision)
+        {
+            return request.HasBridgedExplicitSearchMissingMetadataRefreshIntent
+                && request.Semantic == DefaultScraperSemantic.UserRefresh
+                && string.Equals(triggerDecision.Reason, "ImplicitRefreshRejected", StringComparison.Ordinal);
+        }
+
+        private static bool IsBridgedExplicitOverwriteRefresh(LlmEpisodeGroupMappingProviderAssistRequest request, LlmAssistTriggerDecision triggerDecision)
+        {
+            return request.HasBridgedExplicitOverwriteMetadataRefreshIntent
+                && triggerDecision.Reason is "ImplicitRefreshRejected" or "AutomaticRefreshRejected";
+        }
+
         private static bool ShouldSuppressRefreshLoop(LlmEpisodeGroupMappingProviderAssistRequest request, string seriesTmdbId)
         {
             if (request.Semantic != DefaultScraperSemantic.UserRefresh || string.IsNullOrWhiteSpace(seriesTmdbId))
@@ -227,7 +275,9 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 return false;
             }
 
-            var currentMapping = request.Configuration?.TmdbEpisodeGroupMap ?? string.Empty;
+            var currentMapping = TmdbEpisodeGroupMapping.GetEffectiveMappingText(
+                request.Configuration?.TmdbEpisodeGroupMap,
+                request.Configuration?.LlmTmdbEpisodeGroupMap);
             var currentSnapshot = EpisodeGroupMapParser.Shared.ParseSnapshot(currentMapping);
             var currentGroupId = currentSnapshot.TryGetGroupId(seriesTmdbId, out var resolvedGroupId)
                 ? resolvedGroupId

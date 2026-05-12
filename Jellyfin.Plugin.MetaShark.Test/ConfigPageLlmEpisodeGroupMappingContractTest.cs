@@ -13,12 +13,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             var html = ReadConfigPageHtml();
             var mapIndex = html.IndexOf("id=\"TmdbEpisodeGroupMap\"", StringComparison.Ordinal);
+            var llmHeadingIndex = html.IndexOf("<h3>LLM 辅助刮削</h3>", StringComparison.Ordinal);
             var toggleIndex = html.IndexOf("id=\"EnableLlmEpisodeGroupMappingAssist\"", StringComparison.Ordinal);
-            var backfillIndex = html.IndexOf("id=\"EnableSearchMissingMetadataEpisodeTitleBackfill\"", StringComparison.Ordinal);
 
             Assert.IsTrue(mapIndex >= 0, "配置页必须保留 TmdbEpisodeGroupMap textarea。");
-            Assert.IsTrue(toggleIndex > mapIndex, "LLM 剧集组映射开关必须位于 TmdbEpisodeGroupMap 下方。");
-            Assert.IsTrue(backfillIndex > toggleIndex, "LLM 剧集组映射开关应紧跟在 TmdbEpisodeGroupMap 后、其它高级项前。");
+            Assert.IsTrue(llmHeadingIndex > mapIndex, "LLM 分组必须位于手动 TmdbEpisodeGroupMap 后方。");
+            Assert.IsTrue(toggleIndex > llmHeadingIndex, "LLM 剧集组映射开关必须移动到 LLM 辅助刮削分组内。");
         }
 
         [TestMethod]
@@ -40,14 +40,16 @@ namespace Jellyfin.Plugin.MetaShark.Test
         public void ShouldRenderTuningInputsBelowEpisodeGroupMappingAssistToggle()
         {
             var html = ReadConfigPageHtml();
+            var llmBlock = GetLlmAssistBlock(html);
             var toggleIndex = html.IndexOf("id=\"EnableLlmEpisodeGroupMappingAssist\"", StringComparison.Ordinal);
+            var llmMapIndex = html.IndexOf("id=\"LlmTmdbEpisodeGroupMap\"", StringComparison.Ordinal);
             var minConfidenceIndex = html.IndexOf("id=\"LlmEpisodeGroupMappingMinConfidence\"", StringComparison.Ordinal);
             var maxCandidateGroupsIndex = html.IndexOf("id=\"LlmEpisodeGroupMappingMaxCandidateGroups\"", StringComparison.Ordinal);
-            var backfillIndex = html.IndexOf("id=\"EnableSearchMissingMetadataEpisodeTitleBackfill\"", StringComparison.Ordinal);
 
             Assert.IsTrue(minConfidenceIndex > toggleIndex, "剧集组映射专用置信度输入必须位于 LLM 剧集组映射开关下方。");
             Assert.IsTrue(maxCandidateGroupsIndex > minConfidenceIndex, "剧集组映射候选组上限输入必须位于专用置信度输入下方。");
-            Assert.IsTrue(backfillIndex > maxCandidateGroupsIndex, "剧集组映射调参项应位于其它高级项前。");
+            Assert.IsTrue(llmMapIndex > maxCandidateGroupsIndex, "LLM 自动剧集组映射 textarea 必须位于调参项下方。");
+            Assert.IsTrue(llmBlock.Contains("id=\"LlmTmdbEpisodeGroupMap\"", StringComparison.Ordinal), "LLM 自动剧集组映射必须显示在 LLM 分组里。");
             AssertNumberInput(html, "LlmEpisodeGroupMappingMinConfidence", "0", "1", "0.01");
             AssertNumberInput(html, "LlmEpisodeGroupMappingMaxCandidateGroups", "1", "50", "1");
             Assert.IsTrue(html.Contains("用于自动写回 TMDb 剧集组映射的最低置信度，允许范围 0.0-1.0，默认 0.80。", StringComparison.Ordinal), "置信度输入必须说明用途、范围和默认值。");
@@ -62,8 +64,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(2, CountOccurrences(html, "config.EnableLlmEpisodeGroupMappingAssist"), "开关应只在 pageshow 和 submit 各绑定一次。 ");
             Assert.IsTrue(html.Contains("document.querySelector('#EnableLlmEpisodeGroupMappingAssist').checked = config.EnableLlmEpisodeGroupMappingAssist;", StringComparison.Ordinal));
             Assert.IsTrue(html.Contains("config.EnableLlmEpisodeGroupMappingAssist = document.querySelector('#EnableLlmEpisodeGroupMappingAssist').checked;", StringComparison.Ordinal));
-            AssertRoundTripNumber(html, "LlmEpisodeGroupMappingMinConfidence");
-            AssertRoundTripNumber(html, "LlmEpisodeGroupMappingMaxCandidateGroups");
+            AssertRoundTripNumber(html, "LlmEpisodeGroupMappingMinConfidence", "config.LlmEpisodeGroupMappingMinConfidence");
+            AssertRoundTripNumber(html, "LlmEpisodeGroupMappingMaxCandidateGroups", "config.LlmEpisodeGroupMappingMaxCandidateGroups");
         }
 
         [TestMethod]
@@ -74,9 +76,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(html.Contains("lastEpisodeGroupMap = config.TmdbEpisodeGroupMap || '';", StringComparison.Ordinal));
             Assert.IsTrue(html.Contains("document.querySelector('#TmdbEpisodeGroupMap').value = lastEpisodeGroupMap;", StringComparison.Ordinal));
             Assert.IsTrue(html.Contains("var previousEpisodeGroupMap = config.TmdbEpisodeGroupMap || '';", StringComparison.Ordinal));
+            Assert.IsTrue(html.Contains("var previousLlmEpisodeGroupMap = config.LlmTmdbEpisodeGroupMap || '';", StringComparison.Ordinal));
             Assert.IsTrue(html.Contains("config.TmdbEpisodeGroupMap = document.querySelector('#TmdbEpisodeGroupMap').value;", StringComparison.Ordinal));
-            Assert.IsTrue(html.Contains("refreshSeriesIfMappingChanged(previousEpisodeGroupMap, config.TmdbEpisodeGroupMap);", StringComparison.Ordinal));
+            Assert.IsTrue(html.Contains("config.LlmTmdbEpisodeGroupMap = document.querySelector('#LlmTmdbEpisodeGroupMap').value;", StringComparison.Ordinal));
+            Assert.IsTrue(html.Contains("refreshSeriesIfMappingChanged(previousEpisodeGroupMap, config.TmdbEpisodeGroupMap, previousLlmEpisodeGroupMap, config.LlmTmdbEpisodeGroupMap);", StringComparison.Ordinal));
             Assert.IsTrue(html.Contains("url: '/plugin/metashark/tmdb/refresh-series'", StringComparison.Ordinal));
+            Assert.IsTrue(html.Contains("oldMapping: getEffectiveEpisodeGroupMap(oldManualMapping || '', oldLlmMapping || '')", StringComparison.Ordinal));
+            Assert.IsTrue(html.Contains("newMapping: getEffectiveEpisodeGroupMap(newManualMapping || '', newLlmMapping || '')", StringComparison.Ordinal));
         }
 
         private static string ReadConfigPageHtml()
@@ -92,6 +98,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 RegexOptions.Singleline);
 
             Assert.IsTrue(match.Success, "配置页缺少 EnableLlmEpisodeGroupMappingAssist 开关。 ");
+            return match.Value;
+        }
+
+        private static string GetLlmAssistBlock(string html)
+        {
+            var match = Regex.Match(
+                html,
+                @"<fieldset[^>]*>\s*<legend>\s*<h3>LLM 辅助刮削</h3>\s*</legend>(.*?)</fieldset>",
+                RegexOptions.Singleline);
+
+            Assert.IsTrue(match.Success, "configPage.html 缺少 LLM 辅助刮削分组。");
             return match.Value;
         }
 
@@ -126,11 +143,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(match.Value.Contains($@"step=""{step}""", StringComparison.Ordinal), $"{id} 必须声明 step={step}。");
         }
 
-        private static void AssertRoundTripNumber(string html, string propertyName)
+        private static void AssertRoundTripNumber(string html, string propertyName, string fallbackExpression)
         {
-            Assert.AreEqual(2, CountOccurrences(html, $"config.{propertyName}"), $"{propertyName} 应只在 pageshow 和 submit 各绑定一次。");
+            Assert.AreEqual(3, CountOccurrences(html, $"config.{propertyName}"), $"{propertyName} 应在 pageshow、submit 赋值和空值回退中各出现一次。");
             Assert.IsTrue(html.Contains($"document.querySelector('#{propertyName}').value = config.{propertyName};", StringComparison.Ordinal), $"{propertyName} pageshow 必须回填。");
-            Assert.IsTrue(html.Contains($"config.{propertyName} = document.querySelector('#{propertyName}').valueAsNumber;", StringComparison.Ordinal), $"{propertyName} submit 必须保存 number。");
+            Assert.IsTrue(html.Contains($"config.{propertyName} = getNumberInputValueOrFallback('#{propertyName}', {fallbackExpression});", StringComparison.Ordinal), $"{propertyName} submit 必须保存有效 number，空值或非法值保留旧配置。");
         }
     }
 }

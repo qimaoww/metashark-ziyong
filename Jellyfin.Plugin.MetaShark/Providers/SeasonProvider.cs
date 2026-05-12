@@ -395,7 +395,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return result;
             }
 
-            if (TmdbEpisodeGroupMapping.TryGetGroupId(Config.TmdbEpisodeGroupMap, seriesTmdbId, out var groupId))
+            if (TmdbEpisodeGroupMapping.TryGetGroupId(Config.TmdbEpisodeGroupMap, Config.LlmTmdbEpisodeGroupMap, seriesTmdbId, out var groupId))
             {
                 this.Log("TMDb 剧集组命中（季）: seriesId={0} groupId={1} season={2}", seriesTmdbId, groupId, seasonNumber);
                 var group = await this.TmdbApi

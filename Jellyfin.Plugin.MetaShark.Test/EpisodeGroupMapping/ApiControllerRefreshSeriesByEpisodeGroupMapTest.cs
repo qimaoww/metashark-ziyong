@@ -138,8 +138,24 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             var result = harness.Controller.RefreshSeriesByEpisodeGroupMap();
 
             Assert.AreEqual(1, result.Code);
-            Assert.AreEqual(CreateExpectedSummary(queued: 2, affected: 2, added: 2, removed: 0, changed: 0, newInvalid: 1, noOp: false), result.Msg);
+            Assert.AreEqual(CreateExpectedSummary(queued: 2, affected: 2, added: 2, removed: 0, changed: 0, noOp: false), result.Msg);
             AssertQueuedSeries(harness.QueueCalls, harness.Items.Select(x => x.Id).ToArray());
+        }
+
+        [TestMethod]
+        public void RefreshSeriesByEpisodeGroupMap_MissingBody_UsesEffectiveManualAndLlmConfiguration()
+        {
+            var series = CreateSeries(Guid.NewGuid(), "Series 65942", "65942");
+            using var harness = CreateHarness(
+                items: new[] { series },
+                currentMapping: string.Empty,
+                currentLlmMapping: "65942=llm-group");
+
+            var result = harness.Controller.RefreshSeriesByEpisodeGroupMap();
+
+            Assert.AreEqual(1, result.Code);
+            Assert.AreEqual(CreateExpectedSummary(queued: 1, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
+            AssertQueuedSeries(harness.QueueCalls, series.Id);
         }
 
         [TestMethod]
@@ -331,12 +347,13 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.Fail("Could not replace MetaSharkPlugin configuration for tests.");
         }
 
-        private ControllerHarness CreateHarness(IEnumerable<BaseItem> items, string currentMapping = "")
+        private ControllerHarness CreateHarness(IEnumerable<BaseItem> items, string currentMapping = "", string currentLlmMapping = "")
         {
             EnsurePluginInstance();
             ReplacePluginConfiguration(new PluginConfiguration
             {
                 TmdbEpisodeGroupMap = currentMapping,
+                LlmTmdbEpisodeGroupMap = currentLlmMapping,
             });
 
             var materializedItems = items.ToList();

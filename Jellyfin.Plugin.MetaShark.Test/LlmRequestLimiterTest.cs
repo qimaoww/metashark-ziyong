@@ -89,7 +89,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.NotTriggered, result.Status);
             Assert.AreEqual("LlmRequestLimiterBusy", result.Reason);
-            Assert.AreEqual(string.Empty, configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual(string.Empty, configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(0, api.CallCount);
         }
 

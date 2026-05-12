@@ -42,6 +42,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestInitialize]
         public void ResetConfigurationBeforeTest()
         {
+            ClearEpisodeGroupMappingRefreshLoopState();
             EnsurePluginInstance();
             ReplacePluginConfiguration(new PluginConfiguration());
         }
@@ -49,8 +50,19 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [TestCleanup]
         public void ResetConfigurationAfterTest()
         {
+            ClearEpisodeGroupMappingRefreshLoopState();
             EnsurePluginInstance();
             ReplacePluginConfiguration(new PluginConfiguration());
+        }
+
+        private static void ClearEpisodeGroupMappingRefreshLoopState()
+        {
+            foreach (var fieldName in new[] { "SuppressedRefreshSeriesIds", "RecentlyQueuedRefreshSeriesIds" })
+            {
+                var field = typeof(LlmEpisodeGroupMappingProviderAssistService).GetField(fieldName, BindingFlags.Static | BindingFlags.NonPublic);
+                var value = field?.GetValue(null) as System.Collections.IDictionary;
+                value?.Clear();
+            }
         }
 
         [TestMethod]
@@ -142,6 +154,91 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(0, externalIdService.Requests.Count);
             Assert.AreEqual(0, llmApi.Prompts.Count);
             Assert.AreEqual(0, refreshCalls.Count);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_BridgedOverwriteRefresh_InvokesEpisodeGroupMappingOnly()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true, enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var traces = new List<SeriesProvider.SeriesFlowTrace>();
+            SeriesProvider.TestTraceSink = traces.Add;
+            var doubanApi = new DoubanApi(loggerFactory);
+            var doubanSubject = CreateDoubanSubject("overwrite-bridge-douban", "覆盖桥接剧集", 2024);
+            doubanSubject.Imdb = "tt8871";
+            SeedDoubanSubject(doubanApi, doubanSubject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var tvShow = CreateTmdbSeries(8871, "覆盖桥接剧集", "覆盖桥接简介", "tt8871", "tvdb8871");
+            tvShow.EpisodeGroups = new ResultContainer<TvGroupCollection>
+            {
+                Results = new List<TvGroupCollection>
+                {
+                    new TvGroupCollection
+                    {
+                        Id = "overwrite-bridged-group",
+                        Name = "覆盖桥接映射组",
+                        Type = TvGroupType.Absolute,
+                        GroupCount = 1,
+                        EpisodeCount = 1,
+                    },
+                },
+            };
+            SeedTmdbSeries(tmdbApi, 8871, "zh-CN", tvShow);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(tmdbApi, "overwrite-bridged-group", "zh-CN");
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("ShouldNotBeUsed"));
+            externalIdService.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("9999", "should not be used"));
+            var llmApi = new RecordingLlmApi("overwrite-bridged-group", 0.95);
+            var assistRequests = new List<LlmEpisodeGroupMappingProviderAssistRequest>();
+            var assistResults = new List<LlmEpisodeGroupMappingAssistResult>();
+            var mappedSeries = CreateSeries(Guid.NewGuid(), "覆盖桥接剧集", "8871");
+            mappedSeries.Path = "/mnt/media/TV/覆盖桥接剧集";
+            var refreshCalls = new List<QueueRefreshCall>();
+            var refreshIntentStore = new InMemoryTmdbCorrectionRefreshIntentStore();
+            var itemId = mappedSeries.Id.ToString("N", CultureInfo.InvariantCulture);
+            var requestTimeContext = LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(itemId, replaceAllMetadata: true);
+            Assert.IsTrue(TmdbCorrectionRefreshIntentClassifier.TryResolveExplicitOverwriteMetadataRefreshItemId(requestTimeContext, out var refreshItemId));
+            refreshIntentStore.SaveOverwrite(refreshItemId, mappedSeries.Path);
+            Assert.IsTrue(refreshIntentStore.HasPendingOverwrite(refreshItemId, mappedSeries.Path), "test setup should seed overwrite bridge intent");
+            Assert.IsFalse(refreshIntentStore.HasPendingSearchMissing(refreshItemId, mappedSeries.Path), "overwrite bridge must not masquerade as search-missing");
+            var provider = CreateProvider(
+                loggerFactory,
+                new HttpContextAccessor { HttpContext = LlmProviderFlowTestHelpers.CreateQuerylessRefreshHttpContext(itemId) },
+                libraryManager: CreateLibraryManager(mappedSeries).Object,
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmEpisodeGroupMappingProviderAssistService: new RecordingEpisodeGroupMappingProviderAssistService(CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, new[] { mappedSeries }, refreshCalls), assistRequests, assistResults),
+                llmExternalIdResolutionService: externalIdService,
+                tmdbCorrectionRefreshIntentStore: refreshIntentStore);
+            var info = CreateSeriesInfo("覆盖桥接剧集", mappedSeries.Path);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "overwrite-bridge-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_overwrite-bridge-douban",
+                [MetadataProvider.Tmdb.ToString()] = "8871",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("8871", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual(0, externalIdService.ExistingProviderDecisionRequests.Count, "overwrite bridge 不应进入普通 external-id 补全。 ");
+            Assert.AreEqual(0, externalIdService.Requests.Count);
+            Assert.AreEqual(0, externalIdService.CorrectionRequests.Count, "overwrite bridge 不应打开 TMDb 纠错。 ");
+            Assert.AreEqual(
+                "Initial,BeforeDoubanMetadata",
+                string.Join(",", traces.Select(x => x.Stage)),
+                "测试应覆盖 queryless provider-time 的默认 Douban 主链。 ");
+            Assert.AreEqual(1, assistRequests.Count, "SeriesProvider 应把 overwrite bridge 传给剧集组映射服务。 ");
+            Assert.IsTrue(assistRequests[0].HasBridgedExplicitOverwriteMetadataRefreshIntent);
+            Assert.IsFalse(assistRequests[0].HasBridgedExplicitSearchMissingMetadataRefreshIntent);
+            Assert.AreEqual(1, assistResults.Count);
+            Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Updated, assistResults[0].Status, assistResults[0].Reason);
+            Assert.AreEqual(1, llmApi.Prompts.Count, "provider-time queryless 覆盖刷新仍应触发 LLM 剧集组映射。 ");
+            Assert.AreEqual("8871=overwrite-bridged-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
+            Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance.Configuration.TmdbEpisodeGroupMap);
+            AssertQueuedSeries(refreshCalls, mappedSeries.Id);
         }
 
         [TestMethod]
@@ -493,7 +590,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual(1, llmApi.Prompts.Count);
-            Assert.AreEqual("8840=candidate-group", MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual("8840=candidate-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(1, persistenceService.Calls.Count);
             AssertQueuedSeries(refreshCalls, mappedSeries.Id);
             LlmProviderFlowTestHelpers.AssertNoSensitiveContent(llmApi.Prompts.Single());
@@ -790,7 +887,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             _ = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             Assert.AreEqual(0, llmApi.Prompts.Count);
-            Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap);
+            Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual(0, refreshCalls.Count);
         }
 
@@ -2031,8 +2128,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(1, externalIdService.CorrectionRequests.Count);
             Assert.AreEqual(0, externalIdService.Requests.Count);
             Assert.AreEqual(0, textLlm.Requests.Count);
-            Assert.AreEqual(0, llmApi.Prompts.Count);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
             Assert.AreEqual(0, refreshCalls.Count);
+            Assert.AreEqual("222=overwrite-correction-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
         }
@@ -2631,7 +2729,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var currentConfiguration = MetaSharkPlugin.Instance?.Configuration;
                 if (currentConfiguration != null)
                 {
-                    currentConfiguration.TmdbEpisodeGroupMap = resolvedResult.CurrentMapping;
+                    currentConfiguration.LlmTmdbEpisodeGroupMap = resolvedResult.CurrentMapping;
                 }
 
                 return Task.FromResult(resolvedResult);
@@ -2658,7 +2756,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var currentConfiguration = MetaSharkPlugin.Instance?.Configuration;
                 if (currentConfiguration != null)
                 {
-                    currentConfiguration.TmdbEpisodeGroupMap = resolvedResult.CurrentMapping;
+                    currentConfiguration.LlmTmdbEpisodeGroupMap = resolvedResult.CurrentMapping;
                 }
 
                 return Task.FromResult(resolvedResult);
@@ -2666,6 +2764,28 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         private sealed record PersistenceCall(string ExpectedOldMapping, string NewMapping);
+
+        private sealed class RecordingEpisodeGroupMappingProviderAssistService : ILlmEpisodeGroupMappingProviderAssistService
+        {
+            private readonly ILlmEpisodeGroupMappingProviderAssistService inner;
+            private readonly IList<LlmEpisodeGroupMappingProviderAssistRequest> requests;
+            private readonly IList<LlmEpisodeGroupMappingAssistResult> results;
+
+            public RecordingEpisodeGroupMappingProviderAssistService(ILlmEpisodeGroupMappingProviderAssistService inner, IList<LlmEpisodeGroupMappingProviderAssistRequest> requests, IList<LlmEpisodeGroupMappingAssistResult> results)
+            {
+                this.inner = inner;
+                this.requests = requests;
+                this.results = results;
+            }
+
+            public async Task<LlmEpisodeGroupMappingAssistResult> SuggestWriteAndRefreshAsync(LlmEpisodeGroupMappingProviderAssistRequest request, CancellationToken cancellationToken)
+            {
+                this.requests.Add(request);
+                var result = await this.inner.SuggestWriteAndRefreshAsync(request, cancellationToken).ConfigureAwait(false);
+                this.results.Add(result);
+                return result;
+            }
+        }
 
         private sealed class RecordingLlmTmdbCorrectionMapPersistenceService : ILlmTmdbCorrectionMapPersistenceService
         {

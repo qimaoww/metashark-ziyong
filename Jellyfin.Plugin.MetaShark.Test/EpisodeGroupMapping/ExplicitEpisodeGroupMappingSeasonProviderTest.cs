@@ -227,6 +227,81 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
         }
 
         [TestMethod]
+        public void GetMetadataByTmdb_WhenManualMissing_UsesLlmGroupMapping()
+        {
+            ExplicitEpisodeGroupMappingTestHelper.ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableTmdb = true,
+                TmdbEpisodeGroupMap = string.Empty,
+                LlmTmdbEpisodeGroupMap = "65942=llm-season-group",
+            });
+
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                tmdbApi,
+                "llm-season-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(order: 1, name: "LLM 篇章一", []));
+            ExplicitEpisodeGroupMappingTestHelper.SeedSeason(tmdbApi, 65942, 1, "zh-CN", "Season 1", "不应回退到普通季概述");
+
+            var provider = ExplicitEpisodeGroupMappingTestHelper.CreateSeasonProvider(this.loggerFactory, tmdbApi);
+            var info = new SeasonInfo
+            {
+                Name = "第 1 季",
+                IndexNumber = 1,
+                MetadataLanguage = "zh-CN",
+            };
+
+            var result = Task.Run(async () =>
+                    await provider.GetMetadataByTmdb(info, "65942", 1, CancellationToken.None).ConfigureAwait(false))
+                .GetAwaiter().GetResult();
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("LLM 篇章一", result.Item!.Name);
+            Assert.IsNull(result.Item.Overview, "LLM 自动映射命中时也应走 episode group 季信息，不应回退到普通季。 ");
+        }
+
+        [TestMethod]
+        public void GetMetadataByTmdb_WhenManualAndLlmBothExist_ManualWins()
+        {
+            ExplicitEpisodeGroupMappingTestHelper.ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableTmdb = true,
+                TmdbEpisodeGroupMap = "65942=manual-season-group",
+                LlmTmdbEpisodeGroupMap = "65942=llm-season-group",
+            });
+
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                tmdbApi,
+                "manual-season-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(order: 1, name: "手动篇章一", []));
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                tmdbApi,
+                "llm-season-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(order: 1, name: "LLM 篇章一", []));
+
+            var provider = ExplicitEpisodeGroupMappingTestHelper.CreateSeasonProvider(this.loggerFactory, tmdbApi);
+            var info = new SeasonInfo
+            {
+                Name = "第 1 季",
+                IndexNumber = 1,
+                MetadataLanguage = "zh-CN",
+            };
+
+            var result = Task.Run(async () =>
+                    await provider.GetMetadataByTmdb(info, "65942", 1, CancellationToken.None).ConfigureAwait(false))
+                .GetAwaiter().GetResult();
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("手动篇章一", result.Item!.Name, "手动映射必须覆盖同 seriesId 的 LLM 自动映射。 ");
+        }
+
+        [TestMethod]
         public void GetMetadataByTmdb_WhenMappingIsInvalid_FallsBackToGetSeasonAsync()
         {
             ExplicitEpisodeGroupMappingTestHelper.ReplacePluginConfiguration(new PluginConfiguration

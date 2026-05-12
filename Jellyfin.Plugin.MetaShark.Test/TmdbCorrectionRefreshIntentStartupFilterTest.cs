@@ -29,7 +29,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             await pipeline(context);
 
-            store.Verify(x => x.Save(itemId, itemPath), Times.Once);
+            store.Verify(x => x.SaveSearchMissing(itemId, itemPath), Times.Once);
         }
 
         [TestMethod]
@@ -48,7 +48,28 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             await pipeline(context);
 
-            store.Verify(x => x.Save(itemId, null), Times.Once);
+            store.Verify(x => x.SaveSearchMissing(itemId, null), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task Configure_WhenOverwriteRefresh_SavesOverwriteIntentOnly()
+        {
+            var itemId = Guid.NewGuid();
+            const string itemPath = "/library/Shows/ReZero";
+            var libraryManager = new Mock<ILibraryManager>();
+            libraryManager.Setup(x => x.GetItemById(itemId)).Returns(new Folder { Id = itemId, Path = itemPath });
+            var store = new Mock<ITmdbCorrectionRefreshIntentStore>();
+            var filter = new TmdbCorrectionRefreshIntentStartupFilter(libraryManager.Object, store.Object);
+            var context = CreateOverwriteRefreshContext(itemId);
+
+            var appBuilder = new ApplicationBuilder(new ServiceCollection().BuildServiceProvider());
+            filter.Configure(_ => { })(appBuilder);
+            var pipeline = appBuilder.Build();
+
+            await pipeline(context);
+
+            store.Verify(x => x.SaveOverwrite(itemId, itemPath), Times.Once);
+            store.Verify(x => x.SaveSearchMissing(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
         }
 
         private static DefaultHttpContext CreateSearchMissingRefreshContext(Guid itemId)
@@ -57,6 +78,15 @@ namespace Jellyfin.Plugin.MetaShark.Test
             context.Request.Method = HttpMethods.Post;
             context.Request.Path = $"/Items/{itemId:D}/Refresh";
             context.Request.QueryString = new QueryString("?metadataRefreshMode=FullRefresh&replaceAllMetadata=false");
+            return context;
+        }
+
+        private static DefaultHttpContext CreateOverwriteRefreshContext(Guid itemId)
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = $"/Items/{itemId:D}/Refresh";
+            context.Request.QueryString = new QueryString("?metadataRefreshMode=FullRefresh&replaceAllMetadata=true");
             return context;
         }
     }

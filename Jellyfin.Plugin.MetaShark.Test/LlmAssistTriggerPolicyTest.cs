@@ -124,6 +124,43 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void Evaluate_AllowsOverwriteRefreshForEpisodeGroupMappingAssist()
+        {
+            var context = CreateContext(DefaultScraperSemantic.UserRefresh, "Series", CreateRefreshContext("?metadataRefreshMode=FullRefresh&replaceAllMetadata=true"));
+            context.AllowOverwriteRefresh = true;
+
+            var decision = new LlmAssistTriggerPolicy().Evaluate(context);
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            Assert.AreEqual("ExplicitOverwriteRefresh", decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_AllowsBridgedOverwriteRefreshForEpisodeGroupMappingAssist()
+        {
+            var context = CreateContext(DefaultScraperSemantic.UserRefresh, "Series", CreateRefreshContext(string.Empty));
+            context.AllowOverwriteRefresh = true;
+            context.HasBridgedExplicitOverwriteMetadataRefreshIntent = true;
+
+            var decision = new LlmAssistTriggerPolicy().Evaluate(context);
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            Assert.AreEqual("ExplicitOverwriteRefresh", decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_RejectsBridgedOverwriteRefreshWithoutExplicitAllow()
+        {
+            var context = CreateContext(DefaultScraperSemantic.UserRefresh, "Series", CreateRefreshContext(string.Empty));
+            context.HasBridgedExplicitOverwriteMetadataRefreshIntent = true;
+
+            var decision = new LlmAssistTriggerPolicy().Evaluate(context);
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("ImplicitRefreshRejected", decision.Reason);
+        }
+
+        [TestMethod]
         public void Evaluate_RejectsImplicitScheduledFallbackWithoutHttpQuery()
         {
             var decision = Evaluate(DefaultScraperSemantic.UserRefresh, "Episode", CreateRefreshContext(string.Empty));

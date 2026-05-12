@@ -1,4 +1,5 @@
 using System.Linq;
+using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
 
 namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
@@ -91,6 +92,34 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             CollectionAssert.AreEqual(new[] { "101", "202", "303" }, this.parser.GetMappedSeriesIds(Mapping).ToArray());
             Assert.AreEqual(1, snapshot.InvalidWarnings.Count);
             Assert.AreEqual(1, snapshot.DuplicateWarnings.Count);
+        }
+
+        [TestMethod]
+        public void TryGetGroupId_WhenManualMissing_UsesLlmMapping()
+        {
+            var resolved = TmdbEpisodeGroupMapping.TryGetGroupId(string.Empty, "65942=llm-group", "65942", out var groupId);
+
+            Assert.IsTrue(resolved);
+            Assert.AreEqual("llm-group", groupId);
+        }
+
+        [TestMethod]
+        public void TryGetGroupId_WhenManualAndLlmBothContainSeries_ManualWins()
+        {
+            var resolved = TmdbEpisodeGroupMapping.TryGetGroupId("65942=manual-group", "65942=llm-group", "65942", out var groupId);
+
+            Assert.IsTrue(resolved);
+            Assert.AreEqual("manual-group", groupId);
+        }
+
+        [TestMethod]
+        public void GetEffectiveMappingText_MergesLlmAndManualWithManualPriority()
+        {
+            var effectiveMapping = TmdbEpisodeGroupMapping.GetEffectiveMappingText(
+                "65942=manual-group\n70000=manual-only",
+                "65942=llm-group\n80000=llm-only");
+
+            Assert.AreEqual("65942=manual-group\n70000=manual-only\n80000=llm-only", effectiveMapping);
         }
     }
 }

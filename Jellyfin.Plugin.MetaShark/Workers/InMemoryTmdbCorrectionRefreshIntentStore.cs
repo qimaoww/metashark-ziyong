@@ -8,16 +8,70 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Collections.Generic;
     using System.Diagnostics.CodeAnalysis;
 
+    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1201:Elements should appear in the correct order", Justification = "Private nested intent key types stay near the store fields they support.")]
+    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Public interface methods stay before private helpers.")]
     public sealed class InMemoryTmdbCorrectionRefreshIntentStore : ITmdbCorrectionRefreshIntentStore
     {
         private static readonly TimeSpan IntentLifetime = TimeSpan.FromMinutes(5);
+
         private readonly object syncRoot = new object();
-        private readonly Dictionary<Guid, RefreshIntentEntry> entriesByItemId = new Dictionary<Guid, RefreshIntentEntry>();
-        private readonly Dictionary<string, Guid> itemIdsByPath = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<RefreshIntentKey, RefreshIntentEntry> entriesByKey = new Dictionary<RefreshIntentKey, RefreshIntentEntry>();
+        private readonly Dictionary<RefreshIntentPathKey, RefreshIntentKey> itemKeysByPath = new Dictionary<RefreshIntentPathKey, RefreshIntentKey>();
 
         public static InMemoryTmdbCorrectionRefreshIntentStore Shared { get; } = new InMemoryTmdbCorrectionRefreshIntentStore();
 
+        private enum RefreshIntentKind
+        {
+            SearchMissingMetadata,
+            OverwriteMetadata,
+        }
+
         public void Save(Guid itemId, string? itemPath = null)
+        {
+            this.SaveSearchMissing(itemId, itemPath);
+        }
+
+        public void SaveSearchMissing(Guid itemId, string? itemPath = null)
+        {
+            this.SaveCore(RefreshIntentKind.SearchMissingMetadata, itemId, itemPath);
+        }
+
+        public void SaveOverwrite(Guid itemId, string? itemPath = null)
+        {
+            this.SaveCore(RefreshIntentKind.OverwriteMetadata, itemId, itemPath);
+        }
+
+        public bool HasPending(Guid itemId, string? itemPath = null)
+        {
+            return this.HasPendingSearchMissing(itemId, itemPath);
+        }
+
+        public bool HasPendingSearchMissing(Guid itemId, string? itemPath = null)
+        {
+            return this.HasPendingCore(RefreshIntentKind.SearchMissingMetadata, itemId, itemPath);
+        }
+
+        public bool HasPendingOverwrite(Guid itemId, string? itemPath = null)
+        {
+            return this.HasPendingCore(RefreshIntentKind.OverwriteMetadata, itemId, itemPath);
+        }
+
+        public bool TryConsume(Guid itemId, string? itemPath = null)
+        {
+            return this.TryConsumeSearchMissing(itemId, itemPath);
+        }
+
+        public bool TryConsumeSearchMissing(Guid itemId, string? itemPath = null)
+        {
+            return this.TryConsumeCore(RefreshIntentKind.SearchMissingMetadata, itemId, itemPath);
+        }
+
+        public bool TryConsumeOverwrite(Guid itemId, string? itemPath = null)
+        {
+            return this.TryConsumeCore(RefreshIntentKind.OverwriteMetadata, itemId, itemPath);
+        }
+
+        private void SaveCore(RefreshIntentKind kind, Guid itemId, string? itemPath = null)
         {
             var normalizedPath = NormalizePath(itemPath);
             if (itemId == Guid.Empty && string.IsNullOrEmpty(normalizedPath))
@@ -28,34 +82,34 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             lock (this.syncRoot)
             {
                 this.RemoveExpiredEntries(DateTimeOffset.UtcNow);
-                this.Upsert(new RefreshIntentEntry(itemId, normalizedPath, DateTimeOffset.UtcNow.Add(IntentLifetime)));
+                this.Upsert(new RefreshIntentEntry(kind, itemId, normalizedPath, DateTimeOffset.UtcNow.Add(IntentLifetime)));
             }
         }
 
-        public bool HasPending(Guid itemId, string? itemPath = null)
+        private bool HasPendingCore(RefreshIntentKind kind, Guid itemId, string? itemPath = null)
         {
             var normalizedPath = NormalizePath(itemPath);
 
             lock (this.syncRoot)
             {
                 this.RemoveExpiredEntries(DateTimeOffset.UtcNow);
-                return this.TryResolveEntry(itemId, normalizedPath, out _);
+                return this.TryResolveEntry(kind, itemId, normalizedPath, out _);
             }
         }
 
-        public bool TryConsume(Guid itemId, string? itemPath = null)
+        private bool TryConsumeCore(RefreshIntentKind kind, Guid itemId, string? itemPath = null)
         {
             var normalizedPath = NormalizePath(itemPath);
 
             lock (this.syncRoot)
             {
                 this.RemoveExpiredEntries(DateTimeOffset.UtcNow);
-                if (!this.TryResolveEntry(itemId, normalizedPath, out var entry))
+                if (!this.TryResolveEntry(kind, itemId, normalizedPath, out var entry))
                 {
                     return false;
                 }
 
-                this.RemoveInternal(entry.ItemId, entry.ItemPath);
+                this.RemoveInternal(entry.Kind, entry.ItemId, entry.ItemPath);
                 return true;
             }
         }
@@ -69,40 +123,42 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         private void Upsert(RefreshIntentEntry entry)
         {
-            if (entry.ItemId != Guid.Empty && this.entriesByItemId.TryGetValue(entry.ItemId, out var existingById))
+            var entryKey = new RefreshIntentKey(entry.Kind, entry.ItemId);
+            if (entry.ItemId != Guid.Empty && this.entriesByKey.TryGetValue(entryKey, out var existingById))
             {
-                this.RemoveInternal(existingById.ItemId, existingById.ItemPath);
+                this.RemoveInternal(existingById.Kind, existingById.ItemId, existingById.ItemPath);
             }
 
+            var pathKey = new RefreshIntentPathKey(entry.Kind, entry.ItemPath);
             if (!string.IsNullOrEmpty(entry.ItemPath)
-                && this.itemIdsByPath.TryGetValue(entry.ItemPath, out var existingItemId)
-                && this.entriesByItemId.TryGetValue(existingItemId, out var existingByPath))
+                && this.itemKeysByPath.TryGetValue(pathKey, out var existingItemKey)
+                && this.entriesByKey.TryGetValue(existingItemKey, out var existingByPath))
             {
-                this.RemoveInternal(existingByPath.ItemId, existingByPath.ItemPath);
+                this.RemoveInternal(existingByPath.Kind, existingByPath.ItemId, existingByPath.ItemPath);
             }
 
             if (entry.ItemId != Guid.Empty)
             {
-                this.entriesByItemId[entry.ItemId] = entry;
+                this.entriesByKey[entryKey] = entry;
             }
 
             if (!string.IsNullOrEmpty(entry.ItemPath))
             {
-                this.itemIdsByPath[entry.ItemPath] = entry.ItemId;
+                this.itemKeysByPath[pathKey] = entryKey;
             }
         }
 
-        private bool TryResolveEntry(Guid itemId, string normalizedPath, [NotNullWhen(true)] out RefreshIntentEntry? entry)
+        private bool TryResolveEntry(RefreshIntentKind kind, Guid itemId, string normalizedPath, [NotNullWhen(true)] out RefreshIntentEntry? entry)
         {
-            if (itemId != Guid.Empty && this.entriesByItemId.TryGetValue(itemId, out var entryById))
+            if (itemId != Guid.Empty && this.entriesByKey.TryGetValue(new RefreshIntentKey(kind, itemId), out var entryById))
             {
                 entry = entryById;
                 return true;
             }
 
             if (!string.IsNullOrEmpty(normalizedPath)
-                && this.itemIdsByPath.TryGetValue(normalizedPath, out var pathItemId)
-                && this.entriesByItemId.TryGetValue(pathItemId, out var entryByPath))
+                && this.itemKeysByPath.TryGetValue(new RefreshIntentPathKey(kind, normalizedPath), out var pathItemKey)
+                && this.entriesByKey.TryGetValue(pathItemKey, out var entryByPath))
             {
                 entry = entryByPath;
                 return true;
@@ -114,13 +170,13 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         private void RemoveExpiredEntries(DateTimeOffset now)
         {
-            if (this.entriesByItemId.Count == 0)
+            if (this.entriesByKey.Count == 0)
             {
                 return;
             }
 
-            var expiredKeys = new List<Guid>();
-            foreach (var pair in this.entriesByItemId)
+            var expiredKeys = new List<RefreshIntentKey>();
+            foreach (var pair in this.entriesByKey)
             {
                 if (pair.Value.ExpiresAtUtc <= now)
                 {
@@ -130,34 +186,41 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             foreach (var expiredKey in expiredKeys)
             {
-                if (this.entriesByItemId.TryGetValue(expiredKey, out var entry))
+                if (this.entriesByKey.TryGetValue(expiredKey, out var entry))
                 {
-                    this.RemoveInternal(entry.ItemId, entry.ItemPath);
+                    this.RemoveInternal(entry.Kind, entry.ItemId, entry.ItemPath);
                 }
             }
         }
 
-        private void RemoveInternal(Guid itemId, string itemPath)
+        private void RemoveInternal(RefreshIntentKind kind, Guid itemId, string itemPath)
         {
             if (itemId != Guid.Empty)
             {
-                this.entriesByItemId.Remove(itemId);
+                this.entriesByKey.Remove(new RefreshIntentKey(kind, itemId));
             }
 
             if (!string.IsNullOrEmpty(itemPath))
             {
-                this.itemIdsByPath.Remove(itemPath);
+                this.itemKeysByPath.Remove(new RefreshIntentPathKey(kind, itemPath));
             }
         }
 
+        private readonly record struct RefreshIntentKey(RefreshIntentKind Kind, Guid ItemId);
+
+        private readonly record struct RefreshIntentPathKey(RefreshIntentKind Kind, string ItemPath);
+
         private sealed class RefreshIntentEntry
         {
-            public RefreshIntentEntry(Guid itemId, string itemPath, DateTimeOffset expiresAtUtc)
+            public RefreshIntentEntry(RefreshIntentKind kind, Guid itemId, string itemPath, DateTimeOffset expiresAtUtc)
             {
+                this.Kind = kind;
                 this.ItemId = itemId;
                 this.ItemPath = itemPath;
                 this.ExpiresAtUtc = expiresAtUtc;
             }
+
+            public RefreshIntentKind Kind { get; }
 
             public Guid ItemId { get; }
 

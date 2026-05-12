@@ -284,20 +284,26 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 ["required"] = new[] { "selectedGroupId", "confidence", "reason" },
                 ["properties"] = new Dictionary<string, object>
                 {
-                    ["selectedGroupId"] = StringSchema(128),
+                    ["selectedGroupId"] = StringSchema(128, 0),
                     ["confidence"] = ConfidenceSchema(),
                     ["reason"] = NullableStringSchema(500),
                 },
             };
         }
 
-        private static Dictionary<string, object> StringSchema(int maxLength)
+        private static Dictionary<string, object> StringSchema(int maxLength, int? minLength = null)
         {
-            return new Dictionary<string, object>
+            var schema = new Dictionary<string, object>
             {
                 ["type"] = "string",
                 ["maxLength"] = maxLength,
             };
+            if (minLength.HasValue)
+            {
+                schema["minLength"] = minLength.Value;
+            }
+
+            return schema;
         }
 
         private static Dictionary<string, object> NullableStringSchema(int maxLength)

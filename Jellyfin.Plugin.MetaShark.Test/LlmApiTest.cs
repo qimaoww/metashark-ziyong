@@ -521,6 +521,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             CollectionAssert.AreEquivalent(new[] { "selectedGroupId", "confidence", "reason" }, ReadStringArray(schema.GetProperty("required")));
             var properties = schema.GetProperty("properties");
             CollectionAssert.AreEquivalent(new[] { "selectedGroupId", "confidence", "reason" }, properties.EnumerateObject().Select(property => property.Name).ToArray());
+            Assert.AreEqual(0, properties.GetProperty("selectedGroupId").GetProperty("minLength").GetInt32());
             AssertConfidenceSchema(properties.GetProperty("confidence"));
             AssertNullableTypeSchema(properties.GetProperty("reason"), "string", "null");
             Assert.IsFalse(properties.TryGetProperty("suggestions", out _), schema.ToString());

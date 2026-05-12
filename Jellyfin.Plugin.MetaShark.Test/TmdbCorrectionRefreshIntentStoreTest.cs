@@ -32,5 +32,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(store.TryConsume(reboundItemId, ItemPath));
             Assert.IsFalse(store.TryConsume(originalItemId, ItemPath));
         }
+
+        [TestMethod]
+        public void HasPending_CanSeparateSearchMissingAndOverwriteIntents()
+        {
+            var store = new InMemoryTmdbCorrectionRefreshIntentStore();
+            var itemId = Guid.NewGuid();
+            const string ItemPath = "/library/Shows/ReZero";
+
+            store.SaveOverwrite(itemId, ItemPath);
+
+            Assert.IsTrue(store.HasPendingOverwrite(itemId, ItemPath));
+            Assert.IsFalse(store.HasPendingSearchMissing(itemId, ItemPath));
+
+            store.SaveSearchMissing(itemId, ItemPath);
+
+            Assert.IsTrue(store.HasPendingOverwrite(itemId, ItemPath));
+            Assert.IsTrue(store.HasPendingSearchMissing(itemId, ItemPath));
+        }
     }
 }

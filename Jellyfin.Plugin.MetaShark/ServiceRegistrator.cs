@@ -177,7 +177,7 @@ namespace Jellyfin.Plugin.MetaShark
             });
             serviceCollection.AddSingleton<ILlmExternalIdResolutionService>((ctx) => ctx.GetRequiredService<LlmExternalIdResolutionService>());
             serviceCollection.AddSingleton<ILlmTmdbCorrectionMapPersistenceService>((_) => new LlmTmdbCorrectionMapPersistenceService(LlmTmdbCorrectionMapParser.Shared));
-            serviceCollection.AddSingleton<ITmdbEpisodeGroupMapPersistenceService>((_) => new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared));
+            serviceCollection.AddSingleton<ITmdbEpisodeGroupMapPersistenceService>((_) => new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared, saveLlmMapping: true));
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
             {
                 return new LlmEpisodeGroupMappingAssistService(

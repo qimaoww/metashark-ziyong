@@ -28,6 +28,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertProperty("EnableLlmTmdbCompletionPersistence", typeof(bool), true, configuration);
             AssertProperty("LlmTmdbCorrectionMap", typeof(string), string.Empty, configuration);
             AssertProperty("LlmTmdbCompletionMap", typeof(string), string.Empty, configuration);
+            AssertProperty("LlmTmdbEpisodeGroupMap", typeof(string), string.Empty, configuration);
             AssertProperty("LlmBaseUrl", typeof(string), string.Empty, configuration);
             AssertProperty("LlmApiKey", typeof(string), string.Empty, configuration);
             AssertProperty("LlmModel", typeof(string), string.Empty, configuration);
@@ -54,6 +55,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 EnableLlmTmdbCompletionPersistence = false,
                 LlmTmdbCorrectionMap = "series:douban:26862290=tmdb:65942",
                 LlmTmdbCompletionMap = "series:douban:37291769=tmdb:251782",
+                LlmTmdbEpisodeGroupMap = "65942=llm-group",
                 LlmBaseUrl = "https://example.test/v1",
                 LlmApiKey = "test-key",
                 LlmModel = "test-model",
@@ -75,6 +77,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(configuration.EnableLlmTmdbCompletionPersistence);
             Assert.AreEqual("series:douban:26862290=tmdb:65942", configuration.LlmTmdbCorrectionMap);
             Assert.AreEqual("series:douban:37291769=tmdb:251782", configuration.LlmTmdbCompletionMap);
+            Assert.AreEqual("65942=llm-group", configuration.LlmTmdbEpisodeGroupMap);
             Assert.AreEqual("https://example.test/v1", configuration.LlmBaseUrl);
             Assert.AreEqual("test-key", configuration.LlmApiKey);
             Assert.AreEqual("test-model", configuration.LlmModel);
@@ -123,6 +126,25 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(1.0, configuration.LlmConfidenceThreshold);
             Assert.AreEqual(1.0, configuration.LlmEpisodeGroupMappingMinConfidence);
             Assert.AreEqual(50, configuration.LlmEpisodeGroupMappingMaxCandidateGroups);
+        }
+
+        [TestMethod]
+        public void ShouldNormalizeNonFiniteDoubleValuesToDefaults()
+        {
+            var configuration = new PluginConfiguration
+            {
+                LlmConfidenceThreshold = double.NaN,
+                LlmEpisodeGroupMappingMinConfidence = double.PositiveInfinity,
+            };
+
+            Assert.AreEqual(0.75, configuration.LlmConfidenceThreshold, "普通 LLM 置信度阈值不得保留 NaN。");
+            Assert.AreEqual(0.80, configuration.LlmEpisodeGroupMappingMinConfidence, "剧集组映射置信度阈值不得保留非有限值。");
+
+            configuration.LlmConfidenceThreshold = double.NegativeInfinity;
+            configuration.LlmEpisodeGroupMappingMinConfidence = double.NaN;
+
+            Assert.AreEqual(0.75, configuration.LlmConfidenceThreshold, "普通 LLM 置信度阈值不得保留非有限值。");
+            Assert.AreEqual(0.80, configuration.LlmEpisodeGroupMappingMinConfidence, "剧集组映射置信度阈值不得保留 NaN。");
         }
 
         [TestMethod]

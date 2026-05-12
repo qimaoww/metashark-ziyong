@@ -734,7 +734,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var resolvedEpisodeNumber = episodeNumber.Value;
             var resolvedByEpisodeGroupMapping = false;
             var seriesId = seriesTmdbId.ToString(CultureInfo.InvariantCulture);
-            if (TmdbEpisodeGroupMapping.TryGetGroupId(Config.TmdbEpisodeGroupMap, seriesId, out var groupId))
+            if (TmdbEpisodeGroupMapping.TryGetGroupId(Config.TmdbEpisodeGroupMap, Config.LlmTmdbEpisodeGroupMap, seriesId, out var groupId))
             {
                 this.Log("TMDb 剧集组映射命中. seriesId={0} groupId={1} season={2} episode={3}", seriesId, groupId, seasonNumber, episodeNumber);
                 var group = await this.TmdbApi

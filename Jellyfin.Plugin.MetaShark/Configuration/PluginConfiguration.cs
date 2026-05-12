@@ -147,6 +147,11 @@ public class PluginConfiguration : BasePluginConfiguration
     public string LlmTmdbCompletionMap { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets LLM suggested TMDB episode group mappings.
+    /// </summary>
+    public string LlmTmdbEpisodeGroupMap { get; set; } = string.Empty;
+
+    /// <summary>
     /// Gets or sets a value indicating whether LLM verified Douban to TMDB corrections should be persisted and reused.
     /// </summary>
     public bool EnableLlmTmdbCorrectionPersistence { get; set; } = true;
@@ -231,7 +236,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public double LlmConfidenceThreshold
     {
         get => this.llmConfidenceThreshold;
-        set => this.llmConfidenceThreshold = Math.Clamp(value, 0.0, 1.0);
+        set => this.llmConfidenceThreshold = NormalizeClampedDouble(value, 0.0, 1.0, 0.75);
     }
 
     /// <summary>
@@ -240,7 +245,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public double LlmEpisodeGroupMappingMinConfidence
     {
         get => this.llmEpisodeGroupMappingMinConfidence;
-        set => this.llmEpisodeGroupMappingMinConfidence = Math.Clamp(value, 0.0, 1.0);
+        set => this.llmEpisodeGroupMappingMinConfidence = NormalizeClampedDouble(value, 0.0, 1.0, 0.80);
     }
 
     /// <summary>
@@ -345,5 +350,12 @@ public class PluginConfiguration : BasePluginConfiguration
             LlmReasoningEffortXHigh => LlmReasoningEffortXHigh,
             _ => LlmReasoningEffortDefault,
         };
+    }
+
+    private static double NormalizeClampedDouble(double value, double min, double max, double fallback)
+    {
+        return double.IsFinite(value)
+            ? Math.Clamp(value, min, max)
+            : fallback;
     }
 }
