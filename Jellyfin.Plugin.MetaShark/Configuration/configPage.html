@@ -84,7 +84,7 @@
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="DoubanImageProxyBaseUrl">豆瓣图片代理地址</label>
                             <input id="DoubanImageProxyBaseUrl" name="DoubanImageProxyBaseUrl" type="text"
-                                is="emby-input" placeholder="https://jellyfin.xxx.com:8920" />
+                                class="emby-input" placeholder="https://jellyfin.xxx.com:8920" />
                             <div class="fieldDescription">
                                 可为空，填写jellyfin访问域名（有端口时要加上端口），只有使用了Nginx代理、Docker部署或启用了HTTPS，并且豆瓣图片无法显示时，才需要填写
                             </div>
@@ -183,12 +183,12 @@
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="TmdbApiKey">Api Key</label>
-                            <input id="TmdbApiKey" name="TmdbApiKey" type="text" is="emby-input" />
+                            <input id="TmdbApiKey" name="TmdbApiKey" type="text" class="emby-input" />
                             <div class="fieldDescription">填写自定义Api Key，不填写会使用默认api key.(需重启才能生效)</div>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="TmdbHost">Api Host</label>
-                            <input id="TmdbHost" name="TmdbHost" type="text" is="emby-input"
+                            <input id="TmdbHost" name="TmdbHost" type="text" class="emby-input"
                                 placeholder="api.tmdb.org" />
                             <div class="fieldDescription">
                                 填写Api域名，可选api.tmdb.org/api.themoviedb.org，默认api.tmdb.org.(需重启才能生效)</div>
@@ -208,12 +208,12 @@
                         <div class="inputContainer tmdb-proxy-wapper">
                             <label class="inputLabel inputLabel-float inputLabelUnfocused"
                                 for="TmdbProxyHost">Api代理服务器Host:</label>
-                            <input is="emby-input" id="TmdbProxyHost" name="TmdbProxyHost" class="emby-input">
+                            <input id="TmdbProxyHost" name="TmdbProxyHost" class="emby-input">
                         </div>
                         <div class="inputContainer tmdb-proxy-wapper">
                             <label class="inputLabel inputLabel-float inputLabelUnfocused"
                                 for="TmdbProxyPort">Api代理服务器端口:</label>
-                            <input is="emby-input" type="number" id="TmdbProxyPort" name="TmdbProxyPort"
+                            <input type="number" id="TmdbProxyPort" name="TmdbProxyPort"
                                 pattern="[0-9]*" min="1" max="65535" class="emby-input">
                         </div>
                             </fieldset>
@@ -239,13 +239,13 @@
                                <div class="inputContainer">
                                    <label class="inputLabel inputLabelUnfocused" for="LlmEpisodeGroupMappingMinConfidence">LLM 剧集组映射最低置信度</label>
                                    <input id="LlmEpisodeGroupMappingMinConfidence" name="LlmEpisodeGroupMappingMinConfidence" type="number"
-                                       is="emby-input" class="emby-input" min="0" max="1" step="0.01" />
+                                       class="emby-input" min="0" max="1" step="0.01" />
                                    <div class="fieldDescription">用于自动写回 TMDb 剧集组映射的最低置信度，允许范围 0.0-1.0，默认 0.80。</div>
                                </div>
                                <div class="inputContainer">
                                    <label class="inputLabel inputLabelUnfocused" for="LlmEpisodeGroupMappingMaxCandidateGroups">LLM 剧集组候选组上限</label>
                                    <input id="LlmEpisodeGroupMappingMaxCandidateGroups" name="LlmEpisodeGroupMappingMaxCandidateGroups" type="number"
-                                       is="emby-input" class="emby-input" min="1" max="50" step="1" />
+                                       class="emby-input" min="1" max="50" step="1" />
                                    <div class="fieldDescription">发送给 LLM 的 TMDb 剧集组候选数量上限，允许范围 1-50，默认 8。</div>
                                </div>
                                <div class="checkboxContainer checkboxContainer-withDescription">
@@ -317,36 +317,36 @@
                             </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmBaseUrl">Base URL</label>
-                                <input id="LlmBaseUrl" name="LlmBaseUrl" type="text" is="emby-input"
+                                <input id="LlmBaseUrl" name="LlmBaseUrl" type="text"
                                     class="emby-input" placeholder="https://api.example.com/v1" />
                                 <div class="fieldDescription">OpenAI 兼容接口地址，需要填写到 /v1 级别；留空时不会调用 LLM。启用前请自行评估费用、隐私和网络风险。</div>
                             </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmApiKey">API Key</label>
-                                <input id="LlmApiKey" name="LlmApiKey" type="password" is="emby-input"
+                                <input id="LlmApiKey" name="LlmApiKey" type="password"
                                     class="emby-input" autocomplete="off" />
                                 <div class="fieldDescription">留空保存时会保留已有密钥。</div>
                             </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmModel">模型</label>
-                                <input id="LlmModel" name="LlmModel" type="text" is="emby-input"
+                                <input id="LlmModel" name="LlmModel" type="text"
                                     class="emby-input" />
                             </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmTimeoutSeconds">超时秒数</label>
-                                <input id="LlmTimeoutSeconds" name="LlmTimeoutSeconds" type="number" is="emby-input"
+                                <input id="LlmTimeoutSeconds" name="LlmTimeoutSeconds" type="number"
                                     class="emby-input" min="1" max="30" step="1" />
                                 <div class="fieldDescription">允许范围 1-30 秒，默认 15 秒。超时、结构化输出不符合 schema 或并发限制忙碌时按可选能力关闭处理，不应变成 provider 错误。LLM 请求使用保守并发，同一时间默认只处理一个请求。</div>
                             </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmMaxTokens">最大输出 Tokens</label>
-                                <input id="LlmMaxTokens" name="LlmMaxTokens" type="number" is="emby-input"
+                                <input id="LlmMaxTokens" name="LlmMaxTokens" type="number"
                                     class="emby-input" min="64" max="4096" step="1" />
                                 <div class="fieldDescription">允许范围 64-4096，默认 512。</div>
                             </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmConfidenceThreshold">置信度阈值</label>
-                                <input id="LlmConfidenceThreshold" name="LlmConfidenceThreshold" type="number" is="emby-input"
+                                <input id="LlmConfidenceThreshold" name="LlmConfidenceThreshold" type="number"
                                     class="emby-input" min="0" max="1" step="0.01" />
                                 <div class="fieldDescription">允许范围 0.0-1.0，默认 0.75。</div>
                             </div>
@@ -391,17 +391,17 @@
                               </div>
                              <div class="inputContainer">
                                  <label class="inputLabel inputLabelUnfocused" for="TvdbApiKey">Api Key</label>
-                                 <input id="TvdbApiKey" name="TvdbApiKey" type="text" is="emby-input" class="emby-input" />
+                                 <input id="TvdbApiKey" name="TvdbApiKey" type="text" class="emby-input" />
                                  <div class="fieldDescription">填写TVDB v4 Api Key。</div>
                              </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="TvdbPin">Subscriber Pin</label>
-                                <input id="TvdbPin" name="TvdbPin" type="text" is="emby-input" class="emby-input" />
+                                <input id="TvdbPin" name="TvdbPin" type="text" class="emby-input" />
                                 <div class="fieldDescription">仅订阅用户需要填写PIN。</div>
                             </div>
                              <div class="inputContainer">
                                  <label class="inputLabel inputLabelUnfocused" for="TvdbHost">Api Host</label>
-                                 <input id="TvdbHost" name="TvdbHost" type="text" is="emby-input" class="emby-input" placeholder="https://api4.thetvdb.com/v4" />
+                                 <input id="TvdbHost" name="TvdbHost" type="text" class="emby-input" placeholder="https://api4.thetvdb.com/v4" />
                                  <div class="fieldDescription">默认使用官方TVDB v4主机。</div>
                              </div>
                              </fieldset>
