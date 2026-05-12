@@ -22,6 +22,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     {
         public const string ItemUpdatedTrigger = ILlmTmdbCorrectionMetadataPostProcessService.ItemUpdatedTrigger;
 
+        private static readonly Action<ILogger, Guid, string, string, string, Exception?> LogLlmTmdbCorrectionMetadataApplied =
+            LoggerMessage.Define<Guid, string, string, string>(
+                LogLevel.Information,
+                new EventId(0),
+                "[MetaShark] 已结清 LLM TMDb 纠错元数据. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} tmdbId={TmdbId}.");
+
         private readonly ILlmTmdbCorrectionMetadataStore metadataStore;
         private readonly ILogger<LlmTmdbCorrectionMetadataPostProcessService> logger;
 
@@ -96,12 +102,13 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             await item.UpdateToRepositoryAsync(updateReason, cancellationToken).ConfigureAwait(false);
             this.metadataStore.Remove(snapshot.ItemId, snapshot.ItemPath);
-            this.logger.LogInformation(
-                "[MetaShark] 已结清 LLM TMDb 纠错元数据. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} tmdbId={TmdbId}.",
+            LogLlmTmdbCorrectionMetadataApplied(
+                this.logger,
                 item.Id,
                 triggerName,
                 item.Path ?? string.Empty,
-                snapshot.TmdbId);
+                snapshot.TmdbId,
+                null);
         }
 
         private static bool SetTextIfDifferent(string? current, string? expected, Action<string?> setter)
@@ -154,7 +161,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return true;
         }
 
-        private static bool CopyProviderIdIfPresent(BaseItem item, IReadOnlyDictionary<string, string>? providerIds, string providerIdKey)
+        private static bool CopyProviderIdIfPresent(BaseItem item, Dictionary<string, string>? providerIds, string providerIdKey)
         {
             if (providerIds == null || !providerIds.TryGetValue(providerIdKey, out var value) || string.IsNullOrWhiteSpace(value))
             {

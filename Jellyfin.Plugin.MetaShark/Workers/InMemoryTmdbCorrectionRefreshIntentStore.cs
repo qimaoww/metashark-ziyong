@@ -93,15 +93,17 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         private bool TryResolveEntry(Guid itemId, string normalizedPath, out RefreshIntentEntry entry)
         {
-            if (itemId != Guid.Empty && this.entriesByItemId.TryGetValue(itemId, out entry))
+            if (itemId != Guid.Empty && this.entriesByItemId.TryGetValue(itemId, out var entryById))
             {
+                entry = entryById;
                 return true;
             }
 
             if (!string.IsNullOrEmpty(normalizedPath)
                 && this.itemIdsByPath.TryGetValue(normalizedPath, out var pathItemId)
-                && this.entriesByItemId.TryGetValue(pathItemId, out entry))
+                && this.entriesByItemId.TryGetValue(pathItemId, out var entryByPath))
             {
+                entry = entryByPath;
                 return true;
             }
 

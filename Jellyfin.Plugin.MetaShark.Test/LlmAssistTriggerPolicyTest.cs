@@ -53,6 +53,30 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void Evaluate_AllowsBridgedExplicitSearchMissingRefreshWithoutQuery()
+        {
+            var context = CreateContext(DefaultScraperSemantic.UserRefresh, "Series", CreateRefreshContext(string.Empty));
+            context.HasBridgedExplicitSearchMissingMetadataRefreshIntent = true;
+
+            var decision = new LlmAssistTriggerPolicy().Evaluate(context);
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            Assert.AreEqual("ExplicitSearchMissingMetadataRefresh", decision.Reason);
+        }
+
+        [TestMethod]
+        public void Evaluate_RejectsBridgedExplicitSearchMissingRefreshForImageProvider()
+        {
+            var context = CreateContext(DefaultScraperSemantic.UserRefresh, "Series", CreateRefreshContext(string.Empty), isImageProvider: true);
+            context.HasBridgedExplicitSearchMissingMetadataRefreshIntent = true;
+
+            var decision = new LlmAssistTriggerPolicy().Evaluate(context);
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("ImageProviderRejected", decision.Reason);
+        }
+
+        [TestMethod]
         public void ShouldEvaluateDeterministicMismatch_OnlyWhenTriggerAllowed()
         {
             var policy = new LlmAssistTriggerPolicy();

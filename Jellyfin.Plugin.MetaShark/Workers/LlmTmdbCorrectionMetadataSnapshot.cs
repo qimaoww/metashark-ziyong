@@ -27,7 +27,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         public DateTime? PremiereDate { get; set; }
 
-        public Dictionary<string, string> ProviderIds { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> ProviderIds { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         public DateTimeOffset QueuedAtUtc { get; set; }
 

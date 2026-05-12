@@ -6,6 +6,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics.CodeAnalysis;
     using System.IO;
     using System.Linq;
 
@@ -17,6 +18,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
         public static LlmTmdbCorrectionMapParser Shared { get; } = new LlmTmdbCorrectionMapParser();
 
+        [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Parser stays instance-based because persistence services receive it as a composable dependency.")]
         public LlmTmdbCorrectionMapSnapshot ParseSnapshot(string? mapping)
         {
             var entriesByKey = new Dictionary<string, LlmTmdbCorrectionMapEntry>(EntryComparer);
@@ -144,6 +146,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             };
         }
 
+        [SuppressMessage("Globalization", "CA1308:Normalize strings to uppercase", Justification = "Persisted correction-map canonical text is intentionally lowercase for compatibility.")]
         private static string NormalizeToken(string? value)
         {
             return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant();

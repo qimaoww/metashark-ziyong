@@ -134,9 +134,19 @@ public class PluginConfiguration : BasePluginConfiguration
     public string LlmTmdbCorrectionMap { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets LLM verified Douban to TMDB ordinary completion mapping.
+    /// </summary>
+    public string LlmTmdbCompletionMap { get; set; } = string.Empty;
+
+    /// <summary>
     /// Gets or sets a value indicating whether LLM verified Douban to TMDB corrections should be persisted and reused.
     /// </summary>
     public bool EnableLlmTmdbCorrectionPersistence { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether LLM verified Douban to TMDB ordinary completions should be persisted and reused.
+    /// </summary>
+    public bool EnableLlmTmdbCompletionPersistence { get; set; } = true;
 
     /// <summary>
     /// Gets or sets a value indicating whether LLM can suggest TMDB episode group mappings.

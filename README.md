@@ -45,6 +45,7 @@ https://github.com/qimaoww/metashark-ziyong/releases/download/manifest/manifest.
 - LLM 外部 ID 辅助解析没有单独开关，复用 `LLM 辅助刮削` 全局开关和同一触发范围，不受文本补全开关控制；可把已有公开 ProviderIds（IMDb、TVDB、Douban、TMDb）作为上下文发送给 LLM。LLM 只能提出外部 ID 候选，也可能明确返回无候选；候选 ID 必须再经对应 API 或来源验证才会写入。只补写缺失的 ProviderIds，已有 ID 不会被覆盖。
 - `允许 LLM 辅助纠正错误 TMDb ID`：默认关闭；只允许纠正 Movie/Series 的 TMDb ID。明显错误刮削可进入强制纠错评估，但 IMDb、TVDB、Douban 只作为证据或缺失补全，不做覆盖纠正。LLM 只能提出 TMDb 候选，候选必须再经对应 API 或证据强验证；验证失败会保留原有 TMDb。启用本开关、全局 `LLM 辅助刮削` 和完整 LLM 连接配置后，手动识别、手动刷新、搜索缺失元数据和显式覆盖刷新可按 TMDb 纠错触发器评估。自动扫描、隐式刷新、计划任务和其他自动流程不会触发；普通 LLM 辅助刮削、文本补全、外部 ID 缺失补全和剧集组映射不会因为覆盖刷新而运行。
 - `持久化 LLM Douban→TMDb 纠错来源`：默认开启。开启后，LLM 已强验证纠正为 TMDb 的 Movie/Series 会把 DoubanID 到 TMDb ID 的映射写入配置文件，并在后续刷新中继续使用 TMDb 作为权威来源；关闭后不会写入配置，也不会复用已存映射，条目继续按默认刮削器策略走豆瓣优先。
+- `持久化 LLM TMDbID 补全来源`：默认开启。仅记录 LLM 外部 ID 辅助解析为 Douban 默认链路补齐的 TMDb ID；写入配置文件后用于后续刷新保留该 TMDb ID，但不会把条目升级为 TMDb 强制刮削，也不会写入 Douban→TMDb 纠错来源。关闭后仍可在当次刷新补写缺失 TMDb ID，但不持久化补全来源。
 - LLM 请求默认只发送相对媒体路径、公开 ProviderIds 和必要摘要，不发送完整本地路径、服务器 URL、Jellyfin 私有标识、API Key、cookie 或 token。关闭 `允许发送相对路径上下文` 后，元数据、外部 ID 和剧集组映射提示都不会发送相对路径、文件名或目录结构。
 - LLM 调用使用保守并发，同一时间默认只处理一个请求；超时、结构化输出不符合 schema、并发限制忙碌时会按可选能力关闭处理，不应变成 provider 错误。超时范围为 1-30 秒，默认 15 秒。
 - 日志和证据只记录状态、错误类别和字段名，不记录 prompt、API Key、原始响应、cookie、token 或完整敏感 URL；启用前请自行评估费用、隐私和网络风险。

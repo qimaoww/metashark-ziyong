@@ -56,6 +56,50 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task TryUpsertDoubanCompletionAsync_WhenEnabled_ShouldPersistCanonicalMappingAndUpdateConfiguration()
+        {
+            ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableLlmTmdbCompletionPersistence = true,
+                LlmTmdbCompletionMap = "movie:douban:111=tmdb:222",
+            });
+            var service = new LlmTmdbCorrectionMapPersistenceService();
+            Assert.IsNotNull(currentSerializer);
+            var saveCallCountBefore = currentSerializer.SerializeToFileCallCount;
+
+            var result = await service.TryUpsertDoubanCompletionAsync("Series", "37291769", "251782", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmTmdbCorrectionMapPersistenceStatus.Saved, result.Status);
+            Assert.AreEqual("movie:douban:111=tmdb:222", result.PreviousMapping);
+            Assert.AreEqual("movie:douban:111=tmdb:222\nseries:douban:37291769=tmdb:251782", result.CurrentMapping);
+            Assert.AreEqual("movie:douban:111=tmdb:222\nseries:douban:37291769=tmdb:251782", MetaSharkPlugin.Instance!.Configuration.LlmTmdbCompletionMap);
+            Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance.Configuration.LlmTmdbCorrectionMap);
+            Assert.AreEqual(saveCallCountBefore + 1, currentSerializer.SerializeToFileCallCount);
+            Assert.AreEqual(MetaSharkPlugin.Instance.ConfigurationFilePath, currentSerializer.LastSerializedFilePath);
+            var fileContent = File.ReadAllText(MetaSharkPlugin.Instance.ConfigurationFilePath);
+            StringAssert.Contains(fileContent, "series:douban:37291769=tmdb:251782");
+            Assert.IsFalse(fileContent.Contains("<LlmTmdbCorrectionMap>series:douban:37291769=tmdb:251782</LlmTmdbCorrectionMap>", StringComparison.Ordinal));
+        }
+
+        [TestMethod]
+        public async Task TryUpsertDoubanCompletionAsync_WhenDisabled_ShouldNotSave()
+        {
+            ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableLlmTmdbCompletionPersistence = false,
+                LlmTmdbCompletionMap = string.Empty,
+            });
+            var service = new LlmTmdbCorrectionMapPersistenceService();
+
+            var result = await service.TryUpsertDoubanCompletionAsync("Series", "37291769", "251782", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmTmdbCorrectionMapPersistenceStatus.Failed, result.Status);
+            Assert.AreEqual("LlmTmdbCompletionPersistenceDisabled", result.Reason);
+            Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance!.Configuration.LlmTmdbCompletionMap);
+            Assert.IsFalse(File.Exists(MetaSharkPlugin.Instance.ConfigurationFilePath));
+        }
+
+        [TestMethod]
         public async Task TryUpsertDoubanCorrectionAsync_WhenDisabled_ShouldNotSave()
         {
             ReplacePluginConfiguration(new PluginConfiguration
@@ -149,10 +193,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 this.SerializeToFileCallCount++;
                 this.LastSerializedFilePath = file;
                 Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-                var mapping = obj is PluginConfiguration configuration
+                var correctionMapping = obj is PluginConfiguration configuration
                     ? configuration.LlmTmdbCorrectionMap
                     : string.Empty;
-                File.WriteAllText(file, $"<PluginConfiguration><LlmTmdbCorrectionMap>{mapping}</LlmTmdbCorrectionMap></PluginConfiguration>");
+                var completionMapping = obj is PluginConfiguration completionConfiguration
+                    ? completionConfiguration.LlmTmdbCompletionMap
+                    : string.Empty;
+                File.WriteAllText(file, $"<PluginConfiguration><LlmTmdbCorrectionMap>{correctionMapping}</LlmTmdbCorrectionMap><LlmTmdbCompletionMap>{completionMapping}</LlmTmdbCompletionMap></PluginConfiguration>");
             }
 
             public object DeserializeFromFile(Type type, string file)

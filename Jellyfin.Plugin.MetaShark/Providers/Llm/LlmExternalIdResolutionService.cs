@@ -120,6 +120,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 }
             }
 
+            if (IsTmdbCorrectionSupportedMediaType(mediaType)
+                && !TryGetProviderId(request.LookupInfo.ProviderIds, MetadataProvider.Tmdb.ToString(), out _))
+            {
+                return LlmAssistTriggerDecision.Allowed("MissingTmdbProviderId");
+            }
+
             return LlmAssistTriggerDecision.Rejected("ExistingProviderIdsConsistent");
         }
 
@@ -130,6 +136,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             if (request.LookupInfo == null)
             {
                 LlmObservabilityLog.LogLlmAssistRejected(this.logger, "LookupInfoMissing", request.MediaType, request.Semantic, request.IsImageProvider);
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.NotTriggered), "LookupInfoMissing", request.MediaType, 0, 0, 0, 0, 0, null);
                 return LlmExternalIdResolutionResult.NotTriggered("LookupInfoMissing");
             }
 
@@ -145,6 +152,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             });
             if (!triggerDecision.ShouldTrigger)
             {
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.NotTriggered), triggerDecision.Reason, mediaType, 0, 0, 0, 0, 0, null);
                 return LlmExternalIdResolutionResult.NotTriggered(triggerDecision.Reason);
             }
 
@@ -157,6 +165,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 if (lease == null)
                 {
                     LlmObservabilityLog.LogLlmAssistRejected(this.logger, "LlmRequestLimiterBusy", mediaType, request.Semantic, request.IsImageProvider);
+                    LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.Skipped), "LlmRequestLimiterBusy", mediaType, 0, 0, 0, 0, 0, null);
                     return LlmExternalIdResolutionResult.Skipped("LlmRequestLimiterBusy");
                 }
 
@@ -168,23 +177,29 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
             catch (Exception ex)
             {
-                return LlmExternalIdResolutionResult.VerificationFailed($"LLM external ID request failed: {ex.GetType().Name}");
+                var diagnostic = $"LLM external ID request failed: {ex.GetType().Name}";
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.VerificationFailed), NormalizePublicExternalIdResolutionReason(diagnostic), mediaType, 0, 0, 0, 0, 0, null);
+                return LlmExternalIdResolutionResult.VerificationFailed(diagnostic);
             }
 
             if (!apiResult.Success || string.IsNullOrWhiteSpace(apiResult.ContentJson))
             {
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.VerificationFailed), NormalizePublicExternalIdResolutionReason(apiResult.Diagnostic), mediaType, 0, 0, 0, 0, 0, null);
                 return LlmExternalIdResolutionResult.VerificationFailed(apiResult.Diagnostic);
             }
 
             var validationResult = this.candidateValidator.ParseAndValidateResponse(apiResult.ContentJson, request.Configuration?.LlmConfidenceThreshold ?? new PluginConfiguration().LlmConfidenceThreshold);
             if (!validationResult.Success)
             {
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.ValidationFailed), NormalizePublicExternalIdResolutionReason(validationResult.Diagnostic), mediaType, 0, 0, 0, 0, 0, null);
                 return LlmExternalIdResolutionResult.ValidationFailed(validationResult.Diagnostic);
             }
 
             if (validationResult.Candidates.Count == 0)
             {
-                return LlmExternalIdResolutionResult.Skipped(JoinDiagnostics(validationResult.Diagnostics, "LLM external ID response contains no candidates."));
+                var diagnostic = JoinDiagnostics(validationResult.Diagnostics, "LLM external ID response contains no candidates.");
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.Skipped), NormalizePublicExternalIdResolutionReason(diagnostic), mediaType, 0, 0, 0, 0, 0, null);
+                return LlmExternalIdResolutionResult.Skipped(diagnostic);
             }
 
             var verifiedCandidates = new List<LlmExternalIdCandidate>();
@@ -218,12 +233,15 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
             if (verifiedCandidates.Count == 0)
             {
-                return LlmExternalIdResolutionResult.VerificationFailed(JoinDiagnostics(diagnostics, "No LLM external ID candidates could be verified."));
+                var diagnostic = JoinDiagnostics(diagnostics, "No LLM external ID candidates could be verified.");
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.VerificationFailed), NormalizePublicExternalIdResolutionReason(diagnostic), mediaType, validationResult.Candidates.Count, 0, 0, 0, 0, SummarizeExternalIdCandidates(validationResult.Candidates));
+                return LlmExternalIdResolutionResult.VerificationFailed(diagnostic);
             }
 
             var distinctVerifiedCandidates = DistinctCandidates(verifiedCandidates);
             if (HasAmbiguousCandidates(distinctVerifiedCandidates, out var ambiguousDiagnostic))
             {
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.Rejected), NormalizePublicExternalIdResolutionReason(ambiguousDiagnostic), mediaType, validationResult.Candidates.Count, distinctVerifiedCandidates.Length, 0, 0, 0, SummarizeExternalIdCandidates(distinctVerifiedCandidates));
                 return LlmExternalIdResolutionResult.Rejected(ambiguousDiagnostic);
             }
 
@@ -234,6 +252,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 .ToArray();
             if (plannedWrites.Length == 0)
             {
+                LlmObservabilityLog.LogExternalIdResolutionCompleted(this.logger, nameof(LlmExternalIdResolutionStatus.Skipped), "NoSafeProviderIdWrite", mediaType, validationResult.Candidates.Count, distinctVerifiedCandidates.Length, 0, 0, 0, SummarizeExternalIdCandidates(distinctVerifiedCandidates));
                 return LlmExternalIdResolutionResult.Skipped("Verified candidates are not safe to write for this media type.", distinctVerifiedCandidates, Array.Empty<LlmExternalIdProviderIdWrite>());
             }
 
@@ -241,9 +260,27 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             var applyResult = ApplyMissingProviderIds(providerIds, plannedWrites);
             diagnostics.AddRange(applyResult.Diagnostics);
 
+            var status = applyResult.AppliedWrites.Count == 0
+                ? LlmExternalIdResolutionStatus.Skipped
+                : LlmExternalIdResolutionStatus.Succeeded;
+            var finalDiagnostic = applyResult.AppliedWrites.Count == 0
+                ? JoinDiagnostics(diagnostics, "All verified ProviderIds already exist.")
+                : JoinDiagnostics(diagnostics, "Succeeded");
+            LlmObservabilityLog.LogExternalIdResolutionCompleted(
+                this.logger,
+                status.ToString(),
+                NormalizePublicExternalIdResolutionReason(finalDiagnostic),
+                mediaType,
+                validationResult.Candidates.Count,
+                distinctVerifiedCandidates.Length,
+                plannedWrites.Length,
+                applyResult.AppliedWrites.Count,
+                applyResult.SkippedWrites.Count,
+                SummarizeExternalIdCandidates(distinctVerifiedCandidates));
+
             return applyResult.AppliedWrites.Count == 0
-                ? LlmExternalIdResolutionResult.Skipped(JoinDiagnostics(diagnostics, "All verified ProviderIds already exist."), distinctVerifiedCandidates, applyResult.SkippedWrites)
-                : LlmExternalIdResolutionResult.Succeeded(distinctVerifiedCandidates, applyResult.AppliedWrites, applyResult.SkippedWrites, JoinDiagnostics(diagnostics, "Succeeded"));
+                ? LlmExternalIdResolutionResult.Skipped(finalDiagnostic, distinctVerifiedCandidates, applyResult.SkippedWrites)
+                : LlmExternalIdResolutionResult.Succeeded(distinctVerifiedCandidates, applyResult.AppliedWrites, applyResult.SkippedWrites, finalDiagnostic);
         }
 
         [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "TMDb correction must fail closed and preserve existing ProviderIds.")]
@@ -458,6 +495,74 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             return LlmObservabilityLog.NormalizeReasonCode(trimmed);
+        }
+
+        private static string NormalizePublicExternalIdResolutionReason(string? diagnostic)
+        {
+            if (string.IsNullOrWhiteSpace(diagnostic))
+            {
+                return "Unknown";
+            }
+
+            var trimmed = diagnostic.Trim();
+            if (string.Equals(trimmed, "Succeeded", StringComparison.Ordinal))
+            {
+                return "Succeeded";
+            }
+
+            if (trimmed.Contains("no candidates", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("contains no candidates", StringComparison.OrdinalIgnoreCase))
+            {
+                return "NoCandidates";
+            }
+
+            if (trimmed.Contains("schema invalid", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("field", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("below threshold", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("validation", StringComparison.OrdinalIgnoreCase))
+            {
+                return "CandidateValidationFailed";
+            }
+
+            if (trimmed.Contains("AmbiguousCandidates", StringComparison.Ordinal))
+            {
+                return "AmbiguousCandidates";
+            }
+
+            if (trimmed.Contains("not safe to write", StringComparison.OrdinalIgnoreCase))
+            {
+                return "NoSafeProviderIdWrite";
+            }
+
+            if (trimmed.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("not overwritten", StringComparison.OrdinalIgnoreCase))
+            {
+                return "ProviderIdAlreadyPresent";
+            }
+
+            if (trimmed.Contains("could be verified", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("verification failed", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("detail was not found", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("could not be confirmed", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("ownership cannot be verified", StringComparison.OrdinalIgnoreCase))
+            {
+                return "CandidateVerificationFailed";
+            }
+
+            return LlmObservabilityLog.NormalizeReasonCode(trimmed);
+        }
+
+        private static string SummarizeExternalIdCandidates(IEnumerable<LlmExternalIdCandidate> candidates)
+        {
+            var summary = string.Join(
+                ",",
+                candidates
+                    .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Provider)
+                        && !string.IsNullOrWhiteSpace(candidate.MediaType)
+                        && !string.IsNullOrWhiteSpace(candidate.Id))
+                    .Select(candidate => candidate.Provider + ":" + candidate.MediaType + ":" + candidate.Id)
+                    .Take(5));
+            return string.IsNullOrWhiteSpace(summary) ? "none" : summary;
         }
 
         private static string GetMediaTypeFromLookupInfo(ItemLookupInfo lookupInfo)

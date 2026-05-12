@@ -33,7 +33,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     [MetadataProvider.Tvdb.ToString()] = "305089",
                 },
             };
-            store.Save(new LlmTmdbCorrectionMetadataSnapshot
+            var snapshot = new LlmTmdbCorrectionMetadataSnapshot
             {
                 ItemId = item.Id,
                 ItemPath = item.Path,
@@ -43,14 +43,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Overview = "主线简介",
                 ProductionYear = 2016,
                 PremiereDate = new DateTime(2016, 4, 4),
-                ProviderIds = new Dictionary<string, string>
-                {
-                    [MetadataProvider.Tmdb.ToString()] = "65942",
-                    [MetaSharkPlugin.ProviderId] = "Tmdb_65942",
-                    [MetadataProvider.Imdb.ToString()] = "tt5705718",
-                    [MetadataProvider.Tvdb.ToString()] = "305089",
-                },
-            });
+            };
+            snapshot.ProviderIds[MetadataProvider.Tmdb.ToString()] = "65942";
+            snapshot.ProviderIds[MetaSharkPlugin.ProviderId] = "Tmdb_65942";
+            snapshot.ProviderIds[MetadataProvider.Imdb.ToString()] = "tt5705718";
+            snapshot.ProviderIds[MetadataProvider.Tvdb.ToString()] = "305089";
+            store.Save(snapshot);
             var service = new LlmTmdbCorrectionMetadataPostProcessService(store, NullLogger<LlmTmdbCorrectionMetadataPostProcessService>.Instance);
 
             await service.TryApplyAsync(

@@ -23,41 +23,28 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
         public Task<LlmTmdbCorrectionMapPersistenceResult> TryUpsertDoubanCorrectionAsync(string mediaType, string doubanId, string tmdbId, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var plugin = MetaSharkPlugin.Instance;
-            if (plugin?.Configuration == null)
-            {
-                return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.Failed("PluginConfigurationUnavailable", string.Empty, string.Empty, null));
-            }
+            return this.TryUpsertDoubanMapAsync(
+                mediaType,
+                doubanId,
+                tmdbId,
+                static configuration => configuration.EnableLlmTmdbCorrectionPersistence,
+                static configuration => configuration.LlmTmdbCorrectionMap,
+                static (configuration, mapping) => configuration.LlmTmdbCorrectionMap = mapping,
+                "LlmTmdbCorrectionPersistenceDisabled",
+                cancellationToken);
+        }
 
-            lock (this.syncRoot)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var currentConfiguration = plugin.Configuration;
-                if (!currentConfiguration.EnableLlmTmdbCorrectionPersistence)
-                {
-                    var disabledMapping = this.parser.GetCanonicalText(currentConfiguration.LlmTmdbCorrectionMap);
-                    return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.Failed("LlmTmdbCorrectionPersistenceDisabled", disabledMapping, disabledMapping, null));
-                }
-
-                var currentSnapshot = this.parser.ParseSnapshot(currentConfiguration.LlmTmdbCorrectionMap);
-                var newMapping = this.parser.UpsertDoubanCorrection(currentSnapshot.CanonicalText, mediaType, doubanId, tmdbId);
-                var newSnapshot = this.parser.ParseSnapshot(newMapping);
-                if (string.Equals(currentSnapshot.CanonicalText, newSnapshot.CanonicalText, StringComparison.Ordinal))
-                {
-                    return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.NoChange(currentSnapshot.CanonicalText));
-                }
-
-                var previousConfiguration = CloneConfiguration(currentConfiguration);
-                var updatedConfiguration = CloneConfiguration(currentConfiguration);
-                updatedConfiguration.LlmTmdbCorrectionMap = newSnapshot.CanonicalText;
-                if (plugin.TrySaveConfigurationSafely(updatedConfiguration, previousConfiguration, out var saveException))
-                {
-                    return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.SavedResult(currentSnapshot.CanonicalText, newSnapshot.CanonicalText));
-                }
-
-                return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.Failed("SaveConfigurationFailed", currentSnapshot.CanonicalText, currentSnapshot.CanonicalText, saveException));
-            }
+        public Task<LlmTmdbCorrectionMapPersistenceResult> TryUpsertDoubanCompletionAsync(string mediaType, string doubanId, string tmdbId, CancellationToken cancellationToken)
+        {
+            return this.TryUpsertDoubanMapAsync(
+                mediaType,
+                doubanId,
+                tmdbId,
+                static configuration => configuration.EnableLlmTmdbCompletionPersistence,
+                static configuration => configuration.LlmTmdbCompletionMap,
+                static (configuration, mapping) => configuration.LlmTmdbCompletionMap = mapping,
+                "LlmTmdbCompletionPersistenceDisabled",
+                cancellationToken);
         }
 
         private static PluginConfiguration CloneConfiguration(PluginConfiguration source)
@@ -73,6 +60,53 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             return clone;
+        }
+
+        private Task<LlmTmdbCorrectionMapPersistenceResult> TryUpsertDoubanMapAsync(
+            string mediaType,
+            string doubanId,
+            string tmdbId,
+            Func<PluginConfiguration, bool> isEnabled,
+            Func<PluginConfiguration, string?> getMapping,
+            Action<PluginConfiguration, string> setMapping,
+            string disabledReason,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var plugin = MetaSharkPlugin.Instance;
+            if (plugin?.Configuration == null)
+            {
+                return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.Failed("PluginConfigurationUnavailable", string.Empty, string.Empty, null));
+            }
+
+            lock (this.syncRoot)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var currentConfiguration = plugin.Configuration;
+                if (!isEnabled(currentConfiguration))
+                {
+                    var disabledMapping = this.parser.GetCanonicalText(getMapping(currentConfiguration));
+                    return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.Failed(disabledReason, disabledMapping, disabledMapping, null));
+                }
+
+                var currentSnapshot = this.parser.ParseSnapshot(getMapping(currentConfiguration));
+                var newMapping = this.parser.UpsertDoubanCorrection(currentSnapshot.CanonicalText, mediaType, doubanId, tmdbId);
+                var newSnapshot = this.parser.ParseSnapshot(newMapping);
+                if (string.Equals(currentSnapshot.CanonicalText, newSnapshot.CanonicalText, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.NoChange(currentSnapshot.CanonicalText));
+                }
+
+                var previousConfiguration = CloneConfiguration(currentConfiguration);
+                var updatedConfiguration = CloneConfiguration(currentConfiguration);
+                setMapping(updatedConfiguration, newSnapshot.CanonicalText);
+                if (plugin.TrySaveConfigurationSafely(updatedConfiguration, previousConfiguration, out var saveException))
+                {
+                    return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.SavedResult(currentSnapshot.CanonicalText, newSnapshot.CanonicalText));
+                }
+
+                return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.Failed("SaveConfigurationFailed", currentSnapshot.CanonicalText, currentSnapshot.CanonicalText, saveException));
+            }
         }
     }
 }

@@ -16,6 +16,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             "EnableLlmAssist",
             "EnableLlmTmdbIdCorrection",
             "EnableLlmTmdbCorrectionPersistence",
+            "EnableLlmTmdbCompletionPersistence",
             "LlmBaseUrl",
             "LlmApiKey",
             "LlmModel",
@@ -65,6 +66,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertRoundTrip(html, "EnableLlmAssist", ".checked");
             AssertRoundTrip(html, "EnableLlmTmdbIdCorrection", ".checked");
             AssertRoundTrip(html, "EnableLlmTmdbCorrectionPersistence", ".checked");
+            AssertRoundTrip(html, "EnableLlmTmdbCompletionPersistence", ".checked");
             AssertRoundTrip(html, "LlmBaseUrl", ".value");
             AssertRoundTrip(html, "LlmModel", ".value");
             AssertRoundTrip(html, "LlmTimeoutSeconds", ".value", ".valueAsNumber");
@@ -112,6 +114,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(llmBlock.Contains("外部 ID 辅助解析没有单独开关，复用此全局开关，不受文本补全开关控制，可把已有公开 ProviderIds（IMDb、TVDB、Douban、TMDb）作为上下文发送给 LLM。LLM 只能提出外部 ID 候选，也可能明确返回无候选；候选 ID 必须再经对应 API 或来源验证才会写入。只补写缺失的 ProviderIds，已有 ID 不会被覆盖。", StringComparison.Ordinal), "LLM 辅助刮削必须说明外部 ID 解析复用开关、无单独开关、公开 ProviderIds、空候选、API/source 验证、只写缺失项和不覆盖已有 ID。 ");
             Assert.IsTrue(llmBlock.Contains("默认关闭。仅允许纠正 Movie/Series 的 TMDb ID；只有在明显错误刮削时才会进入强制纠错评估，IMDb、TVDB、Douban 只作为证据或缺失补全，不做覆盖纠正。LLM 只能提出 TMDb 候选，候选必须经对应 API 或证据强验证；验证失败会保留原有 TMDb。启用本开关、全局 LLM 辅助刮削和完整 LLM 连接配置后，手动识别、手动刷新、搜索缺失元数据和显式覆盖刷新可按 TMDb 纠错触发器评估。自动扫描、隐式刷新、计划任务和其他自动流程不会触发；普通 LLM 辅助刮削、文本补全、外部 ID 缺失补全和剧集组映射不会因为覆盖刷新而运行。", StringComparison.Ordinal), "TMDb 纠错开关必须说明默认关闭、仅限 Movie/Series、明显错误刮削才进入强制纠错评估、其他外部 ID 只作证据或缺失补全、API 或证据强验证保留旧 TMDb、显式覆盖刷新可评估，以及 automatic/implicit/scheduled automatic blocked。 ");
             Assert.IsTrue(llmBlock.Contains("默认开启。仅在 LLM 已把 Movie/Series 的 Douban 明显误刮削强验证纠正为 TMDb 后，把 DoubanID 到 TMDb ID 的映射写入配置文件；后续刷新命中该记录时继续使用 TMDb 元数据，未命中的条目仍按默认刮削器策略处理。", StringComparison.Ordinal), "LLM Douban→TMDb 纠错持久化开关必须说明默认开启、只记录强验证纠错、写入配置文件、后续命中使用 TMDb、未命中保持默认策略。 ");
+            Assert.IsTrue(llmBlock.Contains("默认开启。仅记录 LLM 外部 ID 辅助解析为 Douban 默认链路补齐的 TMDb ID；写入配置文件后用于后续刷新保留该 TMDb ID，但不会把条目升级为 TMDb 强制刮削，也不会写入 Douban→TMDb 纠错来源。关闭后仍可在当次刷新补写缺失 TMDb ID，但不持久化补全来源。", StringComparison.Ordinal), "LLM TMDbID 补全持久化开关必须说明默认开启、只记录普通补 ID、保留 TMDbID、不升级强制 TMDb、不写纠错来源和关闭后的当次行为。 ");
             Assert.IsTrue(llmBlock.Contains("OpenAI 兼容接口地址，需要填写到 /v1 级别；留空时不会调用 LLM。启用前请自行评估费用、隐私和网络风险。", StringComparison.Ordinal), "Base URL 必须说明 /v1 级别和费用、隐私、网络风险。");
             Assert.IsTrue(llmBlock.Contains("默认开启。仅发送相对媒体路径、公开 ProviderIds 和必要摘要，不发送完整本地路径、服务器 URL、Jellyfin 私有标识、API Key、cookie 或 token。关闭后，元数据、外部 ID 和剧集组映射提示都不会发送相对路径、文件名或目录结构。日志和证据不记录 prompt、API Key 或原始响应。", StringComparison.Ordinal), "相对路径开关必须说明发送边界和敏感信息排除范围。");
             Assert.IsTrue(llmBlock.Contains("默认关闭。全局 LLM 辅助刮削开关不等同于标题/简介文本补全；仅启用全局开关不会发送文本补全请求。开启本开关后，LLM 生成文本仅可在置信度和合并检查通过后回填空白或低风险的标题、简介类字段；不会覆盖权威元数据。外部 ID 辅助解析仍复用全局 LLM 开关独立运行。", StringComparison.Ordinal), "LLM 生成文本开关必须说明默认关闭、全局 LLM 开关不等同于文本补全、请求 gate、回填边界、不得覆盖权威元数据和外部 ID 独立运行。");
@@ -135,6 +138,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 "候选 ID 必须再经对应 API 或来源验证才会写入",
                 "只补写缺失的 ProviderIds",
                 "已有 ID 不会被覆盖",
+                "仅记录 LLM 外部 ID 辅助解析为 Douban 默认链路补齐的 TMDb ID",
+                "不会把条目升级为 TMDb 强制刮削",
+                "不会写入 Douban→TMDb 纠错来源",
                 "仅允许纠正 Movie/Series 的 TMDb ID",
                 "IMDb、TVDB、Douban 只作为证据或缺失补全，不做覆盖纠正",
                 "LLM 只能提出 TMDb 候选",

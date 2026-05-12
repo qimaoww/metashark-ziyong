@@ -354,12 +354,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var tmdbApi = new TmdbApi(loggerFactory);
             SeedTmdbMovie(tmdbApi, 6201, "zh-CN", CreateTmdbMovie(6201, "TMDb Supplemental Movie", 2030));
             var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "6201"));
+            var persistenceService = new Mock<ILlmTmdbCorrectionMapPersistenceService>();
+            persistenceService
+                .Setup(x => x.TryUpsertDoubanCompletionAsync(nameof(Movie), "douban-without-tmdb", "6201", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(LlmTmdbCorrectionMapPersistenceResult.SavedResult(string.Empty, "movie:douban:douban-without-tmdb=tmdb:6201"));
             var provider = CreateProvider(
                 loggerFactory,
                 httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitSearchMissingContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture)),
                 doubanApi: doubanApi,
                 tmdbApi: tmdbApi,
-                llmExternalIdResolutionService: externalIdResolver);
+                llmExternalIdResolutionService: externalIdResolver,
+                llmTmdbCorrectionMapPersistenceService: persistenceService.Object);
             var info = CreateMovieInfo("Douban Existing Movie", "/mnt/media/Movies/Douban Existing Movie/Douban Existing Movie.mkv", 2030);
             info.ProviderIds = new Dictionary<string, string>
             {
@@ -371,8 +376,54 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.AreEqual(1, externalIdResolver.Requests.Count);
             Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("Douban Existing Movie", result.Item!.Name);
+            Assert.AreEqual("Douban Existing Movie overview", result.Item.Overview);
             Assert.AreEqual("douban-without-tmdb", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("Douban_douban-without-tmdb", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
             Assert.AreEqual("6201", result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual(0, externalIdResolver.CorrectionRequests.Count);
+            persistenceService.Verify(x => x.TryUpsertDoubanCorrectionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            persistenceService.Verify(x => x.TryUpsertDoubanCompletionAsync(nameof(Movie), "douban-without-tmdb", "6201", It.IsAny<CancellationToken>()), Times.Once);
+            Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance!.Configuration.LlmTmdbCorrectionMap);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenOverwriteRefreshHasDoubanPrimaryAndCompletedTmdbId_PreservesTmdbIdWithoutResolver()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("overwrite-completed-douban", "Overwrite Completed Movie", 2035);
+            SeedDoubanSubject(doubanApi, subject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 6701, "zh-CN", CreateTmdbMovie(6701, "TMDb Should Stay Supplemental", 2035));
+            var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "9999"));
+            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Rejected("ExistingProviderIdsConsistent"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Overwrite Completed Movie", "/mnt/media/Movies/Overwrite Completed Movie/Overwrite Completed Movie.mkv", 2035);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "overwrite-completed-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_overwrite-completed-douban",
+                [MetadataProvider.Tmdb.ToString()] = "6701",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("Overwrite Completed Movie", result.Item!.Name);
+            Assert.AreEqual("Overwrite Completed Movie overview", result.Item.Overview);
+            Assert.AreEqual("overwrite-completed-douban", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("Douban_overwrite-completed-douban", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.AreEqual("6701", result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual(1, externalIdResolver.ExistingProviderDecisionRequests.Count);
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, externalIdResolver.CorrectionRequests.Count);
         }
 
         [TestMethod]
@@ -521,7 +572,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var tmdbApi = new TmdbApi(loggerFactory);
             SeedTmdbMovie(tmdbApi, 111, "zh-CN", CreateTmdbMovie(111, "Old TMDb Movie", 2036));
             var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
-            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Rejected("ExistingProviderIdsConsistent"));
+            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
             externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
             var provider = CreateProvider(
                 loggerFactory,
@@ -909,7 +960,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var tmdbApi = new TmdbApi(loggerFactory);
             SeedTmdbMovie(tmdbApi, 222, "zh-CN", CreateTmdbMovie(222, "Manual Identify Corrected Movie", 2040));
             var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
-            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Rejected("ExistingProviderIdsConsistent"));
+            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
             externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test verified replacement"));
             var provider = CreateProvider(
                 loggerFactory,
@@ -986,7 +1037,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var subject = CreateDoubanSubject("weak-evidence-douban", "Weak Evidence Movie", 2042);
             SeedDoubanSubject(doubanApi, subject);
             var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
-            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Rejected("ExistingProviderIdsConsistent"));
+            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
             externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.NoReplacement("StrongEvidenceMissing"));
             var provider = CreateProvider(
                 loggerFactory,

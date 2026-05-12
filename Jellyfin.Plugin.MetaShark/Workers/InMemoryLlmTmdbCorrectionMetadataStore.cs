@@ -129,7 +129,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         private static LlmTmdbCorrectionMetadataSnapshot Clone(LlmTmdbCorrectionMetadataSnapshot snapshot)
         {
-            return new LlmTmdbCorrectionMetadataSnapshot
+            var clone = new LlmTmdbCorrectionMetadataSnapshot
             {
                 ItemId = snapshot.ItemId,
                 ItemPath = snapshot.ItemPath,
@@ -140,10 +140,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 Overview = snapshot.Overview,
                 ProductionYear = snapshot.ProductionYear,
                 PremiereDate = snapshot.PremiereDate,
-                ProviderIds = snapshot.ProviderIds.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
                 QueuedAtUtc = snapshot.QueuedAtUtc,
                 ExpiresAtUtc = snapshot.ExpiresAtUtc,
             };
+
+            foreach (var providerId in snapshot.ProviderIds)
+            {
+                clone.ProviderIds[providerId.Key] = providerId.Value;
+            }
+
+            return clone;
         }
 
         private static string NormalizePath(string itemPath)

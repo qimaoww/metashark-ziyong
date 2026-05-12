@@ -31,6 +31,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using TMDbLib.Objects.TvShows;
     using MetadataProvider = MediaBrowser.Model.Entities.MetadataProvider;
 
+    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1201:Elements should appear in the correct order", Justification = "Keep trace hooks and flow records near the provider entry points they support.")]
     [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Keep provider orchestration helpers near the flow they support.")]
     public class SeriesProvider : BaseProvider, IRemoteMetadataProvider<Series, SeriesInfo>
     {
@@ -169,6 +170,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var originalPublicProviderIds = CreatePublicProviderIdCopy(info.ProviderIds);
             var hasVerifiedTmdbCorrection = false;
             var hasPersistedDoubanTmdbCorrection = TryApplyPersistedDoubanTmdbCorrection(nameof(Series), sid, ref tmdbId, info);
+            var hasPersistedDoubanTmdbCompletion = TryApplyPersistedDoubanTmdbCompletion(nameof(Series), sid, ref tmdbId, info);
             var metaSource = info.GetMetaSource(MetaSharkPlugin.ProviderId);
             if (metaSource == MetaSource.Tmdb && string.IsNullOrWhiteSpace(tmdbId))
             {
@@ -205,7 +207,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var shouldUseTmdbMetadataAfterCorrection = false;
             var tmdbCorrectionResult = hasPersistedDoubanTmdbCorrection
                 ? LlmTmdbIdCorrectionResult.NoReplacement("PersistedDoubanTmdbCorrectionApplied")
-                : await this.TryResolveSeriesTmdbCorrectionAsync(info, semantic, originalTmdbId, hasBridgedExplicitSearchMissingMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
+                : await this.TryResolveSeriesTmdbCorrectionAsync(info, semantic, originalTmdbId, hasPersistedDoubanTmdbCompletion, hasBridgedExplicitSearchMissingMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
             if (tmdbCorrectionResult.ShouldReplace && !string.IsNullOrWhiteSpace(tmdbCorrectionResult.ReplacementTmdbId))
             {
                 tmdbId = tmdbCorrectionResult.ReplacementTmdbId;
@@ -238,6 +240,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 {
                     tmdbId = resolvedTmdbId;
                     tmdbIdResolvedByLlmExternalIds = true;
+                    _ = await this.TryPersistLlmDoubanTmdbCompletionMapAsync(nameof(Series), sid, tmdbId, cancellationToken).ConfigureAwait(false);
                 }
             }
 
@@ -469,6 +472,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             tmdbId = correctedTmdbId;
             info.SetProviderId(MetadataProvider.Tmdb, correctedTmdbId);
             info.SetProviderId(MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{correctedTmdbId}");
+            return true;
+        }
+
+        private static bool TryApplyPersistedDoubanTmdbCompletion(string mediaType, string? doubanId, ref string? tmdbId, ItemLookupInfo info)
+        {
+            if (!Config.EnableLlmTmdbCompletionPersistence
+                || string.IsNullOrWhiteSpace(doubanId)
+                || !LlmTmdbCorrectionMapParser.Shared.TryGetDoubanCorrection(Config.LlmTmdbCompletionMap, mediaType, doubanId, out var completedTmdbId)
+                || string.IsNullOrWhiteSpace(completedTmdbId))
+            {
+                return false;
+            }
+
+            tmdbId = completedTmdbId;
+            info.SetProviderId(MetadataProvider.Tmdb, completedTmdbId);
             return true;
         }
 
@@ -772,14 +790,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 MediaType = nameof(Series),
                 IsImageProvider = false,
                 HttpContext = this.HttpContextAccessor.HttpContext,
+                HasBridgedExplicitSearchMissingMetadataRefreshIntent = hasBridgedExplicitSearchMissingMetadataRefreshIntent,
             });
-            if (!triggerDecision.ShouldTrigger
-                && hasBridgedExplicitSearchMissingMetadataRefreshIntent
-                && semantic == DefaultScraperSemantic.UserRefresh
-                && string.Equals(triggerDecision.Reason, "ImplicitRefreshRejected", StringComparison.Ordinal))
-            {
-                triggerDecision = LlmAssistTriggerDecision.Allowed("ExplicitSearchMissingMetadataRefresh");
-            }
 
             if (!triggerDecision.ShouldTrigger)
             {
@@ -810,7 +822,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return await this.llmExternalIdResolutionService.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
-        private async Task<LlmTmdbIdCorrectionResult> TryResolveSeriesTmdbCorrectionAsync(SeriesInfo info, DefaultScraperSemantic semantic, string? originalTmdbId, bool hasBridgedExplicitSearchMissingMetadataRefreshIntent, CancellationToken cancellationToken)
+        private async Task<LlmTmdbIdCorrectionResult> TryResolveSeriesTmdbCorrectionAsync(SeriesInfo info, DefaultScraperSemantic semantic, string? originalTmdbId, bool hasPersistedDoubanTmdbCompletion, bool hasBridgedExplicitSearchMissingMetadataRefreshIntent, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(originalTmdbId)
                 || this.llmExternalIdResolutionService == null
@@ -820,6 +832,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var reason = string.IsNullOrWhiteSpace(originalTmdbId)
                     ? "OldTmdbMissingOrInvalid"
                     : "LlmTmdbIdCorrectionConfigurationMissing";
+                LlmObservabilityLog.LogTmdbCorrectionRejected(this.Logger, reason, nameof(Series), semantic, false);
+                return LlmTmdbIdCorrectionResult.NoReplacement(reason);
+            }
+
+            if (hasPersistedDoubanTmdbCompletion)
+            {
+                const string reason = "LlmTmdbCompletionSource";
                 LlmObservabilityLog.LogTmdbCorrectionRejected(this.Logger, reason, nameof(Series), semantic, false);
                 return LlmTmdbIdCorrectionResult.NoReplacement(reason);
             }
@@ -899,6 +918,33 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return false;
         }
 
+        private async Task<bool> TryPersistLlmDoubanTmdbCompletionMapAsync(string mediaType, string? doubanId, string? tmdbId, CancellationToken cancellationToken)
+        {
+            if (!Config.EnableLlmTmdbCompletionPersistence
+                || this.llmTmdbCorrectionMapPersistenceService == null
+                || string.IsNullOrWhiteSpace(doubanId)
+                || string.IsNullOrWhiteSpace(tmdbId))
+            {
+                return false;
+            }
+
+            var result = await this.llmTmdbCorrectionMapPersistenceService
+                .TryUpsertDoubanCompletionAsync(mediaType, doubanId, tmdbId, cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Status is LlmTmdbCorrectionMapPersistenceStatus.Saved or LlmTmdbCorrectionMapPersistenceStatus.NoChange)
+            {
+                this.Log("已持久化 LLM Douban 到 TMDb 补全来源. mediaType: {0} doubanId: {1} tmdbId: {2}", mediaType, doubanId, tmdbId);
+                return true;
+            }
+
+            if (result.Status == LlmTmdbCorrectionMapPersistenceStatus.Failed)
+            {
+                this.Log("LLM Douban 到 TMDb 补全来源持久化失败. mediaType: {0} doubanId: {1} tmdbId: {2} reason: {3}", mediaType, doubanId, tmdbId, result.Reason);
+            }
+
+            return false;
+        }
+
         private void TryQueueVerifiedTmdbCorrectionMetadataSnapshot(SeriesInfo info, string? tmdbId, bool shouldUseTmdbMetadataAfterCorrection, Series? authoritativeMetadataItem)
         {
             if (!shouldUseTmdbMetadataAfterCorrection
@@ -921,7 +967,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 _ = TryResolveItemIdFromRequestPath(this.HttpContextAccessor.HttpContext, out itemId);
             }
 
-            this.llmTmdbCorrectionMetadataStore.Save(new LlmTmdbCorrectionMetadataSnapshot
+            var snapshot = new LlmTmdbCorrectionMetadataSnapshot
             {
                 ItemId = itemId,
                 ItemPath = info.Path,
@@ -932,9 +978,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 Overview = authoritativeMetadataItem.Overview,
                 ProductionYear = authoritativeMetadataItem.ProductionYear,
                 PremiereDate = authoritativeMetadataItem.PremiereDate,
-                ProviderIds = (CreatePublicProviderIdCopy(authoritativeMetadataItem.ProviderIds) ?? new Dictionary<string, string>())
-                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
-            });
+            };
+            foreach (var providerId in CreatePublicProviderIdCopy(authoritativeMetadataItem.ProviderIds) ?? new Dictionary<string, string>())
+            {
+                snapshot.ProviderIds[providerId.Key] = providerId.Value;
+            }
+
+            this.llmTmdbCorrectionMetadataStore.Save(snapshot);
         }
 
         private async Task<LlmAssistTriggerDecision> TryEvaluateSeriesTmdbCorrectionEntryAsync(SeriesInfo lookupInfo, DefaultScraperSemantic semantic, IReadOnlyCollection<string?> relativePathSamples, LlmAssistTriggerDecision triggerDecision, CancellationToken cancellationToken)
@@ -961,9 +1011,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            return existingProviderDecision.ShouldTrigger
-                ? existingProviderDecision
-                : triggerDecision;
+            return existingProviderDecision;
         }
 
         private async Task<string?> GuessByDoubanWithLlmHintsAsync(LlmSearchHints searchHints, ItemLookupInfo info, CancellationToken cancellationToken)

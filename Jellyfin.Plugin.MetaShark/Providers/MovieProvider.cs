@@ -122,6 +122,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var originalPublicProviderIds = CreatePublicProviderIdCopy(info.ProviderIds);
             var hasVerifiedTmdbCorrection = false;
             var hasPersistedDoubanTmdbCorrection = TryApplyPersistedDoubanTmdbCorrection(nameof(Movie), sid, ref tmdbId, info);
+            var hasPersistedDoubanTmdbCompletion = TryApplyPersistedDoubanTmdbCompletion(nameof(Movie), sid, ref tmdbId, info);
             var metaSource = info.GetMetaSource(MetaSharkPlugin.ProviderId);
             if (metaSource == MetaSource.Tmdb && string.IsNullOrWhiteSpace(tmdbId))
             {
@@ -151,7 +152,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var tmdbCorrectionResult = hasPersistedDoubanTmdbCorrection
                 ? LlmTmdbIdCorrectionResult.NoReplacement("PersistedDoubanTmdbCorrectionApplied")
-                : await this.TryResolveMovieTmdbCorrectionAsync(info, semantic, originalTmdbId, cancellationToken).ConfigureAwait(false);
+                : await this.TryResolveMovieTmdbCorrectionAsync(info, semantic, originalTmdbId, hasPersistedDoubanTmdbCompletion, cancellationToken).ConfigureAwait(false);
             if (tmdbCorrectionResult.ShouldReplace && !string.IsNullOrWhiteSpace(tmdbCorrectionResult.ReplacementTmdbId))
             {
                 tmdbId = tmdbCorrectionResult.ReplacementTmdbId;
@@ -229,6 +230,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 tmdbId = GetProviderIdWriteValue(externalIdResolutionResult, MetadataProvider.Tmdb.ToString()) ?? tmdbId;
                 sid = GetProviderIdWriteValue(externalIdResolutionResult, DoubanProviderId) ?? sid;
                 effectiveSid = doubanAllowed ? sid : null;
+                if (!string.IsNullOrWhiteSpace(tmdbId))
+                {
+                    _ = await this.TryPersistLlmDoubanTmdbCompletionMapAsync(nameof(Movie), sid, tmdbId, cancellationToken).ConfigureAwait(false);
+                }
             }
 
             if (!shouldUseTmdbMetadataAfterCorrection && !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid))
@@ -385,6 +390,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             tmdbId = correctedTmdbId;
             info.SetProviderId(MetadataProvider.Tmdb, correctedTmdbId);
             info.SetProviderId(MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{correctedTmdbId}");
+            return true;
+        }
+
+        private static bool TryApplyPersistedDoubanTmdbCompletion(string mediaType, string? doubanId, ref string? tmdbId, ItemLookupInfo info)
+        {
+            if (!Config.EnableLlmTmdbCompletionPersistence
+                || string.IsNullOrWhiteSpace(doubanId)
+                || !LlmTmdbCorrectionMapParser.Shared.TryGetDoubanCorrection(Config.LlmTmdbCompletionMap, mediaType, doubanId, out var completedTmdbId)
+                || string.IsNullOrWhiteSpace(completedTmdbId))
+            {
+                return false;
+            }
+
+            tmdbId = completedTmdbId;
+            info.SetProviderId(MetadataProvider.Tmdb, completedTmdbId);
             return true;
         }
 
@@ -646,7 +666,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return await this.llmExternalIdResolutionService.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
-        private async Task<LlmTmdbIdCorrectionResult> TryResolveMovieTmdbCorrectionAsync(MovieInfo info, DefaultScraperSemantic semantic, string? originalTmdbId, CancellationToken cancellationToken)
+        private async Task<LlmTmdbIdCorrectionResult> TryResolveMovieTmdbCorrectionAsync(MovieInfo info, DefaultScraperSemantic semantic, string? originalTmdbId, bool hasPersistedDoubanTmdbCompletion, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(originalTmdbId)
                 || this.llmExternalIdResolutionService == null
@@ -656,6 +676,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var reason = string.IsNullOrWhiteSpace(originalTmdbId)
                     ? "OldTmdbMissingOrInvalid"
                     : "LlmTmdbIdCorrectionConfigurationMissing";
+                LlmObservabilityLog.LogTmdbCorrectionRejected(this.Logger, reason, nameof(Movie), semantic, false);
+                return LlmTmdbIdCorrectionResult.NoReplacement(reason);
+            }
+
+            if (hasPersistedDoubanTmdbCompletion)
+            {
+                const string reason = "LlmTmdbCompletionSource";
                 LlmObservabilityLog.LogTmdbCorrectionRejected(this.Logger, reason, nameof(Movie), semantic, false);
                 return LlmTmdbIdCorrectionResult.NoReplacement(reason);
             }
@@ -736,6 +763,33 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return false;
         }
 
+        private async Task<bool> TryPersistLlmDoubanTmdbCompletionMapAsync(string mediaType, string? doubanId, string? tmdbId, CancellationToken cancellationToken)
+        {
+            if (!Config.EnableLlmTmdbCompletionPersistence
+                || this.llmTmdbCorrectionMapPersistenceService == null
+                || string.IsNullOrWhiteSpace(doubanId)
+                || string.IsNullOrWhiteSpace(tmdbId))
+            {
+                return false;
+            }
+
+            var result = await this.llmTmdbCorrectionMapPersistenceService
+                .TryUpsertDoubanCompletionAsync(mediaType, doubanId, tmdbId, cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Status is LlmTmdbCorrectionMapPersistenceStatus.Saved or LlmTmdbCorrectionMapPersistenceStatus.NoChange)
+            {
+                this.Log("已持久化 LLM Douban 到 TMDb 补全来源. mediaType: {0} doubanId: {1} tmdbId: {2}", mediaType, doubanId, tmdbId);
+                return true;
+            }
+
+            if (result.Status == LlmTmdbCorrectionMapPersistenceStatus.Failed)
+            {
+                this.Log("LLM Douban 到 TMDb 补全来源持久化失败. mediaType: {0} doubanId: {1} tmdbId: {2} reason: {3}", mediaType, doubanId, tmdbId, result.Reason);
+            }
+
+            return false;
+        }
+
         private void TryQueueVerifiedTmdbCorrectionMetadataSnapshot(MovieInfo info, string? tmdbId, bool shouldUseTmdbMetadataAfterCorrection, Movie? authoritativeMetadataItem)
         {
             if (!shouldUseTmdbMetadataAfterCorrection
@@ -758,7 +812,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 _ = TryResolveItemIdFromRequestPath(this.HttpContextAccessor.HttpContext, out itemId);
             }
 
-            this.llmTmdbCorrectionMetadataStore.Save(new LlmTmdbCorrectionMetadataSnapshot
+            var snapshot = new LlmTmdbCorrectionMetadataSnapshot
             {
                 ItemId = itemId,
                 ItemPath = info.Path,
@@ -769,9 +823,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 Overview = authoritativeMetadataItem.Overview,
                 ProductionYear = authoritativeMetadataItem.ProductionYear,
                 PremiereDate = authoritativeMetadataItem.PremiereDate,
-                ProviderIds = (CreatePublicProviderIdCopy(authoritativeMetadataItem.ProviderIds) ?? new Dictionary<string, string>())
-                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
-            });
+            };
+            foreach (var providerId in CreatePublicProviderIdCopy(authoritativeMetadataItem.ProviderIds) ?? new Dictionary<string, string>())
+            {
+                snapshot.ProviderIds[providerId.Key] = providerId.Value;
+            }
+
+            this.llmTmdbCorrectionMetadataStore.Save(snapshot);
         }
 
         private async Task<LlmAssistTriggerDecision> TryEvaluateMovieTmdbCorrectionEntryAsync(MovieInfo lookupInfo, DefaultScraperSemantic semantic, IReadOnlyCollection<string?> relativePathSamples, LlmAssistTriggerDecision triggerDecision, CancellationToken cancellationToken)
@@ -797,9 +855,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            return existingProviderDecision.ShouldTrigger
-                ? existingProviderDecision
-                : triggerDecision;
+            return existingProviderDecision;
         }
 
         private async Task<LlmScrapingAssistResult> TryAssistMovieMetadataWithLlmAsync(MovieInfo info, DefaultScraperSemantic semantic, CancellationToken cancellationToken)

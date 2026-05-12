@@ -10,5 +10,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
     public interface ILlmTmdbCorrectionMapPersistenceService
     {
         Task<LlmTmdbCorrectionMapPersistenceResult> TryUpsertDoubanCorrectionAsync(string mediaType, string doubanId, string tmdbId, CancellationToken cancellationToken);
+
+        Task<LlmTmdbCorrectionMapPersistenceResult> TryUpsertDoubanCompletionAsync(string mediaType, string doubanId, string tmdbId, CancellationToken cancellationToken);
     }
 }

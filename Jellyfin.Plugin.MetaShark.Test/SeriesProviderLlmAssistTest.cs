@@ -145,6 +145,53 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_DefaultOverwriteRefreshWithDoubanPrimary_PreservesCompletedTmdbId()
+        {
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true, enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var doubanSubject = CreateDoubanSubject("overwrite-douban", "覆盖保留豆瓣剧集", 2024);
+            SeedDoubanSubject(doubanApi, doubanSubject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 8870, "zh-CN", CreateTmdbSeries(8870, "覆盖保留 TMDb 剧集", "覆盖保留 TMDb 简介", "tt8870000", "887000"));
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Rejected("ExistingProviderIdsConsistent"));
+            externalIdService.EnqueueResult(CreateExternalIdResolutionResult("TMDb", "9999", "Series", MetadataProvider.Tmdb.ToString()));
+            var llmApi = new RecordingLlmApi("overwrite-group", 0.95);
+            var refreshCalls = new List<QueueRefreshCall>();
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmEpisodeGroupMappingProviderAssistService: CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, Array.Empty<BaseItem>(), refreshCalls),
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("覆盖保留豆瓣剧集", "/mnt/media/TV/覆盖保留豆瓣剧集");
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "overwrite-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_overwrite-douban",
+                [MetadataProvider.Tmdb.ToString()] = "8870",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("覆盖保留豆瓣剧集", result.Item!.Name);
+            Assert.AreEqual("覆盖保留豆瓣剧集简介", result.Item.Overview);
+            Assert.AreEqual("overwrite-douban", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("Douban_overwrite-douban", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.AreEqual("8870", result.Item.GetProviderId(MetadataProvider.Tmdb), "覆盖刷新不能丢掉已经由 LLM 补齐的 TMDbID。");
+            Assert.AreEqual("8870", info.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual(1, externalIdService.ExistingProviderDecisionRequests.Count, "覆盖刷新可以检查已有 ID 是否冲突，但一致时必须停在默认 Douban 链路。");
+            Assert.AreEqual(0, externalIdService.Requests.Count, "覆盖刷新已有 TMDbID 时不应再次走普通 external-id 补全。");
+            Assert.AreEqual(0, externalIdService.CorrectionRequests.Count, "已有 Douban 主链加 TMDbID 不应被当成纠错。");
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+            Assert.AreEqual(0, refreshCalls.Count);
+        }
+
+        [TestMethod]
         public async Task GetMetadata_ManualMatch_CallsAssistOnceAndUsesHintForDoubanSearch()
         {
             EnsurePluginInstance();
@@ -779,16 +826,16 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_DoubanMetadataWithoutTmdbId_InvokesExternalIdResolverAndUsesVerifiedTmdb()
+        public async Task GetMetadata_DoubanMetadataWithoutTmdbId_CompletesTmdbIdAndKeepsDoubanMetadata()
         {
             EnsurePluginInstance();
-            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true));
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true, enableTmdbCorrection: true));
             using var loggerFactory = LoggerFactory.Create(builder => { });
             var doubanApi = new DoubanApi(loggerFactory);
             var doubanSubject = CreateDoubanSubject("1291843", "豆瓣已有剧集", 2024);
             SeedDoubanSubject(doubanApi, doubanSubject);
             var tmdbApi = new TmdbApi(loggerFactory);
-            var tvShow = CreateTmdbSeries(8860, "豆瓣已有剧集", "TMDb 补充简介", "tt8860000", "886000");
+            var tvShow = CreateTmdbSeries(8860, "TMDb 补充剧集", "TMDb 补充简介", "tt8860000", "886000");
             tvShow.EpisodeGroups = new ResultContainer<TvGroupCollection>
             {
                 Results = new List<TvGroupCollection>
@@ -810,6 +857,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var llmApi = new RecordingLlmApi("douban-verified-group", 0.95);
             var mappedSeries = CreateSeries(Guid.NewGuid(), "豆瓣已有剧集", "8860");
             var refreshCalls = new List<QueueRefreshCall>();
+            var persistenceService = new RecordingLlmTmdbCorrectionMapPersistenceService();
+            var stages = new List<string>();
+            SeriesProvider.TestTraceSink = trace => stages.Add(trace.Stage);
             var provider = CreateProvider(
                 loggerFactory,
                 LlmProviderFlowTestHelpers.CreateManualMatchContextAccessor(mappedSeries.Id.ToString("N", CultureInfo.InvariantCulture)),
@@ -817,7 +867,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 doubanApi: doubanApi,
                 tmdbApi: tmdbApi,
                 llmEpisodeGroupMappingProviderAssistService: CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, new[] { mappedSeries }, refreshCalls),
-                llmExternalIdResolutionService: externalIdService);
+                llmExternalIdResolutionService: externalIdService,
+                llmTmdbCorrectionMapPersistenceService: persistenceService);
             var info = CreateSeriesInfo("豆瓣已有剧集", "/mnt/media/TV/豆瓣已有剧集");
             info.ProviderIds = new Dictionary<string, string>
             {
@@ -825,17 +876,88 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [MetaSharkPlugin.ProviderId] = "Douban_1291843",
             };
 
-            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
-            Assert.AreEqual(1, externalIdService.Requests.Count, "已有 Douban metadata 但缺 TMDb 时仍应尝试外部 ID 解析。 ");
-            Assert.IsTrue(result.HasMetadata);
-            Assert.AreEqual("1291843", result.Item!.GetProviderId(BaseProvider.DoubanProviderId));
-            Assert.AreEqual("8860", result.Item.GetProviderId(MetadataProvider.Tmdb));
-            Assert.AreEqual("8860", info.GetProviderId(MetadataProvider.Tmdb));
-            Assert.AreEqual("tt8860000", result.Item.GetProviderId(MetadataProvider.Imdb));
-            Assert.AreEqual("886000", result.Item.GetProviderId(MetadataProvider.Tvdb));
-            Assert.AreEqual(1, llmApi.Prompts.Count, "剧集组映射只能在已验证 TMDbId 写入后运行。 ");
-            AssertQueuedSeries(refreshCalls, mappedSeries.Id);
+                Assert.AreEqual(1, externalIdService.Requests.Count, "已有 Douban metadata 但缺 TMDb 时仍应尝试外部 ID 解析。 ");
+                Assert.AreEqual(0, externalIdService.CorrectionRequests.Count, "普通缺失 TMDbID 补全不应进入 TMDb 纠错链路。");
+                Assert.IsTrue(stages.Contains("BeforeDoubanMetadata"), "LLM 补齐 TMDbID 后，本轮仍应继续默认 Douban 元数据分支。");
+                Assert.IsFalse(stages.Contains("BeforeTmdbMetadata"), "普通缺失 TMDbID 补全不应强制切换到 TMDb 元数据分支。");
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("豆瓣已有剧集", result.Item!.Name);
+                Assert.AreEqual("豆瓣已有剧集简介", result.Item.Overview);
+                Assert.AreEqual("1291843", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreEqual("Douban_1291843", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.AreEqual("8860", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual("8860", info.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual("tt8860000", result.Item.GetProviderId(MetadataProvider.Imdb));
+                Assert.AreEqual("886000", result.Item.GetProviderId(MetadataProvider.Tvdb));
+                Assert.AreEqual(1, persistenceService.CompletionCalls.Count, "普通缺失 TMDbID 补全应持久化补全来源，供后续刷新保留 TMDbID。");
+                Assert.AreEqual("series:douban:1291843=tmdb:8860", MetaSharkPlugin.Instance!.Configuration.LlmTmdbCompletionMap);
+                Assert.AreEqual(0, persistenceService.CorrectionCalls.Count, "普通缺失 TMDbID 补全不应持久化 Douban -> TMDb 纠错映射。");
+                Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance!.Configuration.LlmTmdbCorrectionMap);
+                Assert.AreEqual(1, llmApi.Prompts.Count, "剧集组映射只能在已验证 TMDbId 写入后运行。 ");
+                AssertQueuedSeries(refreshCalls, mappedSeries.Id);
+            }
+            finally
+            {
+                SeriesProvider.TestTraceSink = null;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_TmdbCompletionMapWithDefaultScraperMode_KeepsDoubanMetadataAndDoesNotInvokeCorrection()
+        {
+            EnsurePluginInstance();
+            var configuration = CreateLlmConfiguration(enableTmdbCorrection: true);
+            configuration.LlmTmdbCompletionMap = "series:douban:37291769=tmdb:251782";
+            ReplacePluginConfiguration(configuration);
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var doubanSubject = CreateDoubanSubject("37291769", "灰原君的青春二周目", 2026);
+            SeedDoubanSubject(doubanApi, doubanSubject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 251782, "zh-CN", CreateTmdbSeries(251782, "Haibara-kun's New Game Plus", "TMDb overview", "tt2517820", "251782"));
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
+            externalIdService.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.VerifiedExistingTmdb("251782", "ExistingTmdbVerified"));
+            var stages = new List<string>();
+            SeriesProvider.TestTraceSink = trace => stages.Add(trace.Stage);
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("灰原君的青春二周目", "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)");
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "37291769",
+                [MetaSharkPlugin.ProviderId] = "Douban_37291769",
+                [MetadataProvider.Tmdb.ToString()] = "251782",
+            };
+
+            try
+            {
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("灰原君的青春二周目", result.Item!.Name);
+                Assert.AreEqual("灰原君的青春二周目简介", result.Item.Overview);
+                Assert.AreEqual("37291769", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreEqual("Douban_37291769", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.AreEqual("251782", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual(0, externalIdService.CorrectionRequests.Count, "普通补全来源命中后不应升级成 TMDb 纠错链路。");
+                Assert.IsTrue(stages.Contains("BeforeDoubanMetadata"), "补全来源命中后仍应走默认 Douban 元数据分支。");
+                Assert.IsFalse(stages.Contains("BeforeTmdbMetadata"), "补全来源命中后不应强制切到 TMDb 元数据分支。");
+                Assert.AreEqual("series:douban:37291769=tmdb:251782", MetaSharkPlugin.Instance!.Configuration.LlmTmdbCompletionMap);
+                Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance.Configuration.LlmTmdbCorrectionMap);
+            }
+            finally
+            {
+                SeriesProvider.TestTraceSink = null;
+            }
         }
 
         [TestMethod]
@@ -1870,7 +1992,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_BridgedSearchMissingVerifiedTmdb_CurrentSetupStopsBeforeExternalIdService()
+        public async Task GetMetadata_BridgedSearchMissingVerifiedTmdb_InvokesExternalIdServiceAndEpisodeGroupMapping()
         {
             EnsurePluginInstance();
             ReplacePluginConfiguration(CreateLlmConfiguration(enableEpisodeGroupMappingAssist: true));
@@ -1906,6 +2028,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var refreshContext = LlmProviderFlowTestHelpers.CreateExplicitSearchMissingHttpContext(itemId);
             Assert.IsTrue(TmdbCorrectionRefreshIntentClassifier.TryResolveExplicitSearchMissingMetadataRefreshItemId(refreshContext, out var refreshItemId));
             refreshIntentStore.Save(refreshItemId, "/mnt/media/TV/桥接映射剧集");
+            Assert.IsTrue(refreshIntentStore.HasPending(refreshItemId, "/mnt/media/TV/桥接映射剧集"), "test setup should seed bridge intent");
             var httpContextAccessor = new HttpContextAccessor
             {
                 HttpContext = LlmProviderFlowTestHelpers.CreateQuerylessRefreshHttpContext(itemId),
@@ -1913,28 +2036,34 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var provider = CreateProvider(
                 loggerFactory,
                 httpContextAccessor,
-                libraryManager: CreateLibraryManager(new[] { mappedSeries }).Object,
+                libraryManager: CreateLibraryManager(mappedSeries).Object,
                 tmdbApi: tmdbApi,
                 llmEpisodeGroupMappingProviderAssistService: CreateEpisodeGroupMappingProviderAssistService(loggerFactory, llmApi, tmdbApi, new[] { mappedSeries }, refreshCalls),
                 llmExternalIdResolutionService: externalIdService,
                 tmdbCorrectionRefreshIntentStore: refreshIntentStore);
             var info = CreateSeriesInfo("桥接映射剧集", "/mnt/media/TV/桥接映射剧集");
+            info.IsAutomated = false;
 
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
+            Assert.IsTrue(traces.Count > 0, "expected provider flow traces");
+            Assert.AreEqual(true, traces[0].HasBridgedExplicitSearchMissingMetadataRefreshIntent, "provider should resolve bridge intent before external-id gate");
+            Assert.AreEqual(1, externalIdService.ExistingProviderDecisionRequests.Count, "桥接映射剧集应进入 existing-provider decision。 ");
+            Assert.AreEqual(1, externalIdService.Requests.Count, "桥接映射剧集应进入 external-id resolve。 ");
+            Assert.AreEqual(true, externalIdService.LastExistingProviderDecisionBridgedFlag);
+            Assert.AreEqual(true, externalIdService.LastResolveBridgedFlag);
             CollectionAssert.AreEqual(
-                new[] { "Initial", "BeforeExternalIdResolve", "BeforeMetadataAssist" },
+                new[] { "Initial", "BeforeExternalIdResolve", "BeforeMetadataAssist", "BeforeTmdbMetadata" },
                 traces.Select(x => x.Stage).ToArray(),
-                "当前 setup 会先进入 external-id gate，再落回 metadata-assist 分支，但不会真正创建 external-id service request。 ");
+                "桥接 search-missing 在 provider 阶段变成 queryless refresh 后，仍应进入 external-id resolver 并用验证后的 TMDb 元数据。 actual=" + string.Join(",", traces.Select(x => x.Stage)));
             Assert.AreEqual(false, traces.Last().HasDoubanMeta);
             Assert.AreEqual(false, traces.Last().HasTmdbMeta);
             Assert.AreEqual(true, traces.Last().HasBridgedExplicitSearchMissingMetadataRefreshIntent);
-            Assert.AreEqual(0, externalIdService.ExistingProviderDecisionRequests.Count, "桥接映射剧集当前不会进入 existing-provider decision。 ");
-            Assert.AreEqual(0, externalIdService.Requests.Count, "桥接映射剧集当前不会进入 external-id resolve。 ");
             Assert.IsTrue(refreshIntentStore.HasPending(refreshItemId, info.Path), "桥接映射剧集在 metadata flow 内应保留 refresh intent，供 Jellyfin 同轮后续 provider 调用复用。 ");
-            Assert.IsFalse(result.HasMetadata, "当前 setup 未进入 external-id resolve / tmdb metadata，因此不会产出元数据结果。 ");
-            Assert.AreEqual(0, llmApi.Prompts.Count, "当前 setup 不会进入映射 assist。 ");
-            Assert.AreEqual(0, refreshCalls.Count, "当前 setup 不会排队映射刷新。 ");
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("8864", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual(1, llmApi.Prompts.Count, "验证后的 TMDbId 应继续触发剧集组映射 assist。 ");
+            AssertQueuedSeries(refreshCalls, mappedSeries.Id);
         }
 
         [TestMethod]
@@ -2414,6 +2543,41 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         private sealed record PersistenceCall(string ExpectedOldMapping, string NewMapping);
+
+        private sealed class RecordingLlmTmdbCorrectionMapPersistenceService : ILlmTmdbCorrectionMapPersistenceService
+        {
+            public List<PersistenceCall> CorrectionCalls { get; } = new List<PersistenceCall>();
+
+            public List<PersistenceCall> CompletionCalls { get; } = new List<PersistenceCall>();
+
+            public Task<LlmTmdbCorrectionMapPersistenceResult> TryUpsertDoubanCorrectionAsync(string mediaType, string doubanId, string tmdbId, CancellationToken cancellationToken)
+            {
+                var currentMapping = MetaSharkPlugin.Instance?.Configuration.LlmTmdbCorrectionMap ?? string.Empty;
+                var newMapping = LlmTmdbCorrectionMapParser.Shared.UpsertDoubanCorrection(currentMapping, mediaType, doubanId, tmdbId);
+                this.CorrectionCalls.Add(new PersistenceCall(currentMapping, newMapping));
+                var currentConfiguration = MetaSharkPlugin.Instance?.Configuration;
+                if (currentConfiguration != null)
+                {
+                    currentConfiguration.LlmTmdbCorrectionMap = newMapping;
+                }
+
+                return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.SavedResult(currentMapping, newMapping));
+            }
+
+            public Task<LlmTmdbCorrectionMapPersistenceResult> TryUpsertDoubanCompletionAsync(string mediaType, string doubanId, string tmdbId, CancellationToken cancellationToken)
+            {
+                var currentMapping = MetaSharkPlugin.Instance?.Configuration.LlmTmdbCompletionMap ?? string.Empty;
+                var newMapping = LlmTmdbCorrectionMapParser.Shared.UpsertDoubanCorrection(currentMapping, mediaType, doubanId, tmdbId);
+                this.CompletionCalls.Add(new PersistenceCall(currentMapping, newMapping));
+                var currentConfiguration = MetaSharkPlugin.Instance?.Configuration;
+                if (currentConfiguration != null)
+                {
+                    currentConfiguration.LlmTmdbCompletionMap = newMapping;
+                }
+
+                return Task.FromResult(LlmTmdbCorrectionMapPersistenceResult.SavedResult(currentMapping, newMapping));
+            }
+        }
 
         private sealed class RecordingLlmExternalIdResolutionService : ILlmExternalIdResolutionService
         {

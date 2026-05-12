@@ -28,6 +28,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private static readonly Action<ILogger, string, string, Exception?> LogTmdbCorrectionAppliedMessage =
             LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(203, "TmdbCorrection.Applied"), "[MetaShark] LLM TMDb 纠错已应用. reason={ReasonCode} mediaType={MediaType}");
 
+        private static readonly Action<ILogger, string, string, string, string, string, Exception?> LogExternalIdResolutionCompletedMessage =
+            LoggerMessage.Define<string, string, string, string, string>(LogLevel.Information, new EventId(301, "ExternalIdResolution.Completed"), "[MetaShark] LLM 外部 ID 解析完成. status={Status} reason={ReasonCode} mediaType={MediaType} counts={Counts} candidates={CandidateSummary}");
+
         public static void LogLlmAssistTriggerDecision(ILogger? logger, LlmAssistTriggerContext context, LlmAssistTriggerDecision decision)
         {
             ArgumentNullException.ThrowIfNull(context);
@@ -101,6 +104,36 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             LogTmdbCorrectionAppliedMessage(logger, NormalizeReasonCode(reasonCode), NormalizeValue(mediaType), null);
+        }
+
+        public static void LogExternalIdResolutionCompleted(
+            ILogger? logger,
+            string status,
+            string reasonCode,
+            string? mediaType,
+            int candidateCount,
+            int verifiedCount,
+            int plannedWriteCount,
+            int appliedWriteCount,
+            int skippedWriteCount,
+            string? candidateSummary)
+        {
+            if (logger == null)
+            {
+                return;
+            }
+
+            var counts = string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"candidates={candidateCount} verified={verifiedCount} planned={plannedWriteCount} applied={appliedWriteCount} skipped={skippedWriteCount}");
+            LogExternalIdResolutionCompletedMessage(
+                logger,
+                NormalizeValue(status),
+                NormalizeReasonCode(reasonCode),
+                NormalizeValue(mediaType),
+                counts,
+                NormalizeValue(candidateSummary),
+                null);
         }
 
         public static string NormalizeReasonCode(string? reasonCode)

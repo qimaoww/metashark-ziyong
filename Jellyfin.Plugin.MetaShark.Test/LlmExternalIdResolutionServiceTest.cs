@@ -379,6 +379,33 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task ResolveAsync_WhenBridgedSearchMissingRefresh_ShouldCallLlmInsteadOfImplicitReject()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbSeries(tmdbApi, 300001, "zh-CN", string.Empty);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "300001", "Series")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = new SeriesInfo
+            {
+                Name = "灰原同学重返过去，开启所向无敌的第二轮青春游戏",
+                Year = 2026,
+                Path = "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>(),
+            };
+            var request = CreateRequest(lookupInfo, mediaType: "Series");
+            request.HttpContext = CreateRefreshContext(queryString: string.Empty);
+            request.HasBridgedExplicitSearchMissingMetadataRefreshIntent = true;
+
+            var result = await service.ResolveAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmExternalIdResolutionStatus.Succeeded, result.Status, result.Diagnostic);
+            Assert.AreEqual("300001", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
+            Assert.IsFalse(result.Diagnostic.Contains("ImplicitRefreshRejected", StringComparison.Ordinal), result.Diagnostic);
+        }
+
+        [TestMethod]
         public async Task ResolveAsync_WhenSeasonCandidateVerified_ShouldReturnParentIdWithoutWritingSeasonProviderId()
         {
             var tmdbApi = this.CreateTmdbApi();
@@ -607,6 +634,114 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(decision.ShouldTrigger, decision.Reason);
             Assert.AreEqual("ExistingProviderIdsConsistent", decision.Reason);
             Assert.AreEqual(0, llmApi.Prompts.Count);
+        }
+
+        [TestMethod]
+        public async Task EvaluateExistingProviderIdsAsync_WhenSeriesHasOnlyConsistentDoubanIdAndMissingTmdb_ShouldAllowTmdbCompletion()
+        {
+            var doubanApi = this.CreateDoubanApi();
+            SeedDoubanSubject(
+                doubanApi,
+                "37291769",
+                new DoubanSubject
+                {
+                    Sid = "37291769",
+                    Category = "电视剧",
+                    Name = "灰原君的青春二周目",
+                    OriginalName = "灰原くんの強くて青春ニューゲーム",
+                    Year = 2026,
+                });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "300001", "Series")));
+            var service = this.CreateService(llmApi, this.CreateTmdbApi(), doubanApi: doubanApi);
+            var lookupInfo = new SeriesInfo
+            {
+                Name = "灰原君的青春二周目",
+                OriginalTitle = "灰原くんの強くて青春ニューゲーム",
+                Year = 2026,
+                Path = "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [BaseProvider.DoubanProviderId] = "37291769",
+                    [MetaSharkPlugin.ProviderId] = "Douban_37291769",
+                },
+            };
+
+            var decision = await service.EvaluateExistingProviderIdsAsync(CreateRequest(lookupInfo, mediaType: "Series"), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            Assert.AreEqual("MissingTmdbProviderId", decision.Reason);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+        }
+
+        [TestMethod]
+        public async Task EvaluateExistingProviderIdsAsync_WhenMovieHasOnlyConsistentDoubanIdAndMissingTmdb_ShouldAllowTmdbCompletion()
+        {
+            var doubanApi = this.CreateDoubanApi();
+            SeedDoubanSubject(
+                doubanApi,
+                "1292052",
+                new DoubanSubject
+                {
+                    Sid = "1292052",
+                    Category = "电影",
+                    Name = "肖申克的救赎",
+                    OriginalName = "The Shawshank Redemption",
+                    Year = 1994,
+                });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "278", "Movie")));
+            var service = this.CreateService(llmApi, this.CreateTmdbApi(), doubanApi: doubanApi);
+            var lookupInfo = new MovieInfo
+            {
+                Name = "肖申克的救赎",
+                OriginalTitle = "The Shawshank Redemption",
+                Year = 1994,
+                Path = "/mnt/media/Movies/肖申克的救赎 (1994)/movie.mkv",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [BaseProvider.DoubanProviderId] = "1292052",
+                    [MetaSharkPlugin.ProviderId] = "Douban_1292052",
+                },
+            };
+
+            var decision = await service.EvaluateExistingProviderIdsAsync(CreateRequest(lookupInfo, mediaType: "Movie"), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(decision.ShouldTrigger, decision.Reason);
+            Assert.AreEqual("MissingTmdbProviderId", decision.Reason);
+            Assert.AreEqual(0, llmApi.Prompts.Count);
+        }
+
+        [TestMethod]
+        public async Task ResolveAsync_WhenSeriesHasOnlyDoubanIdAndTmdbCandidateVerified_ShouldWriteMissingTmdbId()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbSeries(tmdbApi, 300001, "zh-CN", string.Empty);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "300001", "Series")));
+            using var loggerFactory = RecordingLoggerFactory.Create();
+            var service = this.CreateService(llmApi, tmdbApi, loggerFactory: loggerFactory);
+            var lookupInfo = new SeriesInfo
+            {
+                Name = "灰原君的青春二周目",
+                Year = 2026,
+                Path = "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [BaseProvider.DoubanProviderId] = "37291769",
+                    [MetaSharkPlugin.ProviderId] = "Douban_37291769",
+                },
+            };
+
+            var result = await service.ResolveAsync(CreateRequest(lookupInfo, mediaType: "Series"), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmExternalIdResolutionStatus.Succeeded, result.Status, result.Diagnostic);
+            Assert.AreEqual("37291769", lookupInfo.ProviderIds[BaseProvider.DoubanProviderId]);
+            Assert.AreEqual("300001", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual(1, result.ProviderIdWrites.Count);
+            Assert.AreEqual(MetadataProvider.Tmdb.ToString(), result.ProviderIdWrites[0].ProviderIdKey);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
+            loggerFactory.ExpectExternalIdResolutionCompleted("Succeeded", "Succeeded", "Series", "candidates=1 verified=1 planned=1 applied=1 skipped=0");
         }
 
         [TestMethod]
@@ -1229,6 +1364,23 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         && string.Equals(actualMediaType?.ToString(), mediaType, StringComparison.Ordinal)),
                     $"Expected captured applied reason {reasonCode} for {mediaType} on {eventName}.");
             }
+
+            public void ExpectExternalIdResolutionCompleted(string status, string reasonCode, string mediaType, string counts)
+            {
+                Assert.IsTrue(
+                    this.provider.Entries.Any(entry =>
+                        entry.Level == LogLevel.Information
+                        && string.Equals(entry.EventId.Name, "ExternalIdResolution.Completed", StringComparison.Ordinal)
+                        && entry.State.TryGetValue("Status", out var actualStatus)
+                        && string.Equals(actualStatus?.ToString(), status, StringComparison.Ordinal)
+                        && entry.State.TryGetValue("ReasonCode", out var actualReason)
+                        && string.Equals(actualReason?.ToString(), reasonCode, StringComparison.Ordinal)
+                        && entry.State.TryGetValue("MediaType", out var actualMediaType)
+                        && string.Equals(actualMediaType?.ToString(), mediaType, StringComparison.Ordinal)
+                        && entry.State.TryGetValue("Counts", out var actualCounts)
+                        && string.Equals(actualCounts?.ToString(), counts, StringComparison.Ordinal)),
+                    $"Expected captured external ID resolution completion status {status}, reason {reasonCode}, mediaType {mediaType}, counts {counts}.");
+            }
         }
 
         private sealed class RecordingLoggerProvider : ILoggerProvider
@@ -1420,12 +1572,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             };
         }
 
-        private static DefaultHttpContext CreateRefreshContext()
+        private static DefaultHttpContext CreateRefreshContext(string queryString = "?metadataRefreshMode=FullRefresh&replaceAllMetadata=false")
         {
             var context = new DefaultHttpContext();
             context.Request.Method = HttpMethods.Post;
             context.Request.Path = "/Items/11111111-1111-1111-1111-111111111111/Refresh";
-            context.Request.QueryString = new QueryString("?metadataRefreshMode=FullRefresh&replaceAllMetadata=false");
+            context.Request.QueryString = new QueryString(queryString);
             return context;
         }
 

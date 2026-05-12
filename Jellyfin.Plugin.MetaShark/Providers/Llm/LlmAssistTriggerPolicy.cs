@@ -61,6 +61,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 return this.Allowed(context, "ExplicitSearchMissingMetadataRefresh");
             }
 
+            if (context.HasBridgedExplicitSearchMissingMetadataRefreshIntent
+                && context.Semantic == DefaultScraperSemantic.UserRefresh)
+            {
+                return this.Allowed(context, "ExplicitSearchMissingMetadataRefresh");
+            }
+
             if (IsExplicitUserRefresh(context.HttpContext, context.Semantic))
             {
                 return this.Allowed(context, "ExplicitUserRefresh");

@@ -70,6 +70,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             "Each external ID candidate must contain only provider, id, mediaType, confidence, reason, and evidence.",
             "Output only external ID candidates; do not output title, overview, people, images, URLs, local paths, Jellyfin item IDs, library roots, credentials, or configuration values.",
             "Allowed providers are TMDb, IMDb, TVDB, and Douban only.",
+            "If a Series already has a Douban ID but lacks a TMDb ID, resolve only the matching TMDb Series ID so the existing Douban metadata flow can keep its metadata source.",
             "When the ID is unknown or confidence is insufficient, return { \"externalIdCandidates\": [] }.",
         };
 
