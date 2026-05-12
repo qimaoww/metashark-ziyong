@@ -158,10 +158,18 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 Messages = new[] { new LlmChatMessage { Role = "user", Content = prompt } },
                 Temperature = 0,
                 MaxTokens = configuration.LlmMaxTokens,
+                ReasoningEffort = CreateReasoningEffort(configuration.LlmReasoningEffort),
                 ResponseFormat = CreateResponseFormat(configuration.LlmStructuredOutputMode, responseSchemaKind),
             };
             request.Content = new StringContent(JsonSerializer.Serialize(body, JsonOptions), Encoding.UTF8, "application/json");
             return request;
+        }
+
+        private static string? CreateReasoningEffort(string reasoningEffort)
+        {
+            return reasoningEffort == PluginConfiguration.LlmReasoningEffortDefault
+                ? null
+                : reasoningEffort;
         }
 
         private static string BuildChatCompletionsUrl(string baseUrl)
@@ -391,6 +399,9 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
             [JsonPropertyName("max_tokens")]
             public int MaxTokens { get; set; }
+
+            [JsonPropertyName("reasoning_effort")]
+            public string? ReasoningEffort { get; set; }
 
             [JsonPropertyName("response_format")]
             public LlmResponseFormat? ResponseFormat { get; set; }

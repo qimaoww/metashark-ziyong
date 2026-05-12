@@ -9,6 +9,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private const string JsonSchemaMode = "json-schema";
         private const string JsonObjectMode = "json-object";
         private const string TextJsonMode = "text-json";
+        private const string DefaultReasoningEffort = "default";
+        private const string NoneReasoningEffort = "none";
+        private const string MinimalReasoningEffort = "minimal";
+        private const string LowReasoningEffort = "low";
+        private const string MediumReasoningEffort = "medium";
+        private const string HighReasoningEffort = "high";
+        private const string XHighReasoningEffort = "xhigh";
 
         [TestMethod]
         public void ShouldExposeExpectedLlmConfigurationPropertiesWithDefaults()
@@ -26,6 +33,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertProperty("LlmModel", typeof(string), string.Empty, configuration);
             AssertProperty("LlmTimeoutSeconds", typeof(int), 15, configuration);
             AssertProperty("LlmMaxTokens", typeof(int), 512, configuration);
+            AssertProperty("LlmReasoningEffort", typeof(string), DefaultReasoningEffort, configuration);
             AssertProperty("LlmAllowRelativePathContext", typeof(bool), true, configuration);
             AssertProperty("LlmAllowTextCompletion", typeof(bool), false, configuration);
             AssertProperty("LlmConfidenceThreshold", typeof(double), 0.75, configuration);
@@ -58,6 +66,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 LlmEpisodeGroupMappingMinConfidence = 0.88,
                 LlmEpisodeGroupMappingMaxCandidateGroups = 12,
                 LlmStructuredOutputMode = JsonObjectMode,
+                LlmReasoningEffort = HighReasoningEffort,
             };
 
             Assert.IsTrue(configuration.EnableLlmAssist);
@@ -71,6 +80,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("test-model", configuration.LlmModel);
             Assert.AreEqual(12, configuration.LlmTimeoutSeconds);
             Assert.AreEqual(1024, configuration.LlmMaxTokens);
+            Assert.AreEqual(HighReasoningEffort, configuration.LlmReasoningEffort);
             Assert.IsFalse(configuration.LlmAllowRelativePathContext);
             Assert.IsTrue(configuration.LlmAllowTextCompletion);
             Assert.AreEqual(0.42, configuration.LlmConfidenceThreshold);
@@ -132,6 +142,36 @@ namespace Jellyfin.Plugin.MetaShark.Test
             configuration.LlmStructuredOutputMode = "markdown";
 
             Assert.AreEqual(JsonSchemaMode, configuration.LlmStructuredOutputMode);
+        }
+
+        [TestMethod]
+        public void ShouldNormalizeInvalidReasoningEffortToDefault()
+        {
+            var configuration = new PluginConfiguration();
+            configuration.LlmReasoningEffort = LowReasoningEffort;
+
+            Assert.AreEqual(LowReasoningEffort, configuration.LlmReasoningEffort);
+
+            configuration.LlmReasoningEffort = string.Empty;
+
+            Assert.AreEqual(DefaultReasoningEffort, configuration.LlmReasoningEffort);
+
+            configuration.LlmReasoningEffort = "super-high";
+
+            Assert.AreEqual(DefaultReasoningEffort, configuration.LlmReasoningEffort);
+        }
+
+        [TestMethod]
+        public void ShouldAllowSupportedReasoningEffortValues()
+        {
+            var configuration = new PluginConfiguration();
+
+            foreach (var value in new[] { DefaultReasoningEffort, NoneReasoningEffort, MinimalReasoningEffort, LowReasoningEffort, MediumReasoningEffort, HighReasoningEffort, XHighReasoningEffort })
+            {
+                configuration.LlmReasoningEffort = value;
+
+                Assert.AreEqual(value, configuration.LlmReasoningEffort, $"{value} 必须是可持久化的 reasoning_effort 值。");
+            }
         }
 
         [TestMethod]

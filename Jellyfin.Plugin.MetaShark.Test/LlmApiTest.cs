@@ -195,6 +195,50 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task CompleteAsync_WhenReasoningEffortIsDefault_ShouldNotSendReasoningEffort()
+        {
+            LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
+            string? capturedBody = null;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"suggestions\":[]}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            using var bodyDocument = JsonDocument.Parse(capturedBody!);
+            Assert.IsFalse(bodyDocument.RootElement.TryGetProperty("reasoning_effort", out _), capturedBody);
+            Assert.IsFalse(bodyDocument.RootElement.TryGetProperty("reasoning", out _), "当前使用 Chat Completions API，不应发送 Responses API 的 reasoning 对象。");
+        }
+
+        [TestMethod]
+        public async Task CompleteAsync_WhenReasoningEffortIsConfigured_ShouldSendChatCompletionsReasoningEffort()
+        {
+            var configuration = CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema);
+            configuration.LlmReasoningEffort = PluginConfiguration.LlmReasoningEffortHigh;
+            LlmApiTestSupport.ReplacePluginConfiguration(configuration);
+            string? capturedBody = null;
+            using var api = new LlmApi(LlmApiTestSupport.CreateLoggerFactory<LlmApi>().Object);
+            LlmApiTestSupport.ReplaceHttpClient(api, new HttpClient(new RoutingHttpMessageHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync().ConfigureAwait(false);
+                return CreateJsonResponse(HttpStatusCode.OK, CreateSuccessEnvelope("{\"suggestions\":[]}"));
+            }), disposeHandler: true));
+
+            var result = await api.CompleteAsync("prompt", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.Success, result.Diagnostic);
+            using var bodyDocument = JsonDocument.Parse(capturedBody!);
+            var root = bodyDocument.RootElement;
+            Assert.AreEqual(PluginConfiguration.LlmReasoningEffortHigh, root.GetProperty("reasoning_effort").GetString());
+            Assert.IsFalse(root.TryGetProperty("reasoning", out _), "Chat Completions 请求必须发送顶层 reasoning_effort，而不是 Responses API 的 reasoning 对象。");
+            AssertForbiddenRequestFieldsAbsent(root);
+        }
+
+        [TestMethod]
         public async Task CompleteAsync_WhenTransientHttpStatusesOccur_ShouldRetryTwiceThenSucceed()
         {
             LlmApiTestSupport.ReplacePluginConfiguration(CreateConfiguration(PluginConfiguration.LlmStructuredOutputModeJsonSchema));
@@ -401,7 +445,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
         private static void AssertForbiddenRequestFieldsAbsent(JsonElement root)
         {
-            foreach (var fieldName in new[] { "user", "n", "tool_choice", "logit_bias", "tools", "stream" })
+            foreach (var fieldName in new[] { "user", "n", "tool_choice", "logit_bias", "tools", "stream", "reasoning" })
             {
                 Assert.IsFalse(root.TryGetProperty(fieldName, out _), $"生产请求不应包含字段 {fieldName}: {root}");
             }

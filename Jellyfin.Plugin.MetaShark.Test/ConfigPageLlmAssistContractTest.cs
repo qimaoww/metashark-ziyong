@@ -22,6 +22,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             "LlmBaseUrl",
             "LlmApiKey",
             "LlmModel",
+            "LlmReasoningEffort",
             "LlmTimeoutSeconds",
             "LlmMaxTokens",
             "LlmAllowRelativePathContext",
@@ -73,6 +74,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             AssertRoundTrip(html, "LlmTmdbCompletionMap", ".value");
             AssertRoundTrip(html, "LlmBaseUrl", ".value");
             AssertRoundTrip(html, "LlmModel", ".value");
+            AssertRoundTrip(html, "LlmReasoningEffort", ".value");
             AssertRoundTrip(html, "LlmTimeoutSeconds", ".value", ".valueAsNumber");
             AssertRoundTrip(html, "LlmMaxTokens", ".value", ".valueAsNumber");
             AssertRoundTrip(html, "LlmAllowRelativePathContext", ".checked");
@@ -109,6 +111,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void ReasoningEffort_ShouldUseStableChatCompletionsValues()
+        {
+            var selectBlock = GetSelectBlock(ReadConfigPageHtml(), "LlmReasoningEffort");
+            var options = Regex.Matches(selectBlock, @"<option\s+value=""([^""]+)"">\s*([^<]+?)\s*</option>");
+
+            CollectionAssert.AreEqual(new[] { "default", "none", "minimal", "low", "medium", "high", "xhigh" }, options.Select(option => option.Groups[1].Value).ToArray(), "思考等级必须使用稳定的 Chat Completions reasoning_effort value。");
+            Assert.IsFalse(selectBlock.Contains("value=\"默认\"", StringComparison.Ordinal), "不得使用中文显示标签作为持久化 value。");
+            Assert.IsFalse(selectBlock.Contains("value=\"High\"", StringComparison.Ordinal), "不得使用显示标签作为持久化 value。");
+        }
+
+        [TestMethod]
         public void ShouldRenderApprovedLlmSafetyCopy()
         {
             var html = ReadConfigPageHtml();
@@ -122,6 +135,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(llmBlock.Contains("自动写入的强纠错记录会显示在这里；每行一条：series:douban:26862290=tmdb:65942 或 movie:douban:123=tmdb:456。删除对应行并保存即可手动回退该条。", StringComparison.Ordinal), "LLM 强纠错持久化映射 textarea 必须说明格式和手动回退方式。 ");
             Assert.IsTrue(llmBlock.Contains("自动写入的普通 TMDbID 补全记录会显示在这里；每行一条：series:douban:37291769=tmdb:316424 或 movie:douban:123=tmdb:456。删除对应行并保存即可手动回退该条。", StringComparison.Ordinal), "LLM 普通补全持久化映射 textarea 必须说明格式和手动回退方式。 ");
             Assert.IsTrue(llmBlock.Contains("OpenAI 兼容接口地址，需要填写到 /v1 级别；留空时不会调用 LLM。启用前请自行评估费用、隐私和网络风险。", StringComparison.Ordinal), "Base URL 必须说明 /v1 级别和费用、隐私、网络风险。");
+            Assert.IsTrue(llmBlock.Contains("默认不发送。此项会作为 Chat Completions 请求体的 reasoning_effort 字段发送；仅对支持该字段的模型或 OpenAI 兼容接口生效，不支持时请保持默认。", StringComparison.Ordinal), "思考等级说明必须包含默认不发送、Chat Completions reasoning_effort 字段和兼容性边界。");
             Assert.IsTrue(llmBlock.Contains("默认开启。仅发送相对媒体路径、公开 ProviderIds 和必要摘要，不发送完整本地路径、服务器 URL、Jellyfin 私有标识、API Key、cookie 或 token。关闭后，元数据、外部 ID 和剧集组映射提示都不会发送相对路径、文件名或目录结构。日志和证据不记录 prompt、API Key 或原始响应。", StringComparison.Ordinal), "相对路径开关必须说明发送边界和敏感信息排除范围。");
             Assert.IsTrue(llmBlock.Contains("默认关闭。全局 LLM 辅助刮削开关不等同于标题/简介文本补全；仅启用全局开关不会发送文本补全请求。开启本开关后，LLM 生成文本仅可在置信度和合并检查通过后回填空白或低风险的标题、简介类字段；不会覆盖权威元数据。外部 ID 辅助解析仍复用全局 LLM 开关独立运行。", StringComparison.Ordinal), "LLM 生成文本开关必须说明默认关闭、全局 LLM 开关不等同于文本补全、请求 gate、回填边界、不得覆盖权威元数据和外部 ID 独立运行。");
             Assert.IsTrue(llmBlock.Contains("允许范围 1-30 秒，默认 15 秒。超时、结构化输出不符合 schema 或并发限制忙碌时按可选能力关闭处理，不应变成 provider 错误。LLM 请求使用保守并发，同一时间默认只处理一个请求。", StringComparison.Ordinal), "超时说明必须包含默认 15 秒、1-30 范围、fail-closed 和保守并发。");
@@ -172,6 +186,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(readme.Contains("LLM 请求默认只发送相对媒体路径、公开 ProviderIds 和必要摘要，不发送完整本地路径、服务器 URL、Jellyfin 私有标识、API Key、cookie 或 token。关闭 `允许发送相对路径上下文` 后，元数据、外部 ID 和剧集组映射提示都不会发送相对路径、文件名或目录结构。", StringComparison.Ordinal), "README 必须说明 LLM 请求隐私边界和风险。 ");
             Assert.IsTrue(readme.Contains("LLM 元数据文本补全只在 `允许 LLM 生成文本回填` 开启时请求；关闭时不会发送标题、简介类补全请求。生成文本仅可在置信度和合并检查通过后回填空白或低风险字段，不覆盖权威元数据。", StringComparison.Ordinal), "README 必须说明 metadata text-completion 请求 gate。 ");
             Assert.IsTrue(readme.Contains("LLM 调用使用保守并发，同一时间默认只处理一个请求；超时、结构化输出不符合 schema、并发限制忙碌时会按可选能力关闭处理，不应变成 provider 错误。超时范围为 1-30 秒，默认 15 秒。", StringComparison.Ordinal), "README 必须说明保守并发、超时范围和 fail-closed 行为。 ");
+            Assert.IsTrue(readme.Contains("`LLM 思考等级` 默认不发送；选择 none、minimal、low、medium、high 或 xhigh 后，会作为 Chat Completions 请求体的 `reasoning_effort` 字段发送。仅对支持该字段的模型或 OpenAI 兼容接口生效，不支持时请保持默认。", StringComparison.Ordinal), "README 必须说明 LLM 思考等级的默认行为、可选值、Chat Completions 字段和兼容性边界。 ");
             Assert.IsTrue(readme.Contains("日志和证据只记录状态、错误类别和字段名，不记录 prompt、API Key、原始响应、cookie、token 或完整敏感 URL；启用前请自行评估费用、隐私和网络风险。", StringComparison.Ordinal), "README 必须说明日志和证据脱敏边界。 ");
             Assert.IsTrue(readme.Contains("OpenAI 兼容 Base URL 需要填写到 `/v1` 级别", StringComparison.Ordinal), "README 必须说明 OpenAI 兼容 Base URL 填到 /v1 级别。 ");
             Assert.IsTrue(readme.Contains("`LLM 辅助建议 TMDb 剧集组映射`：默认关闭，只能从 TMDb 返回的候选剧集组中选择。命中后会自动写进配置文件，写入成功后刷新受影响条目；关闭相对路径上下文后不会发送路径样本。", StringComparison.Ordinal), "README 必须说明剧集组映射辅助默认关闭、只从 TMDb 候选中选择、命中后自动写回配置并刷新受影响条目。 ");

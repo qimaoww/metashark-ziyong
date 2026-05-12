@@ -22,6 +22,13 @@ public class PluginConfiguration : BasePluginConfiguration
     public const string LlmStructuredOutputModeJsonSchema = "json-schema";
     public const string LlmStructuredOutputModeJsonObject = "json-object";
     public const string LlmStructuredOutputModeTextJson = "text-json";
+    public const string LlmReasoningEffortDefault = "default";
+    public const string LlmReasoningEffortNone = "none";
+    public const string LlmReasoningEffortMinimal = "minimal";
+    public const string LlmReasoningEffortLow = "low";
+    public const string LlmReasoningEffortMedium = "medium";
+    public const string LlmReasoningEffortHigh = "high";
+    public const string LlmReasoningEffortXHigh = "xhigh";
 
     private string? defaultScraperMode = DefaultScraperModeDefault;
     private int llmTimeoutSeconds = 15;
@@ -30,6 +37,7 @@ public class PluginConfiguration : BasePluginConfiguration
     private double llmEpisodeGroupMappingMinConfidence = 0.80;
     private int llmEpisodeGroupMappingMaxCandidateGroups = 8;
     private string? llmStructuredOutputMode = LlmStructuredOutputModeJsonSchema;
+    private string? llmReasoningEffort = LlmReasoningEffortDefault;
 
     /// <summary>
     /// Gets 插件版本.
@@ -198,6 +206,15 @@ public class PluginConfiguration : BasePluginConfiguration
     }
 
     /// <summary>
+    /// Gets or sets the optional Chat Completions reasoning effort level.
+    /// </summary>
+    public string LlmReasoningEffort
+    {
+        get => NormalizeLlmReasoningEffort(this.llmReasoningEffort);
+        set => this.llmReasoningEffort = NormalizeLlmReasoningEffort(value);
+    }
+
+    /// <summary>
     /// Gets or sets a value indicating whether relative path context can be sent to LLM.
     /// </summary>
     public bool LlmAllowRelativePathContext { get; set; } = true;
@@ -312,6 +329,21 @@ public class PluginConfiguration : BasePluginConfiguration
             LlmStructuredOutputModeJsonObject => LlmStructuredOutputModeJsonObject,
             LlmStructuredOutputModeTextJson => LlmStructuredOutputModeTextJson,
             _ => LlmStructuredOutputModeJsonSchema,
+        };
+    }
+
+    private static string NormalizeLlmReasoningEffort(string? value)
+    {
+        return value switch
+        {
+            LlmReasoningEffortDefault => LlmReasoningEffortDefault,
+            LlmReasoningEffortNone => LlmReasoningEffortNone,
+            LlmReasoningEffortMinimal => LlmReasoningEffortMinimal,
+            LlmReasoningEffortLow => LlmReasoningEffortLow,
+            LlmReasoningEffortMedium => LlmReasoningEffortMedium,
+            LlmReasoningEffortHigh => LlmReasoningEffortHigh,
+            LlmReasoningEffortXHigh => LlmReasoningEffortXHigh,
+            _ => LlmReasoningEffortDefault,
         };
     }
 }

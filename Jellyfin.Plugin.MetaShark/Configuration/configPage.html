@@ -332,6 +332,20 @@
                                 <input id="LlmModel" name="LlmModel" type="text"
                                     class="emby-input" />
                             </div>
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="LlmReasoningEffort">LLM 思考等级：</label>
+                                <select is="emby-select" id="LlmReasoningEffort" name="LlmReasoningEffort"
+                                    class="LlmReasoningEffort emby-select-withcolor emby-select">
+                                    <option value="default">默认</option>
+                                    <option value="none">关闭</option>
+                                    <option value="minimal">Minimal</option>
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="xhigh">XHigh</option>
+                                </select>
+                                <div class="fieldDescription">默认不发送。此项会作为 Chat Completions 请求体的 reasoning_effort 字段发送；仅对支持该字段的模型或 OpenAI 兼容接口生效，不支持时请保持默认。</div>
+                            </div>
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmTimeoutSeconds">超时秒数</label>
                                 <input id="LlmTimeoutSeconds" name="LlmTimeoutSeconds" type="number"
@@ -519,6 +533,7 @@
                            document.querySelector('#LlmApiKey').value = '';
                            document.querySelector('#LlmApiKey').placeholder = config.LlmApiKey ? '已配置，留空则保留' : '';
                           document.querySelector('#LlmModel').value = config.LlmModel;
+                          document.querySelector('#LlmReasoningEffort').value = config.LlmReasoningEffort;
                           document.querySelector('#LlmTimeoutSeconds').value = config.LlmTimeoutSeconds;
                           document.querySelector('#LlmMaxTokens').value = config.LlmMaxTokens;
                           document.querySelector('#LlmAllowRelativePathContext').checked = config.LlmAllowRelativePathContext;
@@ -589,6 +604,7 @@
                             config.LlmApiKey = llmApiKey;
                         }
                           config.LlmModel = document.querySelector('#LlmModel').value;
+                          config.LlmReasoningEffort = document.querySelector('#LlmReasoningEffort').value;
                           config.LlmTimeoutSeconds = document.querySelector('#LlmTimeoutSeconds').valueAsNumber;
                           config.LlmMaxTokens = document.querySelector('#LlmMaxTokens').valueAsNumber;
                           config.LlmAllowRelativePathContext = document.querySelector('#LlmAllowRelativePathContext').checked;

@@ -48,6 +48,7 @@ https://github.com/qimaoww/metashark-ziyong/releases/download/manifest/manifest.
 - `持久化 LLM TMDbID 补全来源`：默认开启。仅记录 LLM 外部 ID 辅助解析为 Douban 默认链路补齐的 TMDb ID；写入配置文件后用于后续刷新保留该 TMDb ID，但不会把条目升级为 TMDb 强制刮削，也不会写入 Douban→TMDb 纠错来源。关闭后仍可在当次刷新补写缺失 TMDb ID，但不持久化补全来源。
 - LLM 请求默认只发送相对媒体路径、公开 ProviderIds 和必要摘要，不发送完整本地路径、服务器 URL、Jellyfin 私有标识、API Key、cookie 或 token。关闭 `允许发送相对路径上下文` 后，元数据、外部 ID 和剧集组映射提示都不会发送相对路径、文件名或目录结构。
 - LLM 调用使用保守并发，同一时间默认只处理一个请求；超时、结构化输出不符合 schema、并发限制忙碌时会按可选能力关闭处理，不应变成 provider 错误。超时范围为 1-30 秒，默认 15 秒。
+- `LLM 思考等级` 默认不发送；选择 none、minimal、low、medium、high 或 xhigh 后，会作为 Chat Completions 请求体的 `reasoning_effort` 字段发送。仅对支持该字段的模型或 OpenAI 兼容接口生效，不支持时请保持默认。
 - 日志和证据只记录状态、错误类别和字段名，不记录 prompt、API Key、原始响应、cookie、token 或完整敏感 URL；启用前请自行评估费用、隐私和网络风险。
 - OpenAI 兼容 Base URL 需要填写到 `/v1` 级别，例如 `https://api.example.com/v1`。
 - `LLM 辅助建议 TMDb 剧集组映射`：默认关闭，只能从 TMDb 返回的候选剧集组中选择。命中后会自动写进配置文件，写入成功后刷新受影响条目；关闭相对路径上下文后不会发送路径样本。
