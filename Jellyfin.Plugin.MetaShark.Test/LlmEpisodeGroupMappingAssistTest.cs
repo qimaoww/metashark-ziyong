@@ -324,7 +324,6 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             Assert.IsFalse(prompt.Contains("/opt", StringComparison.OrdinalIgnoreCase), prompt);
             Assert.IsFalse(prompt.Contains("\\\\NAS", StringComparison.OrdinalIgnoreCase), prompt);
-            Assert.IsFalse(prompt.Contains("ProviderIds", StringComparison.OrdinalIgnoreCase), prompt);
             Assert.IsFalse(prompt.Contains("old-group", StringComparison.OrdinalIgnoreCase), prompt);
             Assert.IsTrue(prompt.Contains("Anime/Test Series/S01E01.mkv", StringComparison.Ordinal), prompt);
             Assert.IsTrue(prompt.Contains("candidate-group", StringComparison.Ordinal), prompt);
@@ -334,6 +333,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(root.TryGetProperty("candidateGroups", out var candidateGroups));
             Assert.AreEqual(1, candidateGroups.GetArrayLength());
             Assert.AreEqual("candidate-group", candidateGroups[0].GetProperty("groupId").GetString());
+            Assert.IsFalse(root.TryGetProperty("ProviderIds", out _), prompt);
+            Assert.IsFalse(root.TryGetProperty("providerIds", out _), prompt);
+            Assert.IsFalse(root.TryGetProperty("metadata", out _), prompt);
+            Assert.IsFalse(root.TryGetProperty("scraperMode", out _), prompt);
+            Assert.IsFalse(root.TryGetProperty("refreshActions", out _), prompt);
+
+            var constraints = string.Join("\n", root.GetProperty("constraints").EnumerateArray().Select(constraint => constraint.GetString()));
+            Assert.IsTrue(constraints.Contains("DO: select exactly one selectedGroupId from candidateGroups only when it matches the supplied episodeDistribution", StringComparison.Ordinal), constraints);
+            Assert.IsTrue(constraints.Contains("DO NOT: invent group ids, use group names as ids, select by popularity, or select a group that is not present in candidateGroups", StringComparison.Ordinal), constraints);
+            Assert.IsTrue(constraints.Contains("DO NOT: output metadata, ProviderIds, extra TMDb series/movie/season/episode IDs, titles, images, people, scraper mode changes, refresh actions, or configuration text", StringComparison.Ordinal), constraints);
+            Assert.IsTrue(constraints.Contains("DO NOT: request a metadata refresh, change scraper source, or treat the selected episode group as proof that another TMDb series id is correct", StringComparison.Ordinal), constraints);
+            Assert.IsTrue(constraints.Contains("If no candidate clearly matches, return selectedGroupId as an empty string with confidence 0.0", StringComparison.Ordinal), constraints);
         }
 
         private sealed class RecordingLlmApi : ILlmApi

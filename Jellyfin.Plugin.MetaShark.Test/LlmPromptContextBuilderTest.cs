@@ -181,6 +181,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("0.0 to 1.0", System.StringComparison.Ordinal)), json);
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("For Episode media", System.StringComparison.Ordinal)), json);
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("Do not change the series title", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("DO: fill only blank or low-risk title, originalTitle, overview, year, seasonNumber, or episodeNumber fields for the current item", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("DO NOT: create or modify external IDs, ProviderIds, people, images, scraper mode, episode group mappings, refresh actions, or library configuration", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("If source facts are uncertain, conflict with known ProviderIds, or refer to a different work, return { \"suggestions\": [] }", System.StringComparison.Ordinal)), json);
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("Privacy", System.StringComparison.Ordinal)), json);
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("full local paths", System.StringComparison.Ordinal)), json);
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("server URLs", System.StringComparison.Ordinal)), json);
@@ -241,6 +244,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(outputSchema!.Contains("externalIdCandidates", System.StringComparison.Ordinal), outputSchema);
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("output only external ID candidates", System.StringComparison.OrdinalIgnoreCase)), json);
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("do not output title, overview, people, images, URLs", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("DO: return only public external ID candidates that identify the exact same work", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("DO NOT: switch scraper mode, request TMDb metadata scraping, rewrite metadata fields, images, people, episode group mappings, or ProviderIds", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("DO NOT: replace an existing TMDb ID during ordinary missing-ID completion", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("DO NOT: remove, downgrade, or overwrite existing Douban, IMDb, TVDB, or TMDb identifiers", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("DO: when a default Douban metadata flow for a Movie or Series has only a Douban ID and no TMDb ID, return at most one matching TMDb ID as completion data only", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("When PublicProviderIds contains Douban and TMDb is missing, return only one TMDb candidate or { \"externalIdCandidates\": [] }; do not return IMDb, TVDB, or Douban candidates", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("DO NOT: turn a Douban default flow into forced TMDb scraping, correction persistence, metadata replacement, image replacement, or a second refresh", System.StringComparison.Ordinal)), json);
+            Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("When localized Chinese titles differ between Douban and TMDb, use original title, year, media type, and public identifier evidence", System.StringComparison.Ordinal)), json);
             Assert.IsTrue(constraints.Any(constraint => constraint!.Contains("{ \"externalIdCandidates\": [] }", System.StringComparison.Ordinal)), json);
             Assert.IsFalse(json.Contains("\"candidates\"", System.StringComparison.Ordinal), json);
             AssertSafePromptJson(json);
@@ -289,7 +300,51 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(constraintsText.Contains("year", System.StringComparison.OrdinalIgnoreCase), constraintsText);
             Assert.IsTrue(constraintsText.Contains("media type", System.StringComparison.OrdinalIgnoreCase), constraintsText);
             Assert.IsTrue(constraintsText.Contains("TMDb TV", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("completion data only", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("forced TMDb scraping", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("not a correction source", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("return only one TMDb candidate", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("do not return IMDb, TVDB, or Douban candidates", System.StringComparison.Ordinal), constraintsText);
             Assert.IsTrue(constraintsText.Contains("different original title", System.StringComparison.OrdinalIgnoreCase), constraintsText);
+        }
+
+        [TestMethod]
+        public void BuildExternalIdPromptJson_WhenDoubanMovieNeedsTmdbCompletion_RequiresOnlyTmdbMovieIdAndKeepsDoubanSource()
+        {
+            var info = new MovieInfo
+            {
+                Name = "盗梦空间",
+                OriginalTitle = "Inception",
+                Path = "/movies/盗梦空间 (2010)/movie.mkv",
+                MetadataLanguage = "zh-CN",
+                Year = 2010,
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, "3541415" },
+                },
+            };
+
+            var json = LlmPromptContextBuilder.BuildExternalIdPromptJson(
+                info,
+                "Movie",
+                new[] { "/movies" },
+                new[] { "/movies/盗梦空间 (2010)/movie.mkv" });
+
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var publicProviderIds = root.GetProperty("PublicProviderIds");
+            Assert.AreEqual("3541415", publicProviderIds.GetProperty("Douban").GetString());
+            Assert.IsFalse(publicProviderIds.TryGetProperty("TMDb", out _), json);
+
+            var constraintsText = string.Join("\n", root.GetProperty("Constraints").EnumerateArray().Select(constraint => constraint.GetString()));
+            Assert.IsTrue(constraintsText.Contains("Movie or Series", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("return at most one matching TMDb ID as completion data only", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("keep its existing Douban metadata source", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("return only one TMDb candidate", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("do not return IMDb, TVDB, or Douban candidates", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("TMDb Movie IDs", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("forced TMDb scraping", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("not a correction source", System.StringComparison.Ordinal), constraintsText);
         }
 
         [TestMethod]

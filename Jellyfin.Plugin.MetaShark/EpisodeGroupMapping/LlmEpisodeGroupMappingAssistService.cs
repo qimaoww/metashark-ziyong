@@ -198,6 +198,13 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                     "selectedGroupId must exactly equal one candidate groupId",
                     "do not invent group ids",
                     "use only relative path/file summaries",
+                    "DO: select exactly one selectedGroupId from candidateGroups only when it matches the supplied episodeDistribution.",
+                    "DO: set confidence from 0.0 to 1.0 and explain the season/episode distribution evidence in reason.",
+                    "DO NOT: invent group ids, use group names as ids, select by popularity, or select a group that is not present in candidateGroups.",
+                    "DO NOT: output metadata, ProviderIds, extra TMDb series/movie/season/episode IDs, titles, images, people, scraper mode changes, refresh actions, or configuration text.",
+                    "DO NOT: request a metadata refresh, change scraper source, or treat the selected episode group as proof that another TMDb series id is correct.",
+                    "DO NOT: treat relative paths or filenames as authoritative when they conflict with candidateGroups or episodeDistribution.",
+                    "If no candidate clearly matches, return selectedGroupId as an empty string with confidence 0.0 and a reason.",
                 },
             };
 
