@@ -427,6 +427,72 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_WhenCompletionMapReplacesStaleMovieTmdbId_PersistsProviderIdsWithoutSwitchingMetadataSource()
+        {
+            var configuration = CreateLlmConfiguration(enableTmdbCorrection: true);
+            configuration.LlmTmdbCompletionMap = "movie:douban:movie-completion-stale=tmdb:7701";
+            ReplacePluginConfiguration(configuration);
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var subject = CreateDoubanSubject("movie-completion-stale", "Completion Default Movie", 2036);
+            SeedDoubanSubject(doubanApi, subject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbMovie(tmdbApi, 7701, "zh-CN", CreateTmdbMovie(7701, "TMDb Supplemental Movie", 2036));
+            var infoPath = "/mnt/media/Movies/Completion Default Movie/Completion Default Movie.mkv";
+            var currentMovie = new TrackingMovie
+            {
+                Id = Guid.NewGuid(),
+                Name = "Completion Default Movie",
+                Overview = "旧简介",
+                Path = infoPath,
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [BaseProvider.DoubanProviderId] = "movie-completion-stale",
+                    [MetaSharkPlugin.ProviderId] = "Douban_movie-completion-stale",
+                    [MetadataProvider.Tmdb.ToString()] = "1111",
+                    [MetadataProvider.Imdb.ToString()] = "ttoldmovie",
+                    [MetadataProvider.Tvdb.ToString()] = "old-tvdb",
+                },
+            };
+            var libraryManager = new Mock<ILibraryManager>();
+            libraryManager.Setup(x => x.FindByPath(infoPath, false)).Returns(currentMovie);
+            var externalIdResolver = CreateExternalIdResolverWithWrites(CreateProviderIdWrite(MetadataProvider.Tmdb.ToString(), "TMDb", "9999"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(currentMovie.Id.ToString("D", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                libraryManager: libraryManager.Object,
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Completion Default Movie", infoPath, 2036);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "movie-completion-stale",
+                [MetaSharkPlugin.ProviderId] = "Douban_movie-completion-stale",
+                [MetadataProvider.Tmdb.ToString()] = "1111",
+                [MetadataProvider.Imdb.ToString()] = "ttoldmovie",
+                [MetadataProvider.Tvdb.ToString()] = "old-tvdb",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("Completion Default Movie", result.Item!.Name);
+            Assert.AreEqual("Completion Default Movie overview", result.Item.Overview);
+            Assert.AreEqual("7701", result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("Completion Default Movie", currentMovie.Name);
+            Assert.AreEqual("旧简介", currentMovie.Overview);
+            Assert.AreEqual("movie-completion-stale", currentMovie.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("Douban_movie-completion-stale", currentMovie.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.AreEqual("7701", currentMovie.GetProviderId(MetadataProvider.Tmdb));
+            Assert.IsNull(currentMovie.GetProviderId(MetadataProvider.Imdb));
+            Assert.IsNull(currentMovie.GetProviderId(MetadataProvider.Tvdb));
+            Assert.AreEqual(1, currentMovie.UpdateToRepositoryCallCount);
+            Assert.AreEqual(0, externalIdResolver.Requests.Count);
+            Assert.AreEqual(0, externalIdResolver.CorrectionRequests.Count);
+        }
+
+        [TestMethod]
         public async Task GetMetadata_WhenResolverReturnsTvdbMovieWrite_IgnoresWriteAndKeepsProviderIdsStable()
         {
             ReplacePluginConfiguration(CreateLlmConfiguration());

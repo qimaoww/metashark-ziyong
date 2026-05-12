@@ -35,8 +35,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before non-static members", Justification = "Keep provider orchestration helpers near the flow they support.")]
     public class SeriesProvider : BaseProvider, IRemoteMetadataProvider<Series, SeriesInfo>
     {
-        internal static Action<SeriesFlowTrace>? TestTraceSink { get; set; }
-
         private readonly ILlmMetadataAssistService? llmMetadataAssistService;
         private readonly ILlmExternalIdResolutionService? llmExternalIdResolutionService;
         private readonly ILlmEpisodeGroupMappingProviderAssistService? llmEpisodeGroupMappingProviderAssistService;
@@ -61,17 +59,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         public string Name => MetaSharkPlugin.PluginName;
 
-        internal sealed record SeriesFlowTrace(
-            string Stage,
-            DefaultScraperSemantic Semantic,
-            string? Sid,
-            string? EffectiveSid,
-            string? TmdbId,
-            MetaSource MetaSource,
-            bool TmdbSourceIsPrimary,
-            bool HasTmdbMeta,
-            bool HasDoubanMeta,
-            bool HasBridgedExplicitSearchMissingMetadataRefreshIntent);
+        internal static Action<SeriesFlowTrace>? TestTraceSink { get; set; }
 
         /// <inheritdoc />
         public async Task<IEnumerable<RemoteSearchResult>> GetSearchResults(SeriesInfo searchInfo, CancellationToken cancellationToken)
@@ -417,6 +405,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
 
                 ApplyLlmTextCompletion(result, llmAssistResult);
+                if (hasPersistedDoubanTmdbCompletion || tmdbIdResolvedByLlmExternalIds)
+                {
+                    await this.TryPersistLlmTmdbCompletionProviderIdsAsync(info, tmdbId, result.Item, cancellationToken).ConfigureAwait(false);
+                }
 
                 return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
             }
@@ -1616,5 +1608,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             return persons;
         }
+
+        internal sealed record SeriesFlowTrace(
+            string Stage,
+            DefaultScraperSemantic Semantic,
+            string? Sid,
+            string? EffectiveSid,
+            string? TmdbId,
+            MetaSource MetaSource,
+            bool TmdbSourceIsPrimary,
+            bool HasTmdbMeta,
+            bool HasDoubanMeta,
+            bool HasBridgedExplicitSearchMissingMetadataRefreshIntent);
     }
 }

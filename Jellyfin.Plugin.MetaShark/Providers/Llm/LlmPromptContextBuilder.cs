@@ -71,6 +71,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             "Output only external ID candidates; do not output title, overview, people, images, URLs, local paths, Jellyfin item IDs, library roots, credentials, or configuration values.",
             "Allowed providers are TMDb, IMDb, TVDB, and Douban only.",
             "If a Series already has a Douban ID but lacks a TMDb ID, resolve only the matching TMDb Series ID so the existing Douban metadata flow can keep its metadata source.",
+            "If the exact public record cannot be verified, return { \"externalIdCandidates\": [] }; never guess or infer from popularity, loose title similarity, folder names, or partial matches.",
+            "When PublicProviderIds contains Douban and TMDb is missing, any TMDb candidate must be the same work as that Douban subject and must match its title, original title, year, and media type.",
+            "For Series, return only TMDb TV or TMDb Series IDs, never TMDb Movie IDs or unrelated works.",
+            "The reason and evidence must name the matched Douban title, original title, year, and media type evidence when Douban is present; if that evidence is unavailable or conflicts, return { \"externalIdCandidates\": [] }.",
+            "Do not map a Douban Series to a TMDb record with a different original title, different year, or different media type.",
             "When the ID is unknown or confidence is insufficient, return { \"externalIdCandidates\": [] }.",
         };
 
@@ -135,6 +140,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 Constraints = ExternalIdPromptConstraints,
                 MediaType = mediaType,
                 Title = NormalizeText(info.Name),
+                OriginalTitle = NormalizeText(info.OriginalTitle),
                 Year = NormalizePositiveNumber(info.Year),
                 SeasonNumber = NormalizePositiveOrZeroNumber(info.ParentIndexNumber),
                 EpisodeNumber = NormalizePositiveOrZeroNumber(info.IndexNumber),

@@ -716,10 +716,22 @@ namespace Jellyfin.Plugin.MetaShark.Test
         public async Task ResolveAsync_WhenSeriesHasOnlyDoubanIdAndTmdbCandidateVerified_ShouldWriteMissingTmdbId()
         {
             var tmdbApi = this.CreateTmdbApi();
-            SeedTmdbSeries(tmdbApi, 300001, "zh-CN", string.Empty);
+            SeedTmdbSeries(tmdbApi, 300001, "zh-CN", string.Empty, name: "灰原君的青春二周目", originalName: "灰原くんの強くて青春ニューゲーム", firstAirDate: new DateTime(2026, 4, 3));
+            var doubanApi = this.CreateDoubanApi();
+            SeedDoubanSubject(
+                doubanApi,
+                "37291769",
+                new DoubanSubject
+                {
+                    Sid = "37291769",
+                    Category = "电视剧",
+                    Name = "灰原君的青春二周目",
+                    OriginalName = "灰原くんの強くて青春ニューゲーム",
+                    Year = 2026,
+                });
             var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "300001", "Series")));
             using var loggerFactory = RecordingLoggerFactory.Create();
-            var service = this.CreateService(llmApi, tmdbApi, loggerFactory: loggerFactory);
+            var service = this.CreateService(llmApi, tmdbApi, doubanApi: doubanApi, loggerFactory: loggerFactory);
             var lookupInfo = new SeriesInfo
             {
                 Name = "灰原君的青春二周目",
@@ -742,6 +754,49 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(MetadataProvider.Tmdb.ToString(), result.ProviderIdWrites[0].ProviderIdKey);
             Assert.AreEqual(1, llmApi.Prompts.Count);
             loggerFactory.ExpectExternalIdResolutionCompleted("Succeeded", "Succeeded", "Series", "candidates=1 verified=1 planned=1 applied=1 skipped=0");
+        }
+
+        [TestMethod]
+        public async Task ResolveAsync_WhenSeriesTmdbCandidateExistsButConflictsWithDoubanSubject_ShouldFailClosedWithoutWrite()
+        {
+            var tmdbApi = this.CreateTmdbApi();
+            SeedTmdbSeries(tmdbApi, 251782, "zh-CN", string.Empty, name: "Dieselråttor och sjömansmöss", originalName: "Dieselråttor och sjömansmöss", firstAirDate: new DateTime(2002, 12, 1));
+            var doubanApi = this.CreateDoubanApi();
+            SeedDoubanSubject(
+                doubanApi,
+                "37291769",
+                new DoubanSubject
+                {
+                    Sid = "37291769",
+                    Category = "电视剧",
+                    Name = "灰原君的青春二周目",
+                    OriginalName = "灰原くんの強くて青春ニューゲーム",
+                    Year = 2026,
+                });
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "251782", "Series")));
+            var service = this.CreateService(llmApi, tmdbApi, doubanApi: doubanApi);
+            var lookupInfo = new SeriesInfo
+            {
+                Name = "灰原君的青春二周目",
+                OriginalTitle = "灰原くんの強くて青春ニューゲーム",
+                Year = 2026,
+                Path = "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)",
+                MetadataLanguage = "zh-CN",
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [BaseProvider.DoubanProviderId] = "37291769",
+                    [MetaSharkPlugin.ProviderId] = "Douban_37291769",
+                },
+            };
+
+            var result = await service.ResolveAsync(CreateRequest(lookupInfo, mediaType: "Series"), CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmExternalIdResolutionStatus.VerificationFailed, result.Status, result.Diagnostic);
+            Assert.IsTrue(result.Diagnostic.Contains("semantic", StringComparison.OrdinalIgnoreCase), result.Diagnostic);
+            Assert.AreEqual("37291769", lookupInfo.ProviderIds[BaseProvider.DoubanProviderId]);
+            Assert.IsFalse(lookupInfo.ProviderIds.ContainsKey(MetadataProvider.Tmdb.ToString()));
+            Assert.AreEqual(0, result.ProviderIdWrites.Count);
+            Assert.AreEqual(1, llmApi.Prompts.Count);
         }
 
         [TestMethod]
@@ -1621,11 +1676,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(prompt.Contains("MetaSharkID", StringComparison.OrdinalIgnoreCase), prompt);
         }
 
-        private static void SeedTmdbMovie(TmdbApi tmdbApi, int tmdbId, string language, string imageLanguages)
+        private static void SeedTmdbMovie(TmdbApi tmdbApi, int tmdbId, string language, string imageLanguages, string? title = null, string? originalTitle = null, DateTime? releaseDate = null)
         {
             GetTmdbMemoryCache(tmdbApi).Set(
                 $"movie-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}",
-                new TmdbMovie { Id = tmdbId },
+                new TmdbMovie
+                {
+                    Id = tmdbId,
+                    Title = title,
+                    OriginalTitle = originalTitle,
+                    ReleaseDate = releaseDate,
+                },
                 TimeSpan.FromMinutes(5));
         }
 
@@ -1637,11 +1698,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 TimeSpan.FromMinutes(5));
         }
 
-        private static void SeedTmdbSeries(TmdbApi tmdbApi, int tmdbId, string language, string imageLanguages)
+        private static void SeedTmdbSeries(TmdbApi tmdbApi, int tmdbId, string language, string imageLanguages, string? name = null, string? originalName = null, DateTime? firstAirDate = null)
         {
             GetTmdbMemoryCache(tmdbApi).Set(
                 $"series-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}",
-                new TmdbTvShow { Id = tmdbId },
+                new TmdbTvShow
+                {
+                    Id = tmdbId,
+                    Name = name,
+                    OriginalName = originalName,
+                    FirstAirDate = firstAirDate,
+                },
                 TimeSpan.FromMinutes(5));
         }
 

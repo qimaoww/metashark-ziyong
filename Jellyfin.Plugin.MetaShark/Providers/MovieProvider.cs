@@ -351,6 +351,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
 
                 this.ApplyLlmTextCompletion(result, llmAssistResult);
+                if (hasPersistedDoubanTmdbCompletion || !string.IsNullOrWhiteSpace(GetProviderIdWriteValue(externalIdResolutionResult, MetadataProvider.Tmdb.ToString())))
+                {
+                    await this.TryPersistLlmTmdbCompletionProviderIdsAsync(info, tmdbId, result.Item, cancellationToken).ConfigureAwait(false);
+                }
 
                 return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
             }

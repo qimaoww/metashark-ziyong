@@ -381,7 +381,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             LlmExternalIdVerificationResult newTmdbVerified;
             try
             {
-                newTmdbVerified = await this.VerifyTmdbCandidateAsync(candidate, request.LookupInfo, mediaType, cancellationToken).ConfigureAwait(false);
+                newTmdbVerified = await this.VerifyTmdbCandidateExistsAsync(candidate, request.LookupInfo.MetadataLanguage, mediaType, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -1092,13 +1092,41 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             if (string.Equals(targetMediaType, MovieMediaType, StringComparison.Ordinal))
             {
                 var movie = await this.tmdbApi.GetMovieAsync(tmdbId, lookupInfo.MetadataLanguage, string.Empty, cancellationToken).ConfigureAwait(false);
-                return movie == null ? VerificationFailed("TMDb movie detail was not found", candidate) : VerificationSucceeded(candidate);
+                if (movie == null)
+                {
+                    return VerificationFailed("TMDb movie detail was not found", candidate);
+                }
+
+                var suggestion = new LlmScrapingSuggestion
+                {
+                    MediaType = MovieMediaType,
+                    Title = movie.Title,
+                    OriginalTitle = movie.OriginalTitle,
+                    Year = movie.ReleaseDate?.Year,
+                    Confidence = 1,
+                };
+                var semanticVerification = await this.VerifyTmdbCandidateSemanticAsync(candidate, lookupInfo, targetMediaType, suggestion, cancellationToken).ConfigureAwait(false);
+                return semanticVerification ?? VerificationSucceeded(candidate);
             }
 
             if (string.Equals(targetMediaType, SeriesMediaType, StringComparison.Ordinal))
             {
                 var series = await this.tmdbApi.GetSeriesAsync(tmdbId, lookupInfo.MetadataLanguage, string.Empty, cancellationToken).ConfigureAwait(false);
-                return series == null ? VerificationFailed("TMDb series detail was not found", candidate) : VerificationSucceeded(candidate);
+                if (series == null)
+                {
+                    return VerificationFailed("TMDb series detail was not found", candidate);
+                }
+
+                var suggestion = new LlmScrapingSuggestion
+                {
+                    MediaType = SeriesMediaType,
+                    Title = series.Name,
+                    OriginalTitle = series.OriginalName,
+                    Year = series.FirstAirDate?.Year,
+                    Confidence = 1,
+                };
+                var semanticVerification = await this.VerifyTmdbCandidateSemanticAsync(candidate, lookupInfo, targetMediaType, suggestion, cancellationToken).ConfigureAwait(false);
+                return semanticVerification ?? VerificationSucceeded(candidate);
             }
 
             if (string.Equals(targetMediaType, SeasonMediaType, StringComparison.Ordinal))
@@ -1119,6 +1147,94 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             return VerificationFailed("target media type is unsupported", candidate);
+        }
+
+        private async Task<LlmExternalIdVerificationResult> VerifyTmdbCandidateExistsAsync(LlmExternalIdCandidate candidate, string language, string targetMediaType, CancellationToken cancellationToken)
+        {
+            if (!TryParsePositiveInt(candidate.Id, out var tmdbId))
+            {
+                return VerificationFailed("TMDb id is invalid", candidate);
+            }
+
+            if (string.Equals(targetMediaType, MovieMediaType, StringComparison.Ordinal))
+            {
+                var movie = await this.tmdbApi.GetMovieAsync(tmdbId, language, string.Empty, cancellationToken).ConfigureAwait(false);
+                return movie == null ? VerificationFailed("TMDb movie detail was not found", candidate) : VerificationSucceeded(candidate);
+            }
+
+            if (string.Equals(targetMediaType, SeriesMediaType, StringComparison.Ordinal))
+            {
+                var series = await this.tmdbApi.GetSeriesAsync(tmdbId, language, string.Empty, cancellationToken).ConfigureAwait(false);
+                return series == null ? VerificationFailed("TMDb series detail was not found", candidate) : VerificationSucceeded(candidate);
+            }
+
+            return await this.VerifyTmdbCandidateAsync(candidate, new ItemLookupInfo { MetadataLanguage = language }, targetMediaType, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<LlmExternalIdVerificationResult?> VerifyTmdbCandidateSemanticAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, string targetMediaType, LlmScrapingSuggestion suggestion, CancellationToken cancellationToken)
+        {
+            var allowRelativePathContext = MetaSharkPlugin.Instance?.Configuration?.LlmAllowRelativePathContext ?? true;
+            var localContext = this.scrapeContextBuilder.Build(lookupInfo, targetMediaType, Array.Empty<string?>(), allowRelativePathContext);
+            if (this.mismatchDetector.IsMismatch(localContext, suggestion))
+            {
+                return VerificationFailed("TMDb candidate semantic mismatch with lookup context", candidate);
+            }
+
+            var providerIds = GetProviderIds(lookupInfo);
+            if (providerIds.TryGetValue(BaseProvider.DoubanProviderId, out var doubanId) && !string.IsNullOrWhiteSpace(doubanId))
+            {
+                var doubanSubject = await this.TryGetDoubanSubjectForSemanticVerificationAsync(doubanId, cancellationToken).ConfigureAwait(false);
+                if (doubanSubject != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(doubanSubject.Category)
+                        && (string.Equals(targetMediaType, MovieMediaType, StringComparison.Ordinal) != doubanSubject.Category.Contains("电影", StringComparison.Ordinal)))
+                    {
+                        return VerificationFailed("Douban subject category did not match TMDb candidate media type", candidate);
+                    }
+
+                    var doubanContext = CreateDoubanSemanticContext(doubanSubject, targetMediaType);
+                    if (this.mismatchDetector.IsMismatch(doubanContext, suggestion))
+                    {
+                        return VerificationFailed("TMDb candidate semantic mismatch with Douban subject", candidate);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private async Task<DoubanSubject?> TryGetDoubanSubjectForSemanticVerificationAsync(string doubanId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await this.doubanApi.GetMovieAsync(doubanId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+            catch (System.Net.Http.HttpRequestException)
+            {
+                return null;
+            }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+        }
+
+        private static LlmPromptContext CreateDoubanSemanticContext(DoubanSubject subject, string mediaType)
+        {
+            return new LlmPromptContext
+            {
+                MediaType = mediaType,
+                Name = subject.Name,
+                ParsedName = subject.Name,
+                ParsedChineseName = subject.Name,
+                ParentFolderName = subject.OriginalName,
+                Year = subject.Year > 0 ? subject.Year : null,
+                ParsedYear = subject.Year > 0 ? subject.Year : null,
+            };
         }
 
         private async Task<LlmExternalIdVerificationResult> VerifyTmdbEpisodeCandidateAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, int candidateEpisodeId, CancellationToken cancellationToken)

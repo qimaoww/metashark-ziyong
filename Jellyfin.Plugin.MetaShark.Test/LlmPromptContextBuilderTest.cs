@@ -253,6 +253,46 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void BuildExternalIdPromptJson_WhenDoubanSeriesNeedsTmdbCompletion_RequiresExactPublicRecordMatch()
+        {
+            var info = new SeriesInfo
+            {
+                Name = "灰原君的青春二周目",
+                OriginalTitle = "灰原くんの強くて青春ニューゲーム",
+                Path = "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)",
+                MetadataLanguage = "zh-CN",
+                Year = 2026,
+                ProviderIds = new Dictionary<string, string>
+                {
+                    { BaseProvider.DoubanProviderId, "37291769" },
+                },
+            };
+
+            var json = LlmPromptContextBuilder.BuildExternalIdPromptJson(
+                info,
+                "Series",
+                new[] { "/dongman" },
+                new[] { "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)/Season 01/第01集.mkv" });
+
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var publicProviderIds = root.GetProperty("PublicProviderIds");
+            Assert.AreEqual("37291769", publicProviderIds.GetProperty("Douban").GetString());
+            Assert.IsFalse(publicProviderIds.TryGetProperty("TMDb", out _), json);
+
+            var constraintsText = string.Join("\n", root.GetProperty("Constraints").EnumerateArray().Select(constraint => constraint.GetString()));
+            Assert.IsTrue(constraintsText.Contains("never guess", System.StringComparison.OrdinalIgnoreCase), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("{ \"externalIdCandidates\": [] }", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("Douban", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("title", System.StringComparison.OrdinalIgnoreCase), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("original title", System.StringComparison.OrdinalIgnoreCase), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("year", System.StringComparison.OrdinalIgnoreCase), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("media type", System.StringComparison.OrdinalIgnoreCase), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("TMDb TV", System.StringComparison.Ordinal), constraintsText);
+            Assert.IsTrue(constraintsText.Contains("different original title", System.StringComparison.OrdinalIgnoreCase), constraintsText);
+        }
+
+        [TestMethod]
         public void BuildMetadataAssistPromptJson_WhenRelativePathContextDisabled_OmitsPathFileAndParentFolder()
         {
             var info = new EpisodeInfo

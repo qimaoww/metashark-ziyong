@@ -6,7 +6,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 {
     using System;
     using System.Collections.Generic;
-    using System.Diagnostics.CodeAnalysis;
     using System.IO;
     using System.Linq;
 
@@ -14,14 +13,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
     {
         private const string DoubanProviderKey = "douban";
         private const string TmdbProviderKey = "tmdb";
-        private static readonly StringComparer EntryComparer = StringComparer.OrdinalIgnoreCase;
+        private readonly StringComparer entryComparer = StringComparer.OrdinalIgnoreCase;
 
         public static LlmTmdbCorrectionMapParser Shared { get; } = new LlmTmdbCorrectionMapParser();
 
-        [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Parser stays instance-based because persistence services receive it as a composable dependency.")]
         public LlmTmdbCorrectionMapSnapshot ParseSnapshot(string? mapping)
         {
-            var entriesByKey = new Dictionary<string, LlmTmdbCorrectionMapEntry>(EntryComparer);
+            var entriesByKey = new Dictionary<string, LlmTmdbCorrectionMapEntry>(this.entryComparer);
             if (!string.IsNullOrWhiteSpace(mapping))
             {
                 using var reader = new StringReader(mapping);
@@ -77,7 +75,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             var snapshot = this.ParseSnapshot(mapping);
-            var entries = snapshot.EntriesByKey.Values.ToDictionary(entry => entry.Key, entry => entry, EntryComparer);
+            var entries = snapshot.EntriesByKey.Values.ToDictionary(entry => entry.Key, entry => entry, this.entryComparer);
             entries[newEntry.Key] = newEntry;
             return string.Join(
                 "\n",
@@ -146,10 +144,21 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             };
         }
 
-        [SuppressMessage("Globalization", "CA1308:Normalize strings to uppercase", Justification = "Persisted correction-map canonical text is intentionally lowercase for compatibility.")]
         private static string NormalizeToken(string? value)
         {
-            return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            var trimmed = value.Trim();
+            var buffer = new char[trimmed.Length];
+            for (var index = 0; index < trimmed.Length; index++)
+            {
+                buffer[index] = char.ToLowerInvariant(trimmed[index]);
+            }
+
+            return new string(buffer);
         }
     }
 }

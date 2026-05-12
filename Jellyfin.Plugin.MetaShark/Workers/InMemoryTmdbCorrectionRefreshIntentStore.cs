@@ -6,6 +6,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics.CodeAnalysis;
 
     public sealed class InMemoryTmdbCorrectionRefreshIntentStore : ITmdbCorrectionRefreshIntentStore
     {
@@ -91,7 +92,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
         }
 
-        private bool TryResolveEntry(Guid itemId, string normalizedPath, out RefreshIntentEntry entry)
+        private bool TryResolveEntry(Guid itemId, string normalizedPath, [NotNullWhen(true)] out RefreshIntentEntry? entry)
         {
             if (itemId != Guid.Empty && this.entriesByItemId.TryGetValue(itemId, out var entryById))
             {
@@ -107,7 +108,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return true;
             }
 
-            entry = default!;
+            entry = null;
             return false;
         }
 

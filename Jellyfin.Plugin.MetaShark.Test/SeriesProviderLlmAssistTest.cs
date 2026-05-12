@@ -961,6 +961,129 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_TmdbCompletionMapOverridesStaleExistingTmdbId_AndKeepsDoubanBranchWithoutCorrection()
+        {
+            EnsurePluginInstance();
+            var configuration = CreateLlmConfiguration(enableTmdbCorrection: true);
+            configuration.LlmTmdbCompletionMap = "series:douban:37291769=tmdb:316424";
+            ReplacePluginConfiguration(configuration);
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var doubanSubject = CreateDoubanSubject("37291769", "灰原君的青春二周目", 2026);
+            SeedDoubanSubject(doubanApi, doubanSubject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 251782, "zh-CN", CreateTmdbSeries(251782, "Macken", "旧错误 TMDb 简介", "tt0310442", "251782"));
+            SeedTmdbSeries(tmdbApi, 316424, "zh-CN", CreateTmdbSeries(316424, "Haibara-kun's New Game Plus", "正确 TMDb 简介", null, null));
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            externalIdService.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
+            externalIdService.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.VerifiedExistingTmdb("251782", "ExistingTmdbVerified"));
+            var stages = new List<string>();
+            SeriesProvider.TestTraceSink = trace => stages.Add(trace.Stage);
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("灰原君的青春二周目", "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)");
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "37291769",
+                [MetaSharkPlugin.ProviderId] = "Douban_37291769",
+                [MetadataProvider.Tmdb.ToString()] = "251782",
+            };
+
+            try
+            {
+                var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsTrue(result.HasMetadata);
+                Assert.AreEqual("灰原君的青春二周目", result.Item!.Name);
+                Assert.AreEqual("灰原君的青春二周目简介", result.Item.Overview);
+                Assert.AreEqual("37291769", result.Item.GetProviderId(BaseProvider.DoubanProviderId));
+                Assert.AreEqual("Douban_37291769", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+                Assert.AreEqual("316424", result.Item.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual("316424", info.GetProviderId(MetadataProvider.Tmdb));
+                Assert.AreEqual(0, externalIdService.ExistingProviderDecisionRequests.Count, "持久化补全来源命中后不应再评估旧 ProviderIds 冲突。");
+                Assert.AreEqual(0, externalIdService.Requests.Count, "持久化补全来源命中后不应再调用普通外部 ID 补全。");
+                Assert.AreEqual(0, externalIdService.CorrectionRequests.Count, "持久化补全来源命中后不应升级成 TMDb 强纠错链路。");
+                Assert.IsTrue(stages.Contains("BeforeDoubanMetadata"), "补全来源命中后仍应走默认 Douban 元数据分支。");
+                Assert.IsFalse(stages.Contains("BeforeTmdbMetadata"), "补全来源命中后不应强制切到 TMDb 元数据分支。");
+                Assert.AreEqual("series:douban:37291769=tmdb:316424", MetaSharkPlugin.Instance!.Configuration.LlmTmdbCompletionMap);
+                Assert.AreEqual(string.Empty, MetaSharkPlugin.Instance.Configuration.LlmTmdbCorrectionMap);
+            }
+            finally
+            {
+                SeriesProvider.TestTraceSink = null;
+            }
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_TmdbCompletionMapPersistsCompletedProviderIdsToCurrentItemWithoutSwitchingMetadataSource()
+        {
+            EnsurePluginInstance();
+            var configuration = CreateLlmConfiguration(enableTmdbCorrection: true);
+            configuration.LlmTmdbCompletionMap = "series:douban:37291769=tmdb:316424";
+            ReplacePluginConfiguration(configuration);
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            SeedDoubanSubject(doubanApi, CreateDoubanSubject("37291769", "灰原君的青春二周目", 2026));
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 316424, "zh-CN", CreateTmdbSeries(316424, "Haibara-kun's New Game Plus", "正确 TMDb 简介", null, null));
+            var infoPath = "/dongman/动画/灰原同学重返过去，开启所向无敌的第二轮青春游戏 (2026)";
+            var currentSeries = new TrackingSeries
+            {
+                Id = Guid.NewGuid(),
+                Name = "灰原君的青春二周目",
+                Overview = "旧简介",
+                Path = infoPath,
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [BaseProvider.DoubanProviderId] = "37291769",
+                    [MetaSharkPlugin.ProviderId] = "Douban_37291769",
+                    [MetadataProvider.Tmdb.ToString()] = "251782",
+                    [MetadataProvider.Imdb.ToString()] = "tt0310442",
+                    [MetadataProvider.Tvdb.ToString()] = "old-tvdb",
+                },
+            };
+            var libraryManager = new Mock<ILibraryManager>();
+            libraryManager.Setup(x => x.FindByPath(infoPath, true)).Returns(currentSeries);
+            var externalIdService = new RecordingLlmExternalIdResolutionService();
+            var provider = CreateProvider(
+                loggerFactory,
+                LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(currentSeries.Id.ToString("D", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                libraryManager: libraryManager.Object,
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdService);
+            var info = CreateSeriesInfo("灰原君的青春二周目", infoPath);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "37291769",
+                [MetaSharkPlugin.ProviderId] = "Douban_37291769",
+                [MetadataProvider.Tmdb.ToString()] = "251782",
+                [MetadataProvider.Imdb.ToString()] = "tt0310442",
+                [MetadataProvider.Tvdb.ToString()] = "old-tvdb",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("灰原君的青春二周目", result.Item!.Name);
+            Assert.AreEqual("灰原君的青春二周目简介", result.Item.Overview);
+            Assert.AreEqual("316424", result.Item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("灰原君的青春二周目", currentSeries.Name, "补全 TMDbID 不能把当前条目切成 TMDb 元数据标题。");
+            Assert.AreEqual("旧简介", currentSeries.Overview, "Provider 内的补全持久化只负责外部 ID，正文元数据交给 Jellyfin 本轮导入。");
+            Assert.AreEqual("37291769", currentSeries.GetProviderId(BaseProvider.DoubanProviderId));
+            Assert.AreEqual("Douban_37291769", currentSeries.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.AreEqual("316424", currentSeries.GetProviderId(MetadataProvider.Tmdb));
+            Assert.IsNull(currentSeries.GetProviderId(MetadataProvider.Imdb), "旧错误 TMDb 派生的 IMDb 不能在补全后继续挂在条目上。");
+            Assert.IsNull(currentSeries.GetProviderId(MetadataProvider.Tvdb), "旧错误 TMDb 派生的 TVDB 不能在补全后继续挂在条目上。");
+            Assert.AreEqual(1, currentSeries.UpdateToRepositoryCallCount);
+            Assert.AreEqual(0, externalIdService.CorrectionRequests.Count);
+        }
+
+        [TestMethod]
         public async Task GetMetadata_StaleExternalIdConflict_WhenDoubanMetadataIsSemanticallyConsistent_DoesNotCallExternalIdResolver()
         {
             EnsurePluginInstance();

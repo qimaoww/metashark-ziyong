@@ -574,6 +574,62 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 metadataChanged);
         }
 
+        protected async Task TryPersistLlmTmdbCompletionProviderIdsAsync(
+            ItemLookupInfo info,
+            string? tmdbId,
+            BaseItem? authoritativeMetadataItem,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(info);
+
+            if (authoritativeMetadataItem == null
+                || string.IsNullOrWhiteSpace(tmdbId)
+                || string.IsNullOrWhiteSpace(info.Path))
+            {
+                return;
+            }
+
+            var item = info switch
+            {
+                MovieInfo => this.LibraryManager.FindByPath(info.Path, false) as BaseItem,
+                SeriesInfo => this.LibraryManager.FindByPath(info.Path, true) as BaseItem,
+                _ => null,
+            };
+            if (item == null)
+            {
+                return;
+            }
+
+            var normalizedTmdbId = tmdbId.Trim();
+            var originalItemTmdbId = item.GetProviderId(MetadataProvider.Tmdb);
+            var replacesDifferentTmdbId = !string.IsNullOrWhiteSpace(originalItemTmdbId)
+                && !string.Equals(originalItemTmdbId.Trim(), normalizedTmdbId, StringComparison.Ordinal);
+            var changed = false;
+            changed |= SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), normalizedTmdbId);
+            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, DoubanProviderId, removeWhenMissing: false);
+            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetaSharkPlugin.ProviderId, removeWhenMissing: false);
+            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString(), replacesDifferentTmdbId);
+            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString(), replacesDifferentTmdbId);
+            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString(), replacesDifferentTmdbId);
+            if (!changed)
+            {
+                return;
+            }
+
+            var updateReason = item.OnMetadataChanged();
+            if (updateReason == ItemUpdateType.None)
+            {
+                updateReason = ItemUpdateType.MetadataEdit;
+            }
+
+            await item.UpdateToRepositoryAsync(updateReason, cancellationToken).ConfigureAwait(false);
+            this.Log(
+                "已持久化 LLM TMDb 补全后的外部 ID. itemId: {0} tmdbId: {1} replacedOldTmdb: {2}",
+                item.Id,
+                normalizedTmdbId,
+                replacesDifferentTmdbId);
+        }
+
         protected static TmdbAuthoritativePeopleSnapshot? CreateTmdbAuthoritativePeopleSnapshot(string itemType, string? tmdbId, IEnumerable<PersonInfo>? people)
         {
             if (string.IsNullOrWhiteSpace(tmdbId))
@@ -1107,6 +1163,17 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             if (string.IsNullOrWhiteSpace(providerIdValue))
             {
                 return false;
+            }
+
+            return SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
+        }
+
+        private static bool SyncProviderIdFromAuthoritativeItem(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey, bool removeWhenMissing)
+        {
+            var providerIdValue = authoritativeMetadataItem.GetProviderId(providerIdKey);
+            if (string.IsNullOrWhiteSpace(providerIdValue))
+            {
+                return removeWhenMissing && RemoveProviderIdIfPresent(item, providerIdKey);
             }
 
             return SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
