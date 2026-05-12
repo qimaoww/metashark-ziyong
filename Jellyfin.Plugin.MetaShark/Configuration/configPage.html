@@ -292,6 +292,18 @@
                                 <div class="fieldDescription">默认开启。仅记录 LLM 外部 ID 辅助解析为 Douban 默认链路补齐的 TMDb ID；写入配置文件后用于后续刷新保留该 TMDb ID，但不会把条目升级为 TMDb 强制刮削，也不会写入 Douban→TMDb 纠错来源。关闭后仍可在当次刷新补写缺失 TMDb ID，但不持久化补全来源。</div>
                             </div>
                             <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="LlmTmdbCorrectionMap">LLM Douban→TMDb 纠错来源映射</label>
+                                <textarea rows="5" is="emby-input" type="text" id="LlmTmdbCorrectionMap"
+                                    name="LlmTmdbCorrectionMap" class="emby-input" placeholder="series:douban:26862290=tmdb:65942"></textarea>
+                                <div class="fieldDescription">自动写入的强纠错记录会显示在这里；每行一条：series:douban:26862290=tmdb:65942 或 movie:douban:123=tmdb:456。删除对应行并保存即可手动回退该条。</div>
+                            </div>
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="LlmTmdbCompletionMap">LLM TMDbID 补全来源映射</label>
+                                <textarea rows="5" is="emby-input" type="text" id="LlmTmdbCompletionMap"
+                                    name="LlmTmdbCompletionMap" class="emby-input" placeholder="series:douban:37291769=tmdb:316424"></textarea>
+                                <div class="fieldDescription">自动写入的普通 TMDbID 补全记录会显示在这里；每行一条：series:douban:37291769=tmdb:316424 或 movie:douban:123=tmdb:456。删除对应行并保存即可手动回退该条。</div>
+                            </div>
+                            <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="LlmBaseUrl">Base URL</label>
                                 <input id="LlmBaseUrl" name="LlmBaseUrl" type="text" is="emby-input"
                                     class="emby-input" placeholder="https://api.example.com/v1" />
@@ -487,6 +499,8 @@
                            document.querySelector('#EnableLlmTmdbIdCorrection').checked = config.EnableLlmTmdbIdCorrection;
                            document.querySelector('#EnableLlmTmdbCorrectionPersistence').checked = config.EnableLlmTmdbCorrectionPersistence;
                            document.querySelector('#EnableLlmTmdbCompletionPersistence').checked = config.EnableLlmTmdbCompletionPersistence;
+                           document.querySelector('#LlmTmdbCorrectionMap').value = config.LlmTmdbCorrectionMap;
+                           document.querySelector('#LlmTmdbCompletionMap').value = config.LlmTmdbCompletionMap;
                            document.querySelector('#LlmBaseUrl').value = config.LlmBaseUrl;
                            document.querySelector('#LlmApiKey').value = '';
                            document.querySelector('#LlmApiKey').placeholder = config.LlmApiKey ? '已配置，留空则保留' : '';
@@ -551,6 +565,8 @@
                            config.EnableLlmTmdbIdCorrection = document.querySelector('#EnableLlmTmdbIdCorrection').checked;
                            config.EnableLlmTmdbCorrectionPersistence = document.querySelector('#EnableLlmTmdbCorrectionPersistence').checked;
                            config.EnableLlmTmdbCompletionPersistence = document.querySelector('#EnableLlmTmdbCompletionPersistence').checked;
+                           config.LlmTmdbCorrectionMap = document.querySelector('#LlmTmdbCorrectionMap').value;
+                           config.LlmTmdbCompletionMap = document.querySelector('#LlmTmdbCompletionMap').value;
                            config.LlmBaseUrl = document.querySelector('#LlmBaseUrl').value;
                            var llmApiKey = document.querySelector('#LlmApiKey').value;
                         if (llmApiKey) {
