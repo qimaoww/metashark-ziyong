@@ -121,232 +121,71 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var tmdbId = info.GetProviderId(MetadataProvider.Tmdb);
             var originalTmdbId = tmdbId;
             var originalPublicProviderIds = ProviderIdSnapshot.CreatePublicProviderIdCopy(info.ProviderIds);
-            var hasVerifiedTmdbCorrection = false;
-            var hasPersistedDoubanTmdbCorrection = TryApplyPersistedDoubanTmdbCorrection(nameof(Movie), sid, ref tmdbId, info);
-            var hasPersistedDoubanTmdbCompletion = TryApplyPersistedDoubanTmdbCompletion(nameof(Movie), sid, ref tmdbId, info);
-            var authorityContext = MetadataAuthorityContext.Create(sid, tmdbId, info.GetMetaSource(MetaSharkPlugin.ProviderId), doubanAllowed, hasPersistedDoubanTmdbCorrection);
-            sid = authorityContext.Sid;
-            tmdbId = authorityContext.TmdbId;
-            var metaSource = authorityContext.MetaSource;
-            var effectiveSid = authorityContext.EffectiveSid;
-            var tmdbSourceIsPrimary = authorityContext.TmdbSourceIsPrimary;
-            var hasTmdbMeta = authorityContext.HasTmdbMeta; // 之前由TMDB插件刮削时，可能存在 tmdbId 但 metaSource 没值。
-            var hasDoubanMeta = authorityContext.HasDoubanMeta;
+            var providerIdStage = this.ApplyInitialMovieProviderIdStage(info, sid, tmdbId, doubanAllowed);
+            sid = providerIdStage.Sid;
+            tmdbId = providerIdStage.TmdbId;
+            var metaSource = providerIdStage.MetaSource;
+            var effectiveSid = providerIdStage.EffectiveSid;
+            var tmdbSourceIsPrimary = providerIdStage.TmdbSourceIsPrimary;
+            var hasTmdbMeta = providerIdStage.HasTmdbMeta; // 之前由TMDB插件刮削时，可能存在 tmdbId 但 metaSource 没值。
+            var hasDoubanMeta = providerIdStage.HasDoubanMeta;
+            var hasPersistedDoubanTmdbCompletion = providerIdStage.HasPersistedDoubanTmdbCompletion;
             var llmAssistResult = LlmScrapingAssistResult.NotTriggered("AuthoritativeMetadataPresent");
             var externalIdResolutionResult = LlmExternalIdResolutionResult.NotTriggered("AuthoritativeMetadataPresent");
-            var shouldUseTmdbMetadataAfterCorrection = false;
             if (hasDoubanMeta || hasTmdbMeta)
             {
                 LlmObservabilityLog.LogLlmAssistRejected(this.Logger, "AuthoritativeMetadataPresent", nameof(Movie), semantic, false);
             }
 
-            var tmdbCorrectionResult = hasPersistedDoubanTmdbCorrection
-                ? LlmTmdbIdCorrectionResult.NoReplacement("PersistedDoubanTmdbCorrectionApplied")
-                : await this.TryResolveMovieTmdbCorrectionAsync(info, semantic, originalTmdbId, hasPersistedDoubanTmdbCompletion, cancellationToken).ConfigureAwait(false);
-            if (tmdbCorrectionResult.ShouldReplace && !string.IsNullOrWhiteSpace(tmdbCorrectionResult.ReplacementTmdbId))
-            {
-                tmdbId = tmdbCorrectionResult.ReplacementTmdbId;
-                info.SetProviderId(MetadataProvider.Tmdb, tmdbId);
-                hasVerifiedTmdbCorrection = true;
-                shouldUseTmdbMetadataAfterCorrection = tmdbCorrectionResult.ShouldUseTmdbMetadata;
-                if (shouldUseTmdbMetadataAfterCorrection)
-                {
-                    _ = await this.TryPersistLlmDoubanTmdbCorrectionMapAsync(nameof(Movie), sid, tmdbId, cancellationToken).ConfigureAwait(false);
-                }
-            }
+            var correctionStage = await this.TryApplyMovieTmdbCorrectionStageAsync(info, semantic, originalTmdbId, sid, tmdbId, providerIdStage.HasPersistedDoubanTmdbCorrection, hasPersistedDoubanTmdbCompletion, cancellationToken).ConfigureAwait(false);
+            tmdbId = correctionStage.TmdbId;
+            var hasVerifiedTmdbCorrection = correctionStage.HasVerifiedTmdbCorrection;
+            var shouldUseTmdbMetadataAfterCorrection = correctionStage.ShouldUseTmdbMetadataAfterCorrection;
 
             this.Log("开始获取电影元数据. name: {0} fileName: {1} metaSource: {2} enableTmdb: {3}", info.Name, fileName, metaSource, Config.EnableTmdb);
             if (!hasDoubanMeta && !hasTmdbMeta)
             {
-                // 处理extras影片
-                var extraResult = this.HandleExtraType(info);
-                if (extraResult != null)
+                var unidentifiedStage = await this.TryRunUnidentifiedMovieMatchStageAsync(info, fileName, semantic, doubanAllowed, sid, tmdbId, effectiveSid, metaSource, cancellationToken).ConfigureAwait(false);
+                if (unidentifiedStage.ExtraResult != null)
                 {
-                    return FinalizeMetadataResult(extraResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                    return FinalizeMetadataResult(unidentifiedStage.ExtraResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                 }
 
-                llmAssistResult = await this.TryAssistMovieMetadataWithLlmAsync(info, semantic, cancellationToken).ConfigureAwait(false);
-                var llmSearchHints = llmAssistResult.SearchHints;
-                var preferLlmSearchHints = ShouldPreferLlmMovieSearchHints(info, fileName, llmSearchHints);
-
-                // 自动扫描搜索匹配元数据
-                if (doubanAllowed)
-                {
-                    if (preferLlmSearchHints)
-                    {
-                        sid = await this.GuessByDoubanWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (string.IsNullOrEmpty(sid))
-                    {
-                        sid = await this.GuessByDoubanAsync(info, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (string.IsNullOrEmpty(sid) && !preferLlmSearchHints)
-                    {
-                        sid = await this.GuessByDoubanWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    effectiveSid = sid;
-                }
-
-                if (string.IsNullOrEmpty(effectiveSid) && string.IsNullOrEmpty(tmdbId) && Config.EnableTmdbMatch)
-                {
-                    if (preferLlmSearchHints)
-                    {
-                        tmdbId = await this.GuessByTmdbWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (string.IsNullOrEmpty(tmdbId))
-                    {
-                        tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (string.IsNullOrEmpty(tmdbId) && !preferLlmSearchHints)
-                    {
-                        tmdbId = await this.GuessByTmdbWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (!string.IsNullOrEmpty(tmdbId))
-                    {
-                        metaSource = MetaSource.Tmdb;
-                    }
-                }
+                llmAssistResult = unidentifiedStage.AssistResult;
+                sid = unidentifiedStage.Sid;
+                tmdbId = unidentifiedStage.TmdbId;
+                effectiveSid = unidentifiedStage.EffectiveSid;
+                metaSource = unidentifiedStage.MetaSource;
             }
 
             if (string.IsNullOrWhiteSpace(tmdbId))
             {
-                externalIdResolutionResult = await this.TryResolveMissingMovieProviderIdsWithLlmAsync(info, semantic, cancellationToken).ConfigureAwait(false);
-                tmdbId = GetProviderIdWriteValue(externalIdResolutionResult, MetadataProvider.Tmdb.ToString()) ?? tmdbId;
-                sid = GetProviderIdWriteValue(externalIdResolutionResult, DoubanProviderId) ?? sid;
-                effectiveSid = doubanAllowed ? sid : null;
-                if (!string.IsNullOrWhiteSpace(tmdbId))
-                {
-                    _ = await this.TryPersistLlmDoubanTmdbCompletionMapAsync(nameof(Movie), sid, tmdbId, cancellationToken).ConfigureAwait(false);
-                }
+                var externalIdStage = await this.TryResolveMissingMovieProviderIdsStageAsync(info, semantic, doubanAllowed, sid, tmdbId, cancellationToken).ConfigureAwait(false);
+                externalIdResolutionResult = externalIdStage.Result;
+                sid = externalIdStage.Sid;
+                tmdbId = externalIdStage.TmdbId;
+                effectiveSid = externalIdStage.EffectiveSid;
             }
 
-            if (!shouldUseTmdbMetadataAfterCorrection && !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid))
+            var doubanResult = await this.TryGetMetadataFromDoubanStageAsync(
+                info,
+                result,
+                personNameScope,
+                semantic,
+                effectiveSid,
+                tmdbId,
+                tmdbSourceIsPrimary,
+                shouldUseTmdbMetadataAfterCorrection,
+                llmAssistResult,
+                externalIdResolutionResult,
+                hasPersistedDoubanTmdbCompletion,
+                originalTmdbId,
+                originalPublicProviderIds,
+                hasVerifiedTmdbCorrection,
+                cancellationToken).ConfigureAwait(false);
+            if (doubanResult != null)
             {
-                this.Log("通过 Douban 获取电影元数据. sid: \"{0}\"", effectiveSid);
-                var subject = await this.DoubanApi.GetMovieAsync(effectiveSid, cancellationToken).ConfigureAwait(false);
-                if (subject == null)
-                {
-                    if (string.IsNullOrEmpty(tmdbId) && Config.EnableTmdbMatch)
-                    {
-                        tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
-                        if (string.IsNullOrEmpty(tmdbId))
-                        {
-                            tmdbId = await this.GuessByTmdbWithLlmHintsAsync(llmAssistResult.SearchHints, info, cancellationToken).ConfigureAwait(false);
-                        }
-                    }
-
-                    if (!string.IsNullOrEmpty(tmdbId))
-                    {
-                        var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
-                        ApplyLlmExternalProviderIdWrites(tmdbFallbackResult, externalIdResolutionResult);
-                        this.ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
-                        return FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
-                    }
-
-                    return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
-                }
-
-                var correctionResult = await this.TryCorrectDoubanMismatchWithLlmAsync(subject, info, semantic, llmAssistResult, cancellationToken).ConfigureAwait(false);
-                if (correctionResult.Subject != null)
-                {
-                    subject = correctionResult.Subject;
-                    effectiveSid = correctionResult.Subject.Sid;
-                    sid = correctionResult.Subject.Sid;
-                    llmAssistResult = correctionResult.AssistResult;
-                }
-
-                var movie = new Movie
-                {
-                    // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了保持唯一
-                    ProviderIds = new Dictionary<string, string> { { DoubanProviderId, subject.Sid }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_{subject.Sid}" } },
-                    Name = subject.Name,
-                    OriginalTitle = subject.OriginalName,
-                    CommunityRating = subject.Rating,
-                    Overview = subject.Intro,
-                    ProductionYear = subject.Year,
-                    HomePageUrl = "https://www.douban.com",
-                    Genres = subject.Genres.ToArray(),
-                    PremiereDate = subject.ScreenTime,
-                };
-                if (!string.IsNullOrEmpty(tmdbId))
-                {
-                    movie.SetProviderId(MetadataProvider.Tmdb, tmdbId);
-                }
-
-                if (!string.IsNullOrEmpty(subject.Imdb))
-                {
-                    var newImdbId = await this.CheckNewImdbID(subject.Imdb, cancellationToken).ConfigureAwait(false);
-                    subject.Imdb = newImdbId;
-                    movie.SetProviderId(MetadataProvider.Imdb, newImdbId);
-
-                    // 通过imdb获取TMDB id
-                    if (string.IsNullOrEmpty(tmdbId))
-                    {
-                        var newTmdbId = await this.GetTmdbIdByImdbAsync(subject.Imdb, info.MetadataLanguage, info, cancellationToken).ConfigureAwait(false);
-                        if (!string.IsNullOrEmpty(newTmdbId))
-                        {
-                            tmdbId = newTmdbId;
-                            movie.SetProviderId(MetadataProvider.Tmdb, tmdbId);
-                        }
-                    }
-                }
-
-                // 尝试通过搜索匹配获取tmdbId
-                if (string.IsNullOrEmpty(tmdbId) && subject.Year > 0)
-                {
-                    var newTmdbId = await this.GuestByTmdbAsync(subject.Name, subject.Year, info, cancellationToken).ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(newTmdbId))
-                    {
-                        tmdbId = newTmdbId;
-                        movie.SetProviderId(MetadataProvider.Tmdb, tmdbId);
-                    }
-                }
-
-                // 通过imdb获取电影系列信息
-                if (!string.IsNullOrEmpty(tmdbId))
-                {
-                    var belongCollection = await this.GetTmdbCollection(info, tmdbId, cancellationToken).ConfigureAwait(false);
-                    if (belongCollection != null && !string.IsNullOrEmpty(belongCollection.Name))
-                    {
-                        movie.CollectionName = belongCollection.Name;
-                    }
-                }
-
-                // 通过imdb获取电影分级信息
-                if (Config.EnableTmdbOfficialRating && !string.IsNullOrEmpty(tmdbId))
-                {
-                    var officialRating = await this.GetTmdbOfficialRating(info, tmdbId, cancellationToken).ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(officialRating))
-                    {
-                        movie.OfficialRating = officialRating;
-                    }
-                }
-
-                ApplyLlmExternalProviderIdWrites(movie.ProviderIds, externalIdResolutionResult);
-
-                result.Item = movie;
-                result.QueriedById = true;
-                result.HasMetadata = true;
-
-                if (!string.IsNullOrEmpty(tmdbId))
-                {
-                    var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, personNameScope, cancellationToken).ConfigureAwait(false);
-                    this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
-                }
-
-                this.ApplyLlmTextCompletion(result, llmAssistResult);
-                if (hasPersistedDoubanTmdbCompletion || !string.IsNullOrWhiteSpace(GetProviderIdWriteValue(externalIdResolutionResult, MetadataProvider.Tmdb.ToString())))
-                {
-                    await this.TryPersistLlmTmdbCompletionProviderIdsAsync(info, tmdbId, result.Item, cancellationToken).ConfigureAwait(false);
-                }
-
-                return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                return doubanResult;
             }
 
             if (!string.IsNullOrEmpty(tmdbId) && (shouldUseTmdbMetadataAfterCorrection || !doubanAllowed || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid)))
@@ -361,6 +200,238 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             this.Log("电影匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
+            return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+        }
+
+        private (string? Sid, string? TmdbId, string? EffectiveSid, MetaSource MetaSource, bool TmdbSourceIsPrimary, bool HasTmdbMeta, bool HasDoubanMeta, bool HasPersistedDoubanTmdbCorrection, bool HasPersistedDoubanTmdbCompletion) ApplyInitialMovieProviderIdStage(MovieInfo info, string? sid, string? tmdbId, bool doubanAllowed)
+        {
+            var hasPersistedDoubanTmdbCorrection = this.TryApplyPersistedDoubanTmdbCorrection(nameof(Movie), sid, ref tmdbId, info);
+            var hasPersistedDoubanTmdbCompletion = this.TryApplyPersistedDoubanTmdbCompletion(nameof(Movie), sid, ref tmdbId, info);
+            var authorityContext = MetadataAuthorityContext.Create(sid, tmdbId, info.GetMetaSource(MetaSharkPlugin.ProviderId), doubanAllowed, hasPersistedDoubanTmdbCorrection);
+
+            return (
+                authorityContext.Sid,
+                authorityContext.TmdbId,
+                authorityContext.EffectiveSid,
+                authorityContext.MetaSource,
+                authorityContext.TmdbSourceIsPrimary,
+                authorityContext.HasTmdbMeta,
+                authorityContext.HasDoubanMeta,
+                hasPersistedDoubanTmdbCorrection,
+                hasPersistedDoubanTmdbCompletion);
+        }
+
+        private async Task<(string? TmdbId, bool HasVerifiedTmdbCorrection, bool ShouldUseTmdbMetadataAfterCorrection)> TryApplyMovieTmdbCorrectionStageAsync(MovieInfo info, DefaultScraperSemantic semantic, string? originalTmdbId, string? sid, string? tmdbId, bool hasPersistedDoubanTmdbCorrection, bool hasPersistedDoubanTmdbCompletion, CancellationToken cancellationToken)
+        {
+            var tmdbCorrectionResult = hasPersistedDoubanTmdbCorrection
+                ? LlmTmdbIdCorrectionResult.NoReplacement("PersistedDoubanTmdbCorrectionApplied")
+                : await this.TryResolveMovieTmdbCorrectionAsync(info, semantic, originalTmdbId, hasPersistedDoubanTmdbCompletion, cancellationToken).ConfigureAwait(false);
+            if (!tmdbCorrectionResult.ShouldReplace || string.IsNullOrWhiteSpace(tmdbCorrectionResult.ReplacementTmdbId))
+            {
+                return (tmdbId, false, false);
+            }
+
+            tmdbId = tmdbCorrectionResult.ReplacementTmdbId;
+            info.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+            if (tmdbCorrectionResult.ShouldUseTmdbMetadata)
+            {
+                _ = await this.TryPersistLlmDoubanTmdbCorrectionMapAsync(nameof(Movie), sid, tmdbId, cancellationToken).ConfigureAwait(false);
+            }
+
+            return (tmdbId, true, tmdbCorrectionResult.ShouldUseTmdbMetadata);
+        }
+
+        private async Task<(MetadataResult<Movie>? ExtraResult, LlmScrapingAssistResult AssistResult, string? Sid, string? TmdbId, string? EffectiveSid, MetaSource MetaSource)> TryRunUnidentifiedMovieMatchStageAsync(MovieInfo info, string fileName, DefaultScraperSemantic semantic, bool doubanAllowed, string? sid, string? tmdbId, string? effectiveSid, MetaSource metaSource, CancellationToken cancellationToken)
+        {
+            var extraResult = this.HandleExtraType(info);
+            if (extraResult != null)
+            {
+                return (extraResult, LlmScrapingAssistResult.NotTriggered("MovieExtraSkipped"), sid, tmdbId, effectiveSid, metaSource);
+            }
+
+            var llmAssistResult = await this.TryAssistMovieMetadataWithLlmAsync(info, semantic, cancellationToken).ConfigureAwait(false);
+            var llmSearchHints = llmAssistResult.SearchHints;
+            var preferLlmSearchHints = ShouldPreferLlmMovieSearchHints(info, fileName, llmSearchHints);
+
+            if (doubanAllowed)
+            {
+                if (preferLlmSearchHints)
+                {
+                    sid = await this.GuessByDoubanWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (string.IsNullOrEmpty(sid))
+                {
+                    sid = await this.GuessByDoubanAsync(info, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (string.IsNullOrEmpty(sid) && !preferLlmSearchHints)
+                {
+                    sid = await this.GuessByDoubanWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
+                }
+
+                effectiveSid = sid;
+            }
+
+            if (string.IsNullOrEmpty(effectiveSid) && string.IsNullOrEmpty(tmdbId) && Config.EnableTmdbMatch)
+            {
+                if (preferLlmSearchHints)
+                {
+                    tmdbId = await this.GuessByTmdbWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (string.IsNullOrEmpty(tmdbId))
+                {
+                    tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (string.IsNullOrEmpty(tmdbId) && !preferLlmSearchHints)
+                {
+                    tmdbId = await this.GuessByTmdbWithLlmHintsAsync(llmSearchHints, info, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (!string.IsNullOrEmpty(tmdbId))
+                {
+                    metaSource = MetaSource.Tmdb;
+                }
+            }
+
+            return (null, llmAssistResult, sid, tmdbId, effectiveSid, metaSource);
+        }
+
+        private async Task<(LlmExternalIdResolutionResult Result, string? Sid, string? TmdbId, string? EffectiveSid)> TryResolveMissingMovieProviderIdsStageAsync(MovieInfo info, DefaultScraperSemantic semantic, bool doubanAllowed, string? sid, string? tmdbId, CancellationToken cancellationToken)
+        {
+            var externalIdResolutionResult = await this.TryResolveMissingMovieProviderIdsWithLlmAsync(info, semantic, cancellationToken).ConfigureAwait(false);
+            tmdbId = GetProviderIdWriteValue(externalIdResolutionResult, MetadataProvider.Tmdb.ToString()) ?? tmdbId;
+            sid = GetProviderIdWriteValue(externalIdResolutionResult, DoubanProviderId) ?? sid;
+            var effectiveSid = doubanAllowed ? sid : null;
+            if (!string.IsNullOrWhiteSpace(tmdbId))
+            {
+                _ = await this.TryPersistLlmDoubanTmdbCompletionMapAsync(nameof(Movie), sid, tmdbId, cancellationToken).ConfigureAwait(false);
+            }
+
+            return (externalIdResolutionResult, sid, tmdbId, effectiveSid);
+        }
+
+        private async Task<MetadataResult<Movie>?> TryGetMetadataFromDoubanStageAsync(MovieInfo info, MetadataResult<Movie> result, PersonNameResolver.Scope personNameScope, DefaultScraperSemantic semantic, string? effectiveSid, string? tmdbId, bool tmdbSourceIsPrimary, bool shouldUseTmdbMetadataAfterCorrection, LlmScrapingAssistResult llmAssistResult, LlmExternalIdResolutionResult externalIdResolutionResult, bool hasPersistedDoubanTmdbCompletion, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedTmdbCorrection, CancellationToken cancellationToken)
+        {
+            if (shouldUseTmdbMetadataAfterCorrection || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid))
+            {
+                return null;
+            }
+
+            this.Log("通过 Douban 获取电影元数据. sid: \"{0}\"", effectiveSid);
+            var subject = await this.DoubanApi.GetMovieAsync(effectiveSid, cancellationToken).ConfigureAwait(false);
+            if (subject == null)
+            {
+                if (string.IsNullOrEmpty(tmdbId) && Config.EnableTmdbMatch)
+                {
+                    tmdbId = await this.GuestByTmdbAsync(info, cancellationToken).ConfigureAwait(false);
+                    if (string.IsNullOrEmpty(tmdbId))
+                    {
+                        tmdbId = await this.GuessByTmdbWithLlmHintsAsync(llmAssistResult.SearchHints, info, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(tmdbId))
+                {
+                    var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
+                    ApplyLlmExternalProviderIdWrites(tmdbFallbackResult, externalIdResolutionResult);
+                    this.ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
+                    return FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                }
+
+                return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+            }
+
+            var correctionResult = await this.TryCorrectDoubanMismatchWithLlmAsync(subject, info, semantic, llmAssistResult, cancellationToken).ConfigureAwait(false);
+            if (correctionResult.Subject != null)
+            {
+                subject = correctionResult.Subject;
+                llmAssistResult = correctionResult.AssistResult;
+            }
+
+            var movie = new Movie
+            {
+                // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了保持唯一
+                ProviderIds = new Dictionary<string, string> { { DoubanProviderId, subject.Sid }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_{subject.Sid}" } },
+                Name = subject.Name,
+                OriginalTitle = subject.OriginalName,
+                CommunityRating = subject.Rating,
+                Overview = subject.Intro,
+                ProductionYear = subject.Year,
+                HomePageUrl = "https://www.douban.com",
+                Genres = subject.Genres.ToArray(),
+                PremiereDate = subject.ScreenTime,
+            };
+            if (!string.IsNullOrEmpty(tmdbId))
+            {
+                movie.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+            }
+
+            if (!string.IsNullOrEmpty(subject.Imdb))
+            {
+                var newImdbId = await this.CheckNewImdbID(subject.Imdb, cancellationToken).ConfigureAwait(false);
+                subject.Imdb = newImdbId;
+                movie.SetProviderId(MetadataProvider.Imdb, newImdbId);
+
+                if (string.IsNullOrEmpty(tmdbId))
+                {
+                    var newTmdbId = await this.GetTmdbIdByImdbAsync(subject.Imdb, info.MetadataLanguage, info, cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(newTmdbId))
+                    {
+                        tmdbId = newTmdbId;
+                        movie.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(tmdbId) && subject.Year > 0)
+            {
+                var newTmdbId = await this.GuestByTmdbAsync(subject.Name, subject.Year, info, cancellationToken).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(newTmdbId))
+                {
+                    tmdbId = newTmdbId;
+                    movie.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+                }
+            }
+
+            if (!string.IsNullOrEmpty(tmdbId))
+            {
+                var belongCollection = await this.GetTmdbCollection(info, tmdbId, cancellationToken).ConfigureAwait(false);
+                if (belongCollection != null && !string.IsNullOrEmpty(belongCollection.Name))
+                {
+                    movie.CollectionName = belongCollection.Name;
+                }
+            }
+
+            if (Config.EnableTmdbOfficialRating && !string.IsNullOrEmpty(tmdbId))
+            {
+                var officialRating = await this.GetTmdbOfficialRating(info, tmdbId, cancellationToken).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(officialRating))
+                {
+                    movie.OfficialRating = officialRating;
+                }
+            }
+
+            ApplyLlmExternalProviderIdWrites(movie.ProviderIds, externalIdResolutionResult);
+
+            result.Item = movie;
+            result.QueriedById = true;
+            result.HasMetadata = true;
+
+            if (!string.IsNullOrEmpty(tmdbId))
+            {
+                var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, personNameScope, cancellationToken).ConfigureAwait(false);
+                this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
+            }
+
+            this.ApplyLlmTextCompletion(result, llmAssistResult);
+            if (hasPersistedDoubanTmdbCompletion || !string.IsNullOrWhiteSpace(GetProviderIdWriteValue(externalIdResolutionResult, MetadataProvider.Tmdb.ToString())))
+            {
+                await this.TryPersistLlmTmdbCompletionProviderIdsAsync(info, tmdbId, result.Item, cancellationToken).ConfigureAwait(false);
+            }
+
             return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
         }
 
