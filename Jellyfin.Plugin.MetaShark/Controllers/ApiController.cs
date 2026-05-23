@@ -45,6 +45,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         private readonly IProviderManager providerManager;
         private readonly IFileSystem fileSystem;
         private readonly ILogger<ApiController> logger;
+        private readonly IEpisodeGroupMappingFacade episodeGroupMappingFacade;
         private readonly EpisodeGroupRefreshService episodeGroupRefreshService = new();
 
         /// <summary>
@@ -57,7 +58,8 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
             ILibraryManager libraryManager,
             IProviderManager providerManager,
             IFileSystem fileSystem,
-            ILogger<ApiController> logger)
+            ILogger<ApiController> logger,
+            IEpisodeGroupMappingFacade? episodeGroupMappingFacade = null)
         {
             this.httpClientFactory = httpClientFactory;
             this.doubanApi = doubanApi;
@@ -65,6 +67,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
             this.providerManager = providerManager;
             this.fileSystem = fileSystem;
             this.logger = logger;
+            this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? new EpisodeGroupMappingFacade();
         }
 
         /// <summary>
@@ -142,9 +145,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         public ApiResult RefreshSeriesByEpisodeGroupMap([FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] TmdbEpisodeGroupRefreshRequest? request = null)
         {
             var configuration = MetaSharkPlugin.Instance?.Configuration;
-            var currentMapping = TmdbEpisodeGroupMapping.GetEffectiveMappingText(
-                configuration?.TmdbEpisodeGroupMap,
-                configuration?.LlmTmdbEpisodeGroupMap);
+            var currentMapping = this.episodeGroupMappingFacade.GetEffectiveMappingText(configuration);
             var refreshResult = this.episodeGroupRefreshService.CreateRefreshResult(
                 request?.OldMapping ?? string.Empty,
                 request?.NewMapping ?? currentMapping);

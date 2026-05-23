@@ -188,6 +188,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<ILlmExternalIdResolutionService>((ctx) => ctx.GetRequiredService<LlmExternalIdResolutionService>());
             serviceCollection.AddSingleton<ILlmTmdbCorrectionMapFacade>((_) => new LlmTmdbCorrectionMapFacade(LlmTmdbCorrectionMapParser.Shared));
             serviceCollection.AddSingleton<ILlmTmdbCorrectionMapPersistenceService>((_) => new LlmTmdbCorrectionMapPersistenceService(LlmTmdbCorrectionMapParser.Shared));
+            serviceCollection.AddSingleton<IEpisodeGroupMappingFacade>((_) => new EpisodeGroupMappingFacade());
             serviceCollection.AddSingleton<ITmdbEpisodeGroupMapPersistenceService>((_) => new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared, saveLlmMapping: true));
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
             {
@@ -195,6 +196,7 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<ILlmApi>(),
                     ctx.GetRequiredService<TmdbApi>(),
                     EpisodeGroupMapParser.Shared,
+                    ctx.GetRequiredService<IEpisodeGroupMappingFacade>(),
                     ctx.GetRequiredService<ITmdbEpisodeGroupMapPersistenceService>(),
                     ctx.GetRequiredService<ILlmRequestLimiter>());
             });
@@ -207,6 +209,7 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<ILibraryManager>(),
                     ctx.GetRequiredService<IProviderManager>(),
                     ctx.GetRequiredService<IFileSystem>(),
+                    ctx.GetRequiredService<IEpisodeGroupMappingFacade>(),
                     ctx.GetRequiredService<LlmAssistTriggerPolicy>(),
                     ctx.GetRequiredService<ILogger<LlmEpisodeGroupMappingProviderAssistService>>());
             });

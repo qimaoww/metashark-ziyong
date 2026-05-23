@@ -20,6 +20,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Configuration;
     using Jellyfin.Plugin.MetaShark.Core;
+    using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
     using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using MediaBrowser.Controller.Entities;
@@ -66,13 +67,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private readonly ILibraryManager libraryManager;
         private readonly IHttpContextAccessor httpContextAccessor;
         private readonly ILlmTmdbCorrectionMapFacade llmTmdbCorrectionMapFacade;
+        private readonly IEpisodeGroupMappingFacade episodeGroupMappingFacade;
 
         private readonly Regex regMetaSourcePrefix = new Regex(@"^\[.+\]", RegexOptions.Compiled);
         private readonly Regex regSeasonNameSuffix = new Regex(@"\s第[0-9一二三四五六七八九十]+?季$|\sSeason\s\d+?$|(?<![0-9a-zA-Z])\d$", RegexOptions.Compiled);
         private readonly Regex regDoubanIdAttribute = new Regex(@"\[(?:douban|doubanid)-(\d+?)\]", RegexOptions.Compiled);
         private readonly Regex regTmdbIdAttribute = new Regex(@"\[(?:tmdb|tmdbid)-(\d+?)\]", RegexOptions.Compiled);
 
-        protected BaseProvider(IHttpClientFactory httpClientFactory, ILogger logger, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILlmTmdbCorrectionMapFacade? llmTmdbCorrectionMapFacade = null)
+        protected BaseProvider(IHttpClientFactory httpClientFactory, ILogger logger, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILlmTmdbCorrectionMapFacade? llmTmdbCorrectionMapFacade = null, IEpisodeGroupMappingFacade? episodeGroupMappingFacade = null)
         {
             this.doubanApi = doubanApi;
             this.tmdbApi = tmdbApi;
@@ -83,6 +85,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             this.httpClientFactory = httpClientFactory;
             this.httpContextAccessor = httpContextAccessor;
             this.llmTmdbCorrectionMapFacade = llmTmdbCorrectionMapFacade ?? new LlmTmdbCorrectionMapFacade(LlmTmdbCorrectionMapParser.Shared);
+            this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? new EpisodeGroupMappingFacade();
         }
 
         protected static PluginConfiguration Config => MetaSharkPlugin.Instance?.Configuration ?? new PluginConfiguration();
@@ -104,6 +107,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         protected IHttpContextAccessor HttpContextAccessor => this.httpContextAccessor;
 
         protected ILlmTmdbCorrectionMapFacade LlmTmdbCorrectionMapFacade => this.llmTmdbCorrectionMapFacade;
+
+        protected IEpisodeGroupMappingFacade EpisodeGroupMappingFacade => this.episodeGroupMappingFacade;
 
         protected Regex RegMetaSourcePrefix => this.regMetaSourcePrefix;
 
@@ -715,7 +720,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var resolvedEpisodeNumber = episodeNumber.Value;
             var resolvedByEpisodeGroupMapping = false;
             var seriesId = seriesTmdbId.ToString(CultureInfo.InvariantCulture);
-            if (TmdbEpisodeGroupMapping.TryGetGroupId(Config.TmdbEpisodeGroupMap, Config.LlmTmdbEpisodeGroupMap, seriesId, out var groupId))
+            if (this.EpisodeGroupMappingFacade.TryGetEffectiveGroupId(Config, seriesId, out var groupId))
             {
                 this.Log("TMDb 剧集组映射命中. seriesId={0} groupId={1} season={2} episode={3}", seriesId, groupId, seasonNumber, episodeNumber);
                 var group = await this.TmdbApi

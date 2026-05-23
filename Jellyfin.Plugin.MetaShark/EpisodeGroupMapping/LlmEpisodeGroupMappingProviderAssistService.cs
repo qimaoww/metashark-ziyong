@@ -44,6 +44,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private readonly ILibraryManager libraryManager;
         private readonly IProviderManager providerManager;
         private readonly IFileSystem fileSystem;
+        private readonly IEpisodeGroupMappingFacade episodeGroupMappingFacade;
         private readonly LlmAssistTriggerPolicy triggerPolicy;
         private readonly EpisodeGroupRefreshService refreshService;
         private readonly ILogger<LlmEpisodeGroupMappingProviderAssistService> logger;
@@ -56,7 +57,20 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             IFileSystem fileSystem,
             LlmAssistTriggerPolicy triggerPolicy,
             ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
-            : this(assistService, tmdbApi, libraryManager, providerManager, fileSystem, triggerPolicy, new EpisodeGroupRefreshService(), logger)
+            : this(assistService, tmdbApi, libraryManager, providerManager, fileSystem, new EpisodeGroupMappingFacade(), triggerPolicy, new EpisodeGroupRefreshService(), logger)
+        {
+        }
+
+        public LlmEpisodeGroupMappingProviderAssistService(
+            ILlmEpisodeGroupMappingAssistService assistService,
+            TmdbApi tmdbApi,
+            ILibraryManager libraryManager,
+            IProviderManager providerManager,
+            IFileSystem fileSystem,
+            IEpisodeGroupMappingFacade episodeGroupMappingFacade,
+            LlmAssistTriggerPolicy triggerPolicy,
+            ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
+            : this(assistService, tmdbApi, libraryManager, providerManager, fileSystem, episodeGroupMappingFacade, triggerPolicy, new EpisodeGroupRefreshService(), logger)
         {
         }
 
@@ -69,12 +83,27 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             LlmAssistTriggerPolicy triggerPolicy,
             EpisodeGroupRefreshService refreshService,
             ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
+            : this(assistService, tmdbApi, libraryManager, providerManager, fileSystem, new EpisodeGroupMappingFacade(), triggerPolicy, refreshService, logger)
+        {
+        }
+
+        public LlmEpisodeGroupMappingProviderAssistService(
+            ILlmEpisodeGroupMappingAssistService assistService,
+            TmdbApi tmdbApi,
+            ILibraryManager libraryManager,
+            IProviderManager providerManager,
+            IFileSystem fileSystem,
+            IEpisodeGroupMappingFacade episodeGroupMappingFacade,
+            LlmAssistTriggerPolicy triggerPolicy,
+            EpisodeGroupRefreshService refreshService,
+            ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
         {
             this.assistService = assistService ?? throw new ArgumentNullException(nameof(assistService));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
             this.libraryManager = libraryManager ?? throw new ArgumentNullException(nameof(libraryManager));
             this.providerManager = providerManager ?? throw new ArgumentNullException(nameof(providerManager));
             this.fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+            this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? throw new ArgumentNullException(nameof(episodeGroupMappingFacade));
             this.triggerPolicy = triggerPolicy ?? throw new ArgumentNullException(nameof(triggerPolicy));
             this.refreshService = refreshService ?? throw new ArgumentNullException(nameof(refreshService));
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -88,7 +117,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 ? request.SeriesTmdbId.Value.ToString(CultureInfo.InvariantCulture)
                 : string.Empty;
 
-            if (ShouldSuppressRefreshLoop(request, seriesTmdbIdText))
+            if (this.ShouldSuppressRefreshLoop(request, seriesTmdbIdText))
             {
                 return LlmEpisodeGroupMappingAssistResult.NoChange("RefreshLoopSuppressed", currentMapping, string.Empty);
             }
@@ -144,8 +173,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 if (result.WroteMapping)
                 {
                     this.QueueAffectedSeriesRefresh(
-                        TmdbEpisodeGroupMapping.GetEffectiveMappingText(request.Configuration?.TmdbEpisodeGroupMap, result.PreviousMapping),
-                        TmdbEpisodeGroupMapping.GetEffectiveMappingText(request.Configuration?.TmdbEpisodeGroupMap, result.MappingText));
+                        this.episodeGroupMappingFacade.GetEffectiveMappingText(request.Configuration?.TmdbEpisodeGroupMap, result.PreviousMapping),
+                        this.episodeGroupMappingFacade.GetEffectiveMappingText(request.Configuration?.TmdbEpisodeGroupMap, result.MappingText));
                 }
 
                 return result;
@@ -268,18 +297,14 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 && triggerDecision.Reason is "ImplicitRefreshRejected" or "AutomaticRefreshRejected";
         }
 
-        private static bool ShouldSuppressRefreshLoop(LlmEpisodeGroupMappingProviderAssistRequest request, string seriesTmdbId)
+        private bool ShouldSuppressRefreshLoop(LlmEpisodeGroupMappingProviderAssistRequest request, string seriesTmdbId)
         {
             if (request.Semantic != DefaultScraperSemantic.UserRefresh || string.IsNullOrWhiteSpace(seriesTmdbId))
             {
                 return false;
             }
 
-            var currentMapping = TmdbEpisodeGroupMapping.GetEffectiveMappingText(
-                request.Configuration?.TmdbEpisodeGroupMap,
-                request.Configuration?.LlmTmdbEpisodeGroupMap);
-            var currentSnapshot = EpisodeGroupMapParser.Shared.ParseSnapshot(currentMapping);
-            var currentGroupId = currentSnapshot.TryGetGroupId(seriesTmdbId, out var resolvedGroupId)
+            var currentGroupId = this.episodeGroupMappingFacade.TryGetEffectiveGroupId(request.Configuration, seriesTmdbId, out var resolvedGroupId)
                 ? resolvedGroupId
                 : string.Empty;
 

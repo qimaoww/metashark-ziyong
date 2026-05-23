@@ -53,25 +53,37 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private readonly ILlmApi llmApi;
         private readonly TmdbApi tmdbApi;
         private readonly EpisodeGroupMapParser parser;
+        private readonly IEpisodeGroupMappingFacade episodeGroupMappingFacade;
         private readonly ITmdbEpisodeGroupMapPersistenceService persistenceService;
         private readonly ILlmRequestLimiter requestLimiter;
 
         [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Compatibility constructor owns a process-local fallback limiter for test-only direct construction.")]
         public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi)
-            : this(llmApi, tmdbApi, EpisodeGroupMapParser.Shared, new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared, saveLlmMapping: true), new LlmRequestLimiter())
+            : this(llmApi, tmdbApi, EpisodeGroupMapParser.Shared, new EpisodeGroupMappingFacade(), new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared, saveLlmMapping: true), new LlmRequestLimiter())
         {
         }
 
         public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser, ILlmRequestLimiter? requestLimiter = null)
-            : this(llmApi, tmdbApi, parser, new TmdbEpisodeGroupMapPersistenceService(parser, saveLlmMapping: true), requestLimiter)
+            : this(llmApi, tmdbApi, parser, new EpisodeGroupMappingFacade(), new TmdbEpisodeGroupMapPersistenceService(parser, saveLlmMapping: true), requestLimiter)
+        {
+        }
+
+        public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser, IEpisodeGroupMappingFacade episodeGroupMappingFacade, ILlmRequestLimiter? requestLimiter = null)
+            : this(llmApi, tmdbApi, parser, episodeGroupMappingFacade, new TmdbEpisodeGroupMapPersistenceService(parser, saveLlmMapping: true), requestLimiter)
         {
         }
 
         public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser, ITmdbEpisodeGroupMapPersistenceService persistenceService, ILlmRequestLimiter? requestLimiter = null)
+            : this(llmApi, tmdbApi, parser, new EpisodeGroupMappingFacade(), persistenceService, requestLimiter)
+        {
+        }
+
+        public LlmEpisodeGroupMappingAssistService(ILlmApi llmApi, TmdbApi tmdbApi, EpisodeGroupMapParser parser, IEpisodeGroupMappingFacade episodeGroupMappingFacade, ITmdbEpisodeGroupMapPersistenceService persistenceService, ILlmRequestLimiter? requestLimiter = null)
         {
             this.llmApi = llmApi ?? throw new ArgumentNullException(nameof(llmApi));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
             this.parser = parser ?? throw new ArgumentNullException(nameof(parser));
+            this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? throw new ArgumentNullException(nameof(episodeGroupMappingFacade));
             this.persistenceService = persistenceService ?? throw new ArgumentNullException(nameof(persistenceService));
             this.requestLimiter = requestLimiter ?? new LlmRequestLimiter();
         }
@@ -98,7 +110,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             }
 
             var seriesIdText = request.SeriesTmdbId.Value.ToString(CultureInfo.InvariantCulture);
-            if (TmdbEpisodeGroupMapping.TryGetGroupId(configuration.TmdbEpisodeGroupMap, seriesIdText, out var manualGroupId))
+            if (this.episodeGroupMappingFacade.TryGetManualGroupId(configuration, seriesIdText, out var manualGroupId))
             {
                 return LlmEpisodeGroupMappingAssistResult.NoChange("ManualMappingAlreadyExists", currentMapping, manualGroupId);
             }
