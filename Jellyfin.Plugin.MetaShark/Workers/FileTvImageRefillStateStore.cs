@@ -6,18 +6,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
     using System.Collections.Generic;
-    using System.IO;
-    using System.Text.Json;
     using Jellyfin.Plugin.MetaShark.Model;
     using Microsoft.Extensions.Logging;
 
     public sealed class FileTvImageRefillStateStore : ITvImageRefillStateStore
     {
-        private static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions
-        {
-            WriteIndented = true,
-        };
-
         private static readonly Action<ILogger, string, Exception?> LogStateLoadFailed =
             LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "[MetaShark] 电视缺图回填状态加载失败，已重置状态. path={Path}.");
 
@@ -63,8 +56,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             lock (this.syncRoot)
             {
                 this.EnsureLoaded();
-                this.states![state.ItemId] = Clone(state);
-                this.Persist();
+                JsonStateFile.Update(
+                    this.stateFilePath,
+                    this.states!,
+                    states =>
+                    {
+                        states[state.ItemId] = Clone(state);
+                        return true;
+                    });
             }
         }
 
@@ -78,10 +77,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             lock (this.syncRoot)
             {
                 this.EnsureLoaded();
-                if (this.states!.Remove(itemId))
-                {
-                    this.Persist();
-                }
+                JsonStateFile.Update(this.stateFilePath, this.states!, states => states.Remove(itemId));
             }
         }
 
@@ -106,48 +102,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            var directory = Path.GetDirectoryName(this.stateFilePath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            if (!File.Exists(this.stateFilePath))
-            {
-                this.states = new Dictionary<Guid, TvImageRefillState>();
-                return;
-            }
-
-            try
-            {
-                var json = File.ReadAllText(this.stateFilePath);
-                this.states = JsonSerializer.Deserialize<Dictionary<Guid, TvImageRefillState>>(json, SerializerOptions)
-                    ?? new Dictionary<Guid, TvImageRefillState>();
-            }
-            catch (IOException ex)
-            {
-                LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, TvImageRefillState>();
-                this.Persist();
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, TvImageRefillState>();
-                this.Persist();
-            }
-            catch (JsonException ex)
-            {
-                LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, TvImageRefillState>();
-                this.Persist();
-            }
-        }
-
-        private void Persist()
-        {
-            var json = JsonSerializer.Serialize(this.states, SerializerOptions);
-            File.WriteAllText(this.stateFilePath, json);
+            this.states = JsonStateFile.LoadOrReset<TvImageRefillState>(
+                this.stateFilePath,
+                (path, exception) => LogStateLoadFailed(this.logger, path, exception));
         }
     }
 }

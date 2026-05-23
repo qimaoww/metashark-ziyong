@@ -56,5 +56,38 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 originalFormatContains: "[MetaShark] 收到电视缺图回填条目更新事件",
                 messageContains: ["[MetaShark] 收到电视缺图回填条目更新事件", $"itemId={series.Id}", "updateReason=MetadataImport"]);
         }
+
+        [TestMethod]
+        public async Task StartAsync_Rethrows_WhenRefillServiceThrows()
+        {
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var refillServiceStub = new Mock<ITvMissingImageRefillService>();
+            var loggerStub = new Mock<ILogger<TvMissingImageRefillItemUpdatedWorker>>();
+            var expectedException = new InvalidOperationException("refill boom");
+            refillServiceStub
+                .Setup(x => x.QueueMissingImagesForUpdatedItem(It.IsAny<ItemChangeEventArgs>(), CancellationToken.None))
+                .Throws(expectedException);
+
+            var worker = new TvMissingImageRefillItemUpdatedWorker(libraryManagerStub.Object, refillServiceStub.Object, loggerStub.Object);
+
+            await worker.StartAsync(CancellationToken.None).ConfigureAwait(false);
+
+            var series = new Series { Id = Guid.NewGuid(), Name = "Series B" };
+            var actualException = Assert.ThrowsException<InvalidOperationException>(() => libraryManagerStub.Raise(
+                x => x.ItemUpdated += null,
+                libraryManagerStub.Object,
+                new ItemChangeEventArgs
+                {
+                    Item = series,
+                    UpdateReason = ItemUpdateType.MetadataDownload,
+                }));
+
+            Assert.AreSame(expectedException, actualException);
+            refillServiceStub.Verify(
+                x => x.QueueMissingImagesForUpdatedItem(
+                    It.Is<ItemChangeEventArgs>(e => e.Item == series && e.UpdateReason == ItemUpdateType.MetadataDownload),
+                    CancellationToken.None),
+                Times.Once);
+        }
     }
 }

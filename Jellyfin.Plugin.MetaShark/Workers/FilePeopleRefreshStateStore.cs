@@ -6,18 +6,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
     using System.Collections.Generic;
-    using System.IO;
-    using System.Text.Json;
     using Jellyfin.Plugin.MetaShark.Core;
     using Microsoft.Extensions.Logging;
 
     public sealed class FilePeopleRefreshStateStore : IPeopleRefreshStateStore
     {
-        private static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions
-        {
-            WriteIndented = true,
-        };
-
         private static readonly Action<ILogger, string, Exception?> LogStateLoadFailed =
             LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "[MetaShark] 人物刷新状态加载失败，已重置状态. path={Path}.");
 
@@ -63,8 +56,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             lock (this.syncRoot)
             {
                 this.EnsureLoaded();
-                this.states![state.ItemId] = Clone(state);
-                this.Persist();
+                JsonStateFile.Update(
+                    this.stateFilePath,
+                    this.states!,
+                    states =>
+                    {
+                        states[state.ItemId] = Clone(state);
+                        return true;
+                    });
             }
         }
 
@@ -78,10 +77,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             lock (this.syncRoot)
             {
                 this.EnsureLoaded();
-                if (this.states!.Remove(itemId))
-                {
-                    this.Persist();
-                }
+                JsonStateFile.Update(this.stateFilePath, this.states!, states => states.Remove(itemId));
             }
         }
 
@@ -105,48 +101,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            var directory = Path.GetDirectoryName(this.stateFilePath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            if (!File.Exists(this.stateFilePath))
-            {
-                this.states = new Dictionary<Guid, PeopleRefreshState>();
-                return;
-            }
-
-            try
-            {
-                var json = File.ReadAllText(this.stateFilePath);
-                this.states = JsonSerializer.Deserialize<Dictionary<Guid, PeopleRefreshState>>(json, SerializerOptions)
-                    ?? new Dictionary<Guid, PeopleRefreshState>();
-            }
-            catch (IOException ex)
-            {
-                LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, PeopleRefreshState>();
-                this.Persist();
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, PeopleRefreshState>();
-                this.Persist();
-            }
-            catch (JsonException ex)
-            {
-                LogStateLoadFailed(this.logger, this.stateFilePath, ex);
-                this.states = new Dictionary<Guid, PeopleRefreshState>();
-                this.Persist();
-            }
-        }
-
-        private void Persist()
-        {
-            var json = JsonSerializer.Serialize(this.states, SerializerOptions);
-            File.WriteAllText(this.stateFilePath, json);
+            this.states = JsonStateFile.LoadOrReset<PeopleRefreshState>(
+                this.stateFilePath,
+                (path, exception) => LogStateLoadFailed(this.logger, path, exception));
         }
     }
 }

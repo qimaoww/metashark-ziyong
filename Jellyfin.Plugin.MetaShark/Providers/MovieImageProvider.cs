@@ -49,16 +49,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteImageInfo>> GetImages(BaseItem item, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(item);
-            var sid = item.GetProviderId(DoubanProviderId);
-            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
-            var metaSource = item.GetMetaSource(MetaSharkPlugin.ProviderId);
             var imageSemantic = this.ResolveImageSemantic();
-            var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
-            this.Log("开始获取电影图片. name: {0} lang: {1} metaSource: {2}", item.Name, item.GetPreferredMetadataLanguage(), metaSource);
-            if (doubanAllowed && !string.IsNullOrEmpty(sid))
+            var imageContext = ImageResolutionContext.FromItem(item, imageSemantic, doubanAllowed);
+            this.Log("开始获取电影图片. name: {0} lang: {1} metaSource: {2}", item.Name, imageContext.PreferredLanguage, imageContext.MetaSource);
+            if (imageContext.DoubanAllowed && !string.IsNullOrEmpty(imageContext.DoubanId))
             {
-                var primary = await this.DoubanApi.GetMovieAsync(sid, cancellationToken).ConfigureAwait(false);
+                var primary = await this.DoubanApi.GetMovieAsync(imageContext.DoubanId, cancellationToken).ConfigureAwait(false);
                 if (primary != null && !string.IsNullOrEmpty(primary.Img))
                 {
                     var res = new List<RemoteImageInfo>
@@ -68,18 +65,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                             ProviderName = this.Name,
                             Url = this.GetDoubanPoster(primary),
                             Type = ImageType.Primary,
-                            Language = item.GetPreferredMetadataLanguage(),
+                            Language = imageContext.PreferredLanguage,
                         },
                     };
 
-                    if (isManualImageRequest)
+                    if (imageContext.IsManualImageRequest)
                     {
-                        var manualBackdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, doubanAllowed, cancellationToken, includeTmdbFallback: false).ConfigureAwait(false);
+                        var manualBackdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, imageContext.DoubanAllowed, cancellationToken, includeTmdbFallback: false).ConfigureAwait(false);
                         res.AddRange(manualBackdropImgs);
-                        if (!string.IsNullOrEmpty(tmdbId))
+                        if (!string.IsNullOrEmpty(imageContext.TmdbId))
                         {
                             var images = await this.TmdbApi
-                                .GetMovieImagesAsync(tmdbId.ToInt(), string.Empty, string.Empty, cancellationToken)
+                                .GetMovieImagesAsync(imageContext.TmdbId.ToInt(), string.Empty, string.Empty, cancellationToken)
                                 .ConfigureAwait(false);
                             if (images != null)
                             {
@@ -93,7 +90,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                             .FilterManualRemoteImagesByLanguage();
                     }
 
-                    var backdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, doubanAllowed, cancellationToken).ConfigureAwait(false);
+                    var backdropImgs = await this.GetBackdrop(item, primary.PrimaryLanguageCode, imageContext.DoubanAllowed, cancellationToken).ConfigureAwait(false);
                     var logoImgs = await this.GetLogos(item, primary.PrimaryLanguageCode, cancellationToken).ConfigureAwait(false);
                     res.AddRange(backdropImgs);
                     res.AddRange(logoImgs);
@@ -101,18 +98,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
             }
 
-            if (!string.IsNullOrEmpty(tmdbId))
+            if (!string.IsNullOrEmpty(imageContext.TmdbId))
             {
-                var language = item.GetPreferredMetadataLanguage();
+                var language = imageContext.PreferredLanguage;
 
                 // 设定language会导致图片被过滤，这里设为null，保持取全部语言图片
                 var movie = await this.TmdbApi
-                .GetMovieAsync(tmdbId.ToInt(), language, language, cancellationToken)
+                .GetMovieAsync(imageContext.TmdbId.ToInt(), language, language, cancellationToken)
                 .ConfigureAwait(false);
 
                 // 设定language会导致图片被过滤，这里设为null，保持取全部语言图片
                 var images = await this.TmdbApi
-                .GetMovieImagesAsync(tmdbId.ToInt(), string.Empty, string.Empty, cancellationToken)
+                .GetMovieImagesAsync(imageContext.TmdbId.ToInt(), string.Empty, string.Empty, cancellationToken)
                 .ConfigureAwait(false);
 
                 if (movie == null || images == null)
@@ -121,7 +118,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
 
                 var remoteImages = new List<RemoteImageInfo>();
-                if (isManualImageRequest)
+                if (imageContext.IsManualImageRequest)
                 {
                     remoteImages.AddRange(this.MapAllTmdbImages(images));
 

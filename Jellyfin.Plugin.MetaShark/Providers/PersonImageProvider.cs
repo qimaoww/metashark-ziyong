@@ -45,15 +45,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(item);
             var list = new List<RemoteImageInfo>();
-            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
-            var language = item.GetPreferredMetadataLanguage();
             var imageSemantic = this.ResolveImageSemantic();
-            var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
-            this.Log("开始获取人物图片. name: {0} tmdbId: {1}", item.Name, tmdbId);
+            var imageContext = ImageResolutionContext.FromItem(item, imageSemantic, IsDoubanAllowed(imageSemantic));
+            this.Log("开始获取人物图片. name: {0} tmdbId: {1}", item.Name, imageContext.TmdbId);
 
-            if (!string.IsNullOrEmpty(tmdbId))
+            if (!string.IsNullOrEmpty(imageContext.TmdbId))
             {
-                var person = await this.TmdbApi.GetPersonAsync(tmdbId.ToInt(), cancellationToken).ConfigureAwait(false);
+                var person = await this.TmdbApi.GetPersonAsync(imageContext.TmdbId.ToInt(), cancellationToken).ConfigureAwait(false);
                 var profiles = person?.Images?.Profiles;
                 if (profiles != null)
                 {
@@ -64,7 +62,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         Width = x.Width,
                         Height = x.Height,
                         Type = ImageType.Primary,
-                        Language = isManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, language),
+                        Language = imageContext.IsManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, imageContext.PreferredLanguage),
                         CommunityRating = x.VoteAverage,
                         VoteCount = x.VoteCount,
                         RatingType = RatingType.Score,
@@ -77,9 +75,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 this.Log("获取人物图片失败，没有可用图片. name: {0}", item.Name);
             }
 
-            return isManualImageRequest
+            return imageContext.IsManualImageRequest
                 ? list.FilterManualRemoteImagesByLanguage()
-                : list.OrderByLanguageDescending(language);
+                : list.OrderByLanguageDescending(imageContext.PreferredLanguage);
         }
     }
 }

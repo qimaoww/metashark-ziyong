@@ -50,6 +50,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return Task.CompletedTask;
         }
 
+        internal void DispatchItemUpdated(ItemChangeEventArgs e)
+        {
+            this.postProcessService.TryApplyAsync(e, MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger, CancellationToken.None).GetAwaiter().GetResult();
+        }
+
         private void OnItemUpdated(object? sender, ItemChangeEventArgs e)
         {
             var item = e.Item;
@@ -58,7 +63,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             try
             {
-                this.postProcessService.TryApplyAsync(e, MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger, CancellationToken.None).GetAwaiter().GetResult();
+                this.DispatchItemUpdated(e);
             }
             catch (Exception ex)
             {

@@ -77,7 +77,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 {
                     // 注意：jellyfin 会判断电影所有 provider id 是否有相同的，有相同的值就会认为是同一影片，会被合并不返回，必须保持 provider id 的唯一性
                     // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了保持唯一
-                    ProviderIds = new Dictionary<string, string> { { DoubanProviderId, x.Sid }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Douban}_{x.Sid}" } },
+                    ProviderIds = ProviderIdSet.ForDouban(x.Sid),
                     ImageUrl = this.GetProxyImageUrl(new Uri(x.Img, UriKind.Absolute)).ToString(),
                     ProductionYear = x.Year,
                     Name = x.Name,
@@ -94,7 +94,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     {
                         // 注意：jellyfin 会判断电影所有 provider id 是否有相同的，有相同的值就会认为是同一影片，会被合并不返回，必须保持 provider id 的唯一性
                         // 这里 MetaSharkPlugin.ProviderId 的值做这么复杂，是为了保持唯一
-                        ProviderIds = new Dictionary<string, string> { { MetadataProvider.Tmdb.ToString(), x.Id.ToString(CultureInfo.InvariantCulture) }, { MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{x.Id}" } },
+                        ProviderIds = ProviderIdSet.ForTmdb(x.Id),
                         Name = string.Format(CultureInfo.InvariantCulture, "[TMDB]{0}", x.Title ?? x.OriginalTitle),
                         ImageUrl = this.TmdbApi.GetPosterUrl(x.PosterPath)?.ToString(),
                         Overview = x.Overview,
@@ -119,29 +119,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var sid = info.GetProviderId(DoubanProviderId);
             var tmdbId = info.GetProviderId(MetadataProvider.Tmdb);
             var originalTmdbId = tmdbId;
-            var originalPublicProviderIds = CreatePublicProviderIdCopy(info.ProviderIds);
+            var originalPublicProviderIds = ProviderIdSnapshot.CreatePublicProviderIdCopy(info.ProviderIds);
             var hasVerifiedTmdbCorrection = false;
             var hasPersistedDoubanTmdbCorrection = TryApplyPersistedDoubanTmdbCorrection(nameof(Movie), sid, ref tmdbId, info);
             var hasPersistedDoubanTmdbCompletion = TryApplyPersistedDoubanTmdbCompletion(nameof(Movie), sid, ref tmdbId, info);
-            var metaSource = info.GetMetaSource(MetaSharkPlugin.ProviderId);
-            if (metaSource == MetaSource.Tmdb && string.IsNullOrWhiteSpace(tmdbId))
-            {
-                metaSource = MetaSource.None;
-            }
-
-            if (hasPersistedDoubanTmdbCorrection)
-            {
-                metaSource = MetaSource.Tmdb;
-            }
-
-            var effectiveSid = doubanAllowed ? sid : null;
-
-            var tmdbSourceIsPrimary = hasPersistedDoubanTmdbCorrection
-                || (metaSource == MetaSource.Tmdb && (!doubanAllowed || string.IsNullOrWhiteSpace(sid)));
-
-            // 注意：会存在元数据有tmdbId，但metaSource没值的情况（之前由TMDB插件刮削导致）
-            var hasTmdbMeta = !string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary);
-            var hasDoubanMeta = !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid);
+            var authorityContext = MetadataAuthorityContext.Create(sid, tmdbId, info.GetMetaSource(MetaSharkPlugin.ProviderId), doubanAllowed, hasPersistedDoubanTmdbCorrection);
+            sid = authorityContext.Sid;
+            tmdbId = authorityContext.TmdbId;
+            var metaSource = authorityContext.MetaSource;
+            var effectiveSid = authorityContext.EffectiveSid;
+            var tmdbSourceIsPrimary = authorityContext.TmdbSourceIsPrimary;
+            var hasTmdbMeta = authorityContext.HasTmdbMeta; // 之前由TMDB插件刮削时，可能存在 tmdbId 但 metaSource 没值。
+            var hasDoubanMeta = authorityContext.HasDoubanMeta;
             var llmAssistResult = LlmScrapingAssistResult.NotTriggered("AuthoritativeMetadataPresent");
             var externalIdResolutionResult = LlmExternalIdResolutionResult.NotTriggered("AuthoritativeMetadataPresent");
             var shouldUseTmdbMetadataAfterCorrection = false;
@@ -531,57 +520,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ParentIndexNumber = info.ParentIndexNumber,
                 IndexNumber = info.IndexNumber,
                 IsAutomated = info.IsAutomated,
-                ProviderIds = CreatePublicProviderIdCopy(info.ProviderIds),
+                ProviderIds = ProviderIdSnapshot.CreatePublicProviderIdCopy(info.ProviderIds),
             };
-        }
-
-        private static Dictionary<string, string>? CreatePublicProviderIdCopy(Dictionary<string, string>? providerIds)
-        {
-            if (providerIds == null)
-            {
-                return null;
-            }
-
-            var copy = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var providerId in providerIds)
-            {
-                if (TryNormalizePublicProviderIdKey(providerId.Key, out var key))
-                {
-                    copy[key] = providerId.Value;
-                }
-            }
-
-            return copy;
-        }
-
-        private static bool TryNormalizePublicProviderIdKey(string key, out string normalizedKey)
-        {
-            if (string.Equals(key, MetadataProvider.Tmdb.ToString(), StringComparison.OrdinalIgnoreCase))
-            {
-                normalizedKey = MetadataProvider.Tmdb.ToString();
-                return true;
-            }
-
-            if (string.Equals(key, MetadataProvider.Imdb.ToString(), StringComparison.OrdinalIgnoreCase))
-            {
-                normalizedKey = MetadataProvider.Imdb.ToString();
-                return true;
-            }
-
-            if (string.Equals(key, MetadataProvider.Tvdb.ToString(), StringComparison.OrdinalIgnoreCase))
-            {
-                normalizedKey = MetadataProvider.Tvdb.ToString();
-                return true;
-            }
-
-            if (string.Equals(key, DoubanProviderId, StringComparison.OrdinalIgnoreCase))
-            {
-                normalizedKey = DoubanProviderId;
-                return true;
-            }
-
-            normalizedKey = string.Empty;
-            return false;
         }
 
         private static string? GetProviderIdWriteValue(LlmExternalIdResolutionResult result, string providerIdKey)
@@ -828,7 +768,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ProductionYear = authoritativeMetadataItem.ProductionYear,
                 PremiereDate = authoritativeMetadataItem.PremiereDate,
             };
-            foreach (var providerId in CreatePublicProviderIdCopy(authoritativeMetadataItem.ProviderIds) ?? new Dictionary<string, string>())
+            foreach (var providerId in ProviderIdSnapshot.CreatePublicProviderIdCopy(authoritativeMetadataItem.ProviderIds) ?? new Dictionary<string, string>())
             {
                 snapshot.ProviderIds[providerId.Key] = providerId.Value;
             }

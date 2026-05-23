@@ -69,6 +69,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
         private static readonly object Lock = new object();
         private readonly ILogger<DoubanApi> logger;
+        private readonly IDoubanHttpClientFactory httpClientFactory;
         private readonly HttpClient httpClient;
         private readonly HttpClientHandlerExtended httpClientHandler;
         private readonly DoubanSecHandler doubanHandler;
@@ -117,19 +118,21 @@ namespace Jellyfin.Plugin.MetaShark.Api
         /// </summary>
         /// <param name="loggerFactory">The <see cref="ILoggerFactory"/>.</param>
         public DoubanApi(ILoggerFactory loggerFactory)
+            : this(loggerFactory, DefaultDoubanHttpClientFactory.Shared)
+        {
+        }
+
+        internal DoubanApi(ILoggerFactory loggerFactory, IDoubanHttpClientFactory httpClientFactory)
         {
             this.logger = loggerFactory.CreateLogger<DoubanApi>();
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
+            this.httpClientFactory = httpClientFactory;
 
-            this.httpClientHandler = new HttpClientHandlerExtended();
-            this.httpClientHandler.CheckCertificateRevocationList = true;
-            this.cookieContainer = this.httpClientHandler.CookieContainer;
-            this.doubanHandler = new DoubanSecHandler(this.logger) { InnerHandler = this.httpClientHandler };
-            this.httpClient = new HttpClient(this.doubanHandler, disposeHandler: false);
-            this.httpClient.Timeout = TimeSpan.FromSeconds(20);
-            this.httpClient.DefaultRequestHeaders.Add("User-Agent", HTTPUSERAGENT);
-            this.httpClient.DefaultRequestHeaders.Add("Origin", "https://movie.douban.com");
-            this.httpClient.DefaultRequestHeaders.Add("Referer", "https://movie.douban.com/");
+            var httpClientSet = this.httpClientFactory.Create(this.logger);
+            this.httpClientHandler = httpClientSet.HttpClientHandler;
+            this.cookieContainer = httpClientSet.CookieContainer;
+            this.doubanHandler = httpClientSet.DoubanHandler;
+            this.httpClient = httpClientSet.HttpClient;
 
             this.LoadLoadDoubanCookie();
             if (MetaSharkPlugin.Instance != null)
@@ -194,7 +197,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return list;
             }
 
-            var cacheKey = $"search_{keyword}";
+            var cacheKey = GetSearchCacheKey(keyword);
             var expiredOption = new MemoryCacheEntryOptions() { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) };
             List<DoubanSubject>? searchResult;
             if (this.memoryCache.TryGetValue(cacheKey, out searchResult) && searchResult != null)
@@ -1035,6 +1038,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 || body.Contains("检测到有异常请求", StringComparison.OrdinalIgnoreCase)
                 || body.Contains("有异常请求从你的 IP 发出", StringComparison.OrdinalIgnoreCase)
                 || body.Contains("有异常请求从这台机器发出", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetSearchCacheKey(string keyword)
+        {
+            return $"search_{keyword}";
         }
 
         private async Task<string?> ReadBodyUnlessBlockedAsync(HttpResponseMessage response, string url, CancellationToken cancellationToken)

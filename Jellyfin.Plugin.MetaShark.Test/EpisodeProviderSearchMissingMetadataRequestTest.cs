@@ -427,6 +427,48 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_WhenSeriesTmdbIdIsInvalid_UsesCurrentToIntZeroFallbackAndReturnsWithoutQueueingCandidate()
+        {
+            EnsurePluginInstance();
+            MetaSharkPlugin.Instance!.Configuration.EnableSearchMissingMetadataEpisodeTitleBackfill = false;
+
+            using var loggerProvider = new TestLoggerProvider();
+            using var loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Debug).AddProvider(loggerProvider));
+            var storeStub = new Mock<IEpisodeTitleBackfillCandidateStore>();
+            var info = CreateEpisodeInfo();
+            info.SeriesProviderIds![MetadataProvider.Tmdb.ToString()] = "not-a-number";
+            var episodeItem = new Episode
+            {
+                Id = Guid.NewGuid(),
+                Name = info.Name,
+                Path = info.Path,
+            };
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.FindByPath(info.Path, false))
+                .Returns(episodeItem);
+            var httpContextAccessor = new HttpContextAccessor
+            {
+                HttpContext = CreateHttpContext("FullRefresh", "false"),
+            };
+
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedEpisode(tmdbApi, 0, 1, 1, "zh-CN", "zh-CN", new TvEpisode { Name = "Zero Series Episode" });
+            using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsTrue(result.QueriedById, "Invalid TMDb id currently flows through ToInt() as 0 and can satisfy the TMDb episode lookup when series id 0 is cached.");
+            Assert.AreEqual("Zero Series Episode", result.Item!.Name);
+            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(1, result.Item.IndexNumber);
+            storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
+        }
+
+        [TestMethod]
         public async Task GetMetadata_WhenLookupLanguageMissingButEpisodePrefersZhCn_UsesTitleMetadataLanguageForEpisodeDetailsLookup()
         {
             EnsurePluginInstance();

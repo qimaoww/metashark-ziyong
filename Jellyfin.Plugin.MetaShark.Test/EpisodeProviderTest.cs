@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Core;
+using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
@@ -161,6 +162,26 @@ namespace Jellyfin.Plugin.MetaShark.Test
             cache!.Set(key, episode);
         }
 
+        private static void SeedEpisodeTranslationOverview(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, int episodeNumber, string language, string? overview)
+        {
+            var cacheField = typeof(TmdbApi).GetField("memoryCache", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(cacheField, "TmdbApi.memoryCache 未找到");
+
+            var cache = cacheField!.GetValue(tmdbApi) as MemoryCache;
+            Assert.IsNotNull(cache, "TmdbApi.memoryCache 不是有效的 MemoryCache");
+
+            var key = $"episode-translation-overview-{seriesTmdbId}-s{seasonNumber}e{episodeNumber}-{language}";
+            cache!.Set(
+                key,
+                overview == null
+                    ? null
+                    : new EpisodeLocalizedValue
+                    {
+                        Value = overview,
+                        SourceLanguage = language,
+                    });
+        }
+
 
 
         [TestMethod]
@@ -223,6 +244,81 @@ namespace Jellyfin.Plugin.MetaShark.Test
             parseResult = provider.FixParseInfo(new EpisodeInfo() { Path = "/test/[Moozzi2] Samurai Champloo [SP03] Battlecry (Opening) PV (BD 1920x1080 x.264 AC3).mkv" });
             Assert.AreEqual(parseResult.IndexNumber, 3);
             Assert.AreEqual(parseResult.ParentIndexNumber, 0);
+        }
+
+        [TestMethod]
+        public void FixParseInfo_CharacterizesCurrentInPlaceLookupMutation()
+        {
+            var provider = CreateProvider(new Mock<ILibraryManager>().Object, new Mock<IHttpContextAccessor>().Object, new TmdbApi(loggerFactory));
+            var info = new EpisodeInfo
+            {
+                Name = "Manually Curated Title",
+                Path = "/test/Detective Dee/Season 02/Detective.Dee.S02EP03.2006.2160p.WEB-DL.x264.AAC-HQC.mkv",
+                MetadataLanguage = "zh-CN",
+                ParentIndexNumber = 1,
+                IndexNumber = 1,
+                Year = 2024,
+                SeriesProviderIds = new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tmdb.ToString()] = "26707",
+                },
+            };
+
+            var parseResult = provider.FixParseInfo(info);
+
+            Assert.AreSame(info, parseResult, "FixParseInfo 当前会原地修改调用方传入的 EpisodeInfo，而不是返回不可变副本。");
+            Assert.AreEqual(2, info.ParentIndexNumber, "文件名中的 S02 会覆盖传入季号。");
+            Assert.AreEqual(3, info.IndexNumber, "文件名中的 EP03 会覆盖传入集号。");
+            Assert.AreEqual(2006, info.Year, "文件名中的年份会覆盖传入年份。");
+            Assert.AreEqual("Detective Dee", info.Name, "当前解析副作用会覆盖传入 lookup 名称。");
+            Assert.AreEqual("zh-CN", info.MetadataLanguage);
+            Assert.AreEqual("26707", info.SeriesProviderIds[MetadataProvider.Tmdb.ToString()]);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_CharacterizesParseMutationDrivingEpisodeLookupButOriginalTitlePersistence()
+        {
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedEpisode(tmdbApi, 26707, 2, 3, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "解析后的第二季第三集",
+                Overview = "第二季第三集简介。",
+                AirDate = new DateTime(2006, 10, 3),
+                VoteAverage = 7.6,
+            });
+            SeedEpisodeTranslationOverview(tmdbApi, 26707, 2, 3, "zh-CN", null);
+
+            var info = new EpisodeInfo
+            {
+                Name = "第 1 集",
+                Path = "/test/Detective Dee/Season 01/Detective.Dee.S02EP03.2006.2160p.WEB-DL.x264.AAC-HQC.mkv",
+                MetadataLanguage = "zh-CN",
+                ParentIndexNumber = 1,
+                IndexNumber = 1,
+                SeriesProviderIds = new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tmdb.ToString()] = "26707",
+                },
+                IsAutomated = true,
+            };
+            var provider = CreateProvider(new Mock<ILibraryManager>().Object, new Mock<IHttpContextAccessor>().Object, tmdbApi);
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(2, info.ParentIndexNumber, "GetMetadata 当前会通过 FixParseInfo 原地修正传入 lookup 的季号。");
+            Assert.AreEqual(3, info.IndexNumber, "GetMetadata 当前会通过 FixParseInfo 原地修正传入 lookup 的集号。");
+            Assert.AreEqual(2006, info.Year, "GetMetadata 当前会通过 FixParseInfo 原地修正传入 lookup 的年份。");
+            Assert.AreEqual("Detective Dee", info.Name, "GetMetadata 当前会通过 FixParseInfo 原地修正传入 lookup 的名称。");
+            Assert.IsNotNull(result.Item);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsTrue(result.QueriedById, "被解析后的 s2e3 必须继续驱动 TMDb 单集查询。");
+            Assert.AreEqual(2, result.Item!.ParentIndexNumber);
+            Assert.AreEqual(3, result.Item.IndexNumber);
+            Assert.AreEqual("解析后的第二季第三集", result.Item.Name, "原始标题快照仍用于既有标题持久化策略，不能由解析后的 lookup 名称替代。");
+            Assert.AreEqual("第二季第三集简介。", result.Item.Overview);
+            Assert.AreEqual(new DateTime(2006, 10, 3), result.Item.PremiereDate);
+            Assert.AreEqual(2006, result.Item.ProductionYear);
+            Assert.AreEqual(7.6f, result.Item.CommunityRating);
         }
 
         [TestMethod]
@@ -336,6 +432,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("Episode 3", result.Item!.Name, "TMDb 单集详情不可用时应保留查询标题，不应写入 TMDb 标题。 ");
             Assert.IsNull(result.Item.Overview, "TMDb 单集详情不可用时不应写入简介。 ");
             Assert.IsNull(result.Item.PremiereDate, "TMDb 单集详情不可用时不应写入首播日期。 ");
+        }
+
+        private EpisodeProvider CreateProvider(ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, TmdbApi tmdbApi)
+        {
+            return new EpisodeProvider(
+                new DefaultHttpClientFactory(),
+                loggerFactory,
+                libraryManager,
+                httpContextAccessor,
+                new DoubanApi(loggerFactory),
+                tmdbApi,
+                new OmdbApi(loggerFactory),
+                new ImdbApi(loggerFactory),
+                new TvdbApi(loggerFactory));
         }
 
         [TestMethod]

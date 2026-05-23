@@ -48,28 +48,27 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             this.Log("开始获取季图片. name: {0} seasonNumber: {1}", item.Name, item.IndexNumber);
             var season = (Season)item;
             var series = season.Series;
-            var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;
             var imageSemantic = this.ResolveImageSemantic();
-            var isManualImageRequest = imageSemantic == DefaultScraperSemantic.ManualSearch;
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
+            var imageContext = ImageResolutionContext.FromItem(item, imageSemantic, doubanAllowed);
             var currentSeriesTmdbId = series?.GetProviderId(MetadataProvider.Tmdb);
             var hasPersistedSeriesTmdbCorrection = TryResolvePersistedSeriesTmdbCorrection(series?.GetProviderId(DoubanProviderId), currentSeriesTmdbId, out var correctedSeriesTmdbId);
+            var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;
             if (hasPersistedSeriesTmdbCorrection)
             {
                 metaSource = MetaSource.Tmdb;
             }
 
-            var allowManualDoubanForSeasonImage = this.ShouldAllowDoubanForManualSeasonImageRequest(season, metaSource, imageSemantic);
+            var allowManualDoubanForSeasonImage = this.ShouldAllowDoubanForManualSeasonImageRequest(season, metaSource, imageContext.Semantic);
 
             // get image from douban
-            var sid = item.GetProviderId(DoubanProviderId);
-            var shouldUseDoubanImage = !string.IsNullOrEmpty(sid)
+            var shouldUseDoubanImage = !string.IsNullOrEmpty(imageContext.DoubanId)
                 && !hasPersistedSeriesTmdbCorrection
                 && (allowManualDoubanForSeasonImage
-                    || doubanAllowed);
+                    || imageContext.DoubanAllowed);
             if (shouldUseDoubanImage)
             {
-                var primary = await this.DoubanApi.GetMovieAsync(sid!, cancellationToken).ConfigureAwait(false);
+                var primary = await this.DoubanApi.GetMovieAsync(imageContext.DoubanId!, cancellationToken).ConfigureAwait(false);
                 if (primary != null && !string.IsNullOrEmpty(primary.Img))
                 {
                     var res = new List<RemoteImageInfo>
@@ -82,7 +81,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                             Language = "zh",
                         },
                     };
-                    return isManualImageRequest ? res.FilterManualRemoteImagesByLanguage() : res;
+                    return imageContext.IsManualImageRequest ? res.FilterManualRemoteImagesByLanguage() : res;
                 }
             }
 
@@ -97,7 +96,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return Enumerable.Empty<RemoteImageInfo>();
             }
 
-            var language = item.GetPreferredMetadataLanguage();
+            var language = imageContext.PreferredLanguage;
             var seasonResult = await this.TmdbApi
                 .GetSeasonAsync(seriesTmdbId, season.IndexNumber.Value, string.Empty, string.Empty, cancellationToken)
                 .ConfigureAwait(false);
@@ -118,13 +117,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     VoteCount = image.VoteCount,
                     Width = image.Width,
                     Height = image.Height,
-                    Language = isManualImageRequest ? image.Iso_639_1 : AdjustImageLanguage(image.Iso_639_1, language),
+                    Language = imageContext.IsManualImageRequest ? image.Iso_639_1 : AdjustImageLanguage(image.Iso_639_1, language),
                     ProviderName = this.Name,
                     Type = ImageType.Primary,
                 };
             }
 
-            return isManualImageRequest
+            return imageContext.IsManualImageRequest
                 ? remoteImages.FilterManualRemoteImagesByLanguage()
                 : remoteImages.OrderByLanguageDescending(language);
         }

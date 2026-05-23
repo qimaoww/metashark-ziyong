@@ -47,11 +47,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return Task.CompletedTask;
         }
 
+        internal void DispatchItemUpdated(ItemChangeEventArgs e)
+        {
+            this.refillService.QueueMissingImagesForUpdatedItem(e, CancellationToken.None);
+        }
+
         private void OnItemUpdated(object? sender, ItemChangeEventArgs e)
         {
             var item = e.Item;
             LogItemUpdated(this.logger, item?.Name ?? string.Empty, item?.Id ?? Guid.Empty, e.UpdateReason, null);
-            this.refillService.QueueMissingImagesForUpdatedItem(e, CancellationToken.None);
+            this.DispatchItemUpdated(e);
         }
     }
 }

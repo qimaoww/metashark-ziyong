@@ -48,6 +48,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private readonly Action<ILogger, string, Exception?> logTmdbUnexpectedHttpError;
         private readonly string apiKey;
         private readonly string apiHost;
+        private readonly TmdbConfigurationSnapshot configurationSnapshot;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="TmdbApi"/> class.
@@ -58,10 +59,10 @@ namespace Jellyfin.Plugin.MetaShark.Api
             this.memoryCache = new MemoryCache(new MemoryCacheOptions());
             this.logTmdbError = LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, nameof(TmdbApi)), "[MetaShark] TMDB 请求异常. 操作={Operation}");
             this.logTmdbUnexpectedHttpError = LoggerMessage.Define<string>(LogLevel.Warning, new EventId(2, nameof(TmdbApi)), "[MetaShark] TMDB 单集请求返回非预期 HTTP 错误. 操作={Operation}");
-            var config = MetaSharkPlugin.Instance?.Configuration;
-            this.apiKey = string.IsNullOrEmpty(config?.TmdbApiKey) ? DefaultApiKey : config.TmdbApiKey;
-            this.apiHost = string.IsNullOrEmpty(config?.TmdbHost) ? DefaultApiHost : config.TmdbHost;
-            this.tmDbClient = new TMDbClient(this.apiKey, true, this.apiHost, null, config?.GetTmdbWebProxy());
+            this.configurationSnapshot = TmdbConfigurationSnapshot.Create(MetaSharkPlugin.Instance?.Configuration);
+            this.apiKey = this.configurationSnapshot.ApiKey;
+            this.apiHost = this.configurationSnapshot.ApiHost;
+            this.tmDbClient = new TMDbClient(this.apiKey, true, this.apiHost, null, this.configurationSnapshot.Proxy);
             this.tmDbClient.Timeout = TimeSpan.FromSeconds(10);
 
             // Not really interested in NotFoundException
@@ -1101,7 +1102,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return new List<SearchTv>();
             }
 
-            var key = $"searchseries-{name}-{language}";
+            var key = GetSeriesSearchCacheKey(name, language);
             if (this.memoryCache.TryGetValue(key, out SearchContainer<SearchTv>? series) && series != null)
             {
                 return series.Results;
@@ -1215,7 +1216,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return new List<SearchMovie>();
             }
 
-            var key = $"moviesearch-{name}-{year.ToString(CultureInfo.InvariantCulture)}-{language}";
+            var key = GetMovieSearchCacheKey(name, year, language);
             if (this.memoryCache.TryGetValue(key, out SearchContainer<SearchMovie>? movies) && movies != null)
             {
                 return movies.Results;
@@ -1465,6 +1466,16 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return $"person-translations-{personTmdbId.ToString(CultureInfo.InvariantCulture)}";
         }
 
+        private static string GetMovieSearchCacheKey(string name, int year, string language)
+        {
+            return $"moviesearch-{name}-{year.ToString(CultureInfo.InvariantCulture)}-{language}";
+        }
+
+        private static string GetSeriesSearchCacheKey(string name, string language)
+        {
+            return $"searchseries-{name}-{language}";
+        }
+
         private static bool IsStrictZhCnEpisodeTranslation(Translation translation)
         {
             return string.Equals(translation.Iso_639_1, "zh", StringComparison.OrdinalIgnoreCase)
@@ -1657,6 +1668,29 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
 
             return episode;
+        }
+
+        private sealed class TmdbConfigurationSnapshot
+        {
+            private TmdbConfigurationSnapshot(string apiKey, string apiHost, IWebProxy? proxy)
+            {
+                this.ApiKey = apiKey;
+                this.ApiHost = apiHost;
+                this.Proxy = proxy;
+            }
+
+            public string ApiKey { get; }
+
+            public string ApiHost { get; }
+
+            public IWebProxy? Proxy { get; }
+
+            public static TmdbConfigurationSnapshot Create(PluginConfiguration? config)
+            {
+                var apiKey = string.IsNullOrEmpty(config?.TmdbApiKey) ? DefaultApiKey : config.TmdbApiKey;
+                var apiHost = string.IsNullOrEmpty(config?.TmdbHost) ? DefaultApiHost : config.TmdbHost;
+                return new TmdbConfigurationSnapshot(apiKey, apiHost, config?.GetTmdbWebProxy());
+            }
         }
     }
 }

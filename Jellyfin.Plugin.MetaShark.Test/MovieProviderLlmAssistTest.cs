@@ -884,6 +884,50 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task GetMetadata_WhenCorrectionVerified_PreservesReliableExternalIdsAndDoesNotWriteLegacyMetaSharkTmdbId()
+        {
+            ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var doubanApi = new DoubanApi(loggerFactory);
+            var staleSubject = CreateDoubanSubject("provider-id-preservation-douban", "Provider Id Preservation Movie", 2047);
+            SeedDoubanSubject(doubanApi, staleSubject);
+            var tmdbApi = new TmdbApi(loggerFactory);
+            var correctedMovie = CreateTmdbMovie(224, "Provider Id Corrected Movie", 2047, overview: "Corrected provider id overview");
+            correctedMovie.ImdbId = "tt224";
+            SeedTmdbMovie(tmdbApi, 224, "zh-CN", correctedMovie);
+            var externalIdResolver = new LlmProviderFlowTestHelpers.RecordingLlmExternalIdResolutionService();
+            externalIdResolver.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
+            externalIdResolver.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("224", "test verified replacement"));
+            var provider = CreateProvider(
+                loggerFactory,
+                httpContextAccessor: LlmProviderFlowTestHelpers.CreateExplicitRefreshContextAccessor(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture)),
+                doubanApi: doubanApi,
+                tmdbApi: tmdbApi,
+                llmExternalIdResolutionService: externalIdResolver);
+            var info = CreateMovieInfo("Provider Id Preservation Movie", "/mnt/media/Movies/Provider Id Corrected Movie/Provider Id Corrected Movie.mkv", 2047);
+            info.ProviderIds = new Dictionary<string, string>
+            {
+                [BaseProvider.DoubanProviderId] = "provider-id-preservation-douban",
+                [MetaSharkPlugin.ProviderId] = "Douban_provider-id-preservation-douban",
+                [MetadataProvider.Tmdb.ToString()] = "112",
+                [MetadataProvider.Imdb.ToString()] = "tt-preserved",
+                [MetadataProvider.Tvdb.ToString()] = "88047",
+                ["MetaSharkTmdbID"] = "112",
+            };
+
+            var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(1, externalIdResolver.CorrectionRequests.Count);
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("224", result.Item!.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("Tmdb_224", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.AreEqual("tt-preserved", result.Item.GetProviderId(MetadataProvider.Imdb), "Verified TMDb correction must preserve reliable existing IMDb id semantics.");
+            Assert.AreEqual("88047", result.Item.GetProviderId(MetadataProvider.Tvdb), "Verified TMDb correction must preserve reliable existing TVDB id semantics.");
+            Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "TMDb-authoritative correction currently clears stale Douban id from the result.");
+            Assert.IsNull(result.Item.GetProviderId("MetaSharkTmdbID"), "Provider flow must not write the historical MetaSharkTmdbID key.");
+        }
+
+        [TestMethod]
         public async Task GetMetadata_WhenExistingTmdbVerified_UsesTmdbMetadataAndPersistsProviderIdCleanup()
         {
             ReplacePluginConfiguration(CreateLlmConfiguration(enableTmdbCorrection: true));

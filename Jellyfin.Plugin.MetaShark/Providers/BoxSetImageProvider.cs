@@ -63,8 +63,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return Enumerable.Empty<RemoteImageInfo>();
             }
 
-            var language = item.GetPreferredMetadataLanguage();
-            var isManualImageRequest = this.ResolveImageSemantic() == DefaultScraperSemantic.ManualSearch;
+            var imageSemantic = this.ResolveImageSemantic();
+            var imageContext = ImageResolutionContext.FromItem(item, imageSemantic, IsDoubanAllowed(imageSemantic));
 
             // TODO use image languages if All Languages isn't toggled, but there's currently no way to get that value in here
             var collection = await this.TmdbApi
@@ -88,7 +88,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 VoteCount = x.VoteCount,
                 Width = x.Width,
                 Height = x.Height,
-                Language = isManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, language),
+                Language = imageContext.IsManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, imageContext.PreferredLanguage),
                 RatingType = RatingType.Score,
             }));
 
@@ -101,13 +101,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 VoteCount = x.VoteCount,
                 Width = x.Width,
                 Height = x.Height,
-                Language = isManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, language),
+                Language = imageContext.IsManualImageRequest ? x.Iso_639_1 : AdjustImageLanguage(x.Iso_639_1, imageContext.PreferredLanguage),
                 RatingType = RatingType.Score,
             }));
 
-            return isManualImageRequest
+            return imageContext.IsManualImageRequest
                 ? remoteImages.FilterManualRemoteImagesByLanguage()
-                : remoteImages.OrderByLanguageDescending(language);
+                : remoteImages.OrderByLanguageDescending(imageContext.PreferredLanguage);
         }
     }
 }
