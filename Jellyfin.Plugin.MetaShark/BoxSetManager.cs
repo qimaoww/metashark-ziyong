@@ -6,11 +6,10 @@ namespace Jellyfin.Plugin.MetaShark;
 
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using AngleSharp.Text;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
 using MediaBrowser.Controller.Collections;
@@ -23,6 +22,8 @@ using Microsoft.Extensions.Logging;
 
 public sealed class BoxSetManager : IHostedService, IDisposable
 {
+    private static readonly TimeSpan DefaultDebounceDelay = TimeSpan.FromSeconds(60);
+
     private static readonly Action<ILogger, Exception?> LogCollectionDisabled =
         LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(ScanLibrary)), "[MetaShark] 跳过自动创建合集扫描. reason=FeatureDisabled.");
 
@@ -38,17 +39,34 @@ public sealed class BoxSetManager : IHostedService, IDisposable
     private readonly ILibraryManager libraryManager;
     private readonly ICollectionManager collectionManager;
     private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemLibraryCapabilityResolver;
-    private readonly Timer timer;
+    private readonly IBoxSetDebounceScheduler scheduler;
+    private readonly TimeSpan debounceDelay;
+    private readonly object syncRoot = new object();
     private readonly HashSet<string> queuedTmdbCollection;
     private readonly ILogger<BoxSetManager> logger; // TODO logging
+    private List<string> inFlightTmdbCollection = new List<string>();
+    private Task? currentDrainTask;
+    private bool isStopped;
+    private int drainRunning;
 
     public BoxSetManager(ILibraryManager libraryManager, ICollectionManager collectionManager, ILoggerFactory loggerFactory)
+        : this(libraryManager, collectionManager, loggerFactory, DefaultDebounceDelay, new TimerBoxSetDebounceScheduler())
+    {
+    }
+
+    internal BoxSetManager(
+        ILibraryManager libraryManager,
+        ICollectionManager collectionManager,
+        ILoggerFactory loggerFactory,
+        TimeSpan debounceDelay,
+        IBoxSetDebounceScheduler scheduler)
     {
         this.libraryManager = libraryManager;
         this.collectionManager = collectionManager;
         this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
         this.logger = loggerFactory.CreateLogger<BoxSetManager>();
-        this.timer = new Timer(_ => this.OnTimerElapsed(), null, Timeout.Infinite, Timeout.Infinite);
+        this.debounceDelay = debounceDelay;
+        this.scheduler = scheduler;
         this.queuedTmdbCollection = new HashSet<string>();
     }
 
@@ -80,14 +98,31 @@ public sealed class BoxSetManager : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        lock (this.syncRoot)
+        {
+            this.isStopped = false;
+        }
+
         this.libraryManager.ItemUpdated += this.OnLibraryManagerItemUpdated;
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         this.libraryManager.ItemUpdated -= this.OnLibraryManagerItemUpdated;
-        return Task.CompletedTask;
+        Task? drainTask;
+        lock (this.syncRoot)
+        {
+            this.isStopped = true;
+            this.queuedTmdbCollection.Clear();
+            this.scheduler.Cancel();
+            drainTask = this.currentDrainTask;
+        }
+
+        if (drainTask != null)
+        {
+            await drainTask.ConfigureAwait(false);
+        }
     }
 
     public void Dispose()
@@ -173,8 +208,7 @@ public sealed class BoxSetManager : IHostedService, IDisposable
             await this.collectionManager.AddToCollectionAsync(boxSet.Id, movieIds).ConfigureAwait(false);
 
             // HACK: 等获取 boxset 元数据后再更新一次合集，用于修正刷新元数据后丢失关联电影的 BUG
-            this.queuedTmdbCollection.Add(collectionName);
-            this.timer.Change(60000, Timeout.Infinite);
+            this.QueueCollection(collectionName);
         }
         else
         {
@@ -198,7 +232,7 @@ public sealed class BoxSetManager : IHostedService, IDisposable
     {
         if (disposing)
         {
-            this.timer.Dispose();
+            this.scheduler.Dispose();
         }
     }
 
@@ -225,10 +259,7 @@ public sealed class BoxSetManager : IHostedService, IDisposable
             return;
         }
 
-        this.queuedTmdbCollection.Add(movie.CollectionName);
-
-        // Restart the timer. After idling for 60 seconds it should trigger the callback. This is to avoid clobbering during a large library update.
-        this.timer.Change(60000, Timeout.Infinite);
+        this.QueueCollection(movie.CollectionName);
     }
 
     private bool IsMovieMetadataEnabled(Movie movie)
@@ -237,25 +268,178 @@ public sealed class BoxSetManager : IHostedService, IDisposable
         return this.ordinaryItemLibraryCapabilityResolver.Resolve(movie, MetaSharkLibraryCapability.Metadata).Allowed;
     }
 
-    private void OnTimerElapsed()
+    private void QueueCollection(string collectionName)
     {
-        // Stop the timer until next update
-        this.timer.Change(Timeout.Infinite, Timeout.Infinite);
+        lock (this.syncRoot)
+        {
+            if (this.isStopped)
+            {
+                return;
+            }
 
-        var tmdbCollectionNames = this.queuedTmdbCollection.ToArray();
+            this.queuedTmdbCollection.Add(collectionName);
+            this.scheduler.Schedule(this.debounceDelay, this.DrainQueuedCollectionsAsync);
+        }
+    }
 
-        // Clear the queue now, TODO what if it crashes? Should it be cleared after it's done?
-        this.queuedTmdbCollection.Clear();
+    private Task DrainQueuedCollectionsAsync()
+    {
+        if (Interlocked.CompareExchange(ref this.drainRunning, 1, 0) != 0)
+        {
+            return Task.CompletedTask;
+        }
 
-        var boxSets = this.GetAllBoxSetsFromLibrary();
-        var movies = this.GetMoviesFromLibrary();
+        string[] tmdbCollectionNames;
+        var drainCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (this.syncRoot)
+        {
+            tmdbCollectionNames = this.queuedTmdbCollection.ToArray();
+            this.queuedTmdbCollection.Clear();
+            this.inFlightTmdbCollection = tmdbCollectionNames.ToList();
+            this.currentDrainTask = drainCompletion.Task;
+        }
+
+        _ = this.RunDrainQueuedCollectionsAsync(tmdbCollectionNames, drainCompletion);
+        return drainCompletion.Task;
+    }
+
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A single collection drain failure must requeue that collection and continue the state machine.")]
+    private async Task RunDrainQueuedCollectionsAsync(string[] tmdbCollectionNames, TaskCompletionSource drainCompletion)
+    {
+        try
+        {
+            await this.DrainQueuedCollectionsCoreAsync(tmdbCollectionNames).ConfigureAwait(false);
+            drainCompletion.TrySetResult();
+        }
+        catch (Exception ex)
+        {
+            drainCompletion.TrySetException(ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref this.drainRunning, 0);
+            lock (this.syncRoot)
+            {
+                this.currentDrainTask = null;
+            }
+        }
+    }
+
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A single collection drain failure must requeue that collection and continue the state machine.")]
+    private async Task DrainQueuedCollectionsCoreAsync(string[] tmdbCollectionNames)
+    {
+        var failedRetry = new HashSet<string>();
+        List<BoxSet> boxSets;
+        IDictionary<string, IList<Movie>> movies;
+        try
+        {
+            boxSets = this.GetAllBoxSetsFromLibrary();
+            movies = this.GetMoviesFromLibrary();
+        }
+        catch
+        {
+            failedRetry.UnionWith(tmdbCollectionNames);
+            boxSets = new List<BoxSet>();
+            movies = new Dictionary<string, IList<Movie>>();
+        }
+
         foreach (var collectionName in tmdbCollectionNames)
         {
-            if (movies.TryGetValue(collectionName, out var collectionMovies))
+            if (!movies.TryGetValue(collectionName, out var collectionMovies))
+            {
+                continue;
+            }
+
+            try
             {
                 var boxSet = boxSets.FirstOrDefault(b => b?.Name == collectionName);
-                this.AddMoviesToCollection(collectionMovies, collectionName, boxSet).GetAwaiter().GetResult();
+                await this.AddMoviesToCollection(collectionMovies, collectionName, boxSet).ConfigureAwait(false);
             }
+            catch
+            {
+                failedRetry.Add(collectionName);
+            }
+        }
+
+        lock (this.syncRoot)
+        {
+            this.inFlightTmdbCollection.Clear();
+            this.queuedTmdbCollection.UnionWith(failedRetry);
+            if (!this.isStopped && this.queuedTmdbCollection.Count > 0)
+            {
+                this.scheduler.Schedule(this.debounceDelay, this.DrainQueuedCollectionsAsync);
+            }
+        }
+    }
+}
+
+internal interface IBoxSetDebounceScheduler : IDisposable
+{
+    void Schedule(TimeSpan delay, Func<Task> callback);
+
+    void Cancel();
+}
+
+internal sealed class TimerBoxSetDebounceScheduler : IBoxSetDebounceScheduler
+{
+    private readonly object syncRoot = new object();
+    private readonly Timer timer;
+    private Func<Task>? callback;
+
+    public TimerBoxSetDebounceScheduler()
+    {
+        this.timer = new Timer(_ => this.OnTimerElapsed(), null, Timeout.Infinite, Timeout.Infinite);
+    }
+
+    public void Schedule(TimeSpan delay, Func<Task> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        lock (this.syncRoot)
+        {
+            this.callback = callback;
+            this.timer.Change(delay, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    public void Cancel()
+    {
+        lock (this.syncRoot)
+        {
+            this.callback = null;
+            this.timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    public void Dispose()
+    {
+        this.timer.Dispose();
+    }
+
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Timer callback tasks must be observed; collection failures are handled by the drain state machine.")]
+    private static async Task RunObservedAsync(Func<Task> callback)
+    {
+        try
+        {
+            await callback().ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+
+    private void OnTimerElapsed()
+    {
+        Func<Task>? scheduledCallback;
+        lock (this.syncRoot)
+        {
+            this.timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            scheduledCallback = this.callback;
+            this.callback = null;
+        }
+
+        if (scheduledCallback != null)
+        {
+            _ = RunObservedAsync(scheduledCallback);
         }
     }
 }
