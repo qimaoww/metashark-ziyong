@@ -121,7 +121,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var tmdbId = info.GetProviderId(MetadataProvider.Tmdb);
             var originalTmdbId = tmdbId;
             var originalPublicProviderIds = ProviderIdSnapshot.CreatePublicProviderIdCopy(info.ProviderIds);
-            var providerIdStage = this.ApplyInitialMovieProviderIdStage(info, sid, tmdbId, doubanAllowed);
+            var providerIdStage = this.ApplyInitialMovieProviderIdStage(info, sid, tmdbId, semantic, doubanAllowed);
             sid = providerIdStage.Sid;
             tmdbId = providerIdStage.TmdbId;
             var metaSource = providerIdStage.MetaSource;
@@ -203,11 +203,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
         }
 
-        private (string? Sid, string? TmdbId, string? EffectiveSid, MetaSource MetaSource, bool TmdbSourceIsPrimary, bool HasTmdbMeta, bool HasDoubanMeta, bool HasPersistedDoubanTmdbCorrection, bool HasPersistedDoubanTmdbCompletion) ApplyInitialMovieProviderIdStage(MovieInfo info, string? sid, string? tmdbId, bool doubanAllowed)
+        private (string? Sid, string? TmdbId, string? EffectiveSid, MetaSource MetaSource, bool TmdbSourceIsPrimary, bool HasTmdbMeta, bool HasDoubanMeta, bool HasPersistedDoubanTmdbCorrection, bool HasPersistedDoubanTmdbCompletion) ApplyInitialMovieProviderIdStage(MovieInfo info, string? sid, string? tmdbId, DefaultScraperSemantic semantic, bool doubanAllowed)
         {
             var hasPersistedDoubanTmdbCorrection = this.TryApplyPersistedDoubanTmdbCorrection(nameof(Movie), sid, ref tmdbId, info);
             var hasPersistedDoubanTmdbCompletion = this.TryApplyPersistedDoubanTmdbCompletion(nameof(Movie), sid, ref tmdbId, info);
-            var authorityContext = MetadataAuthorityContext.Create(sid, tmdbId, info.GetMetaSource(MetaSharkPlugin.ProviderId), doubanAllowed, hasPersistedDoubanTmdbCorrection);
+            var authorityContext = MetadataAuthorityContext.Create(sid, tmdbId, info.GetMetaSource(MetaSharkPlugin.ProviderId), semantic, doubanAllowed, hasPersistedDoubanTmdbCorrection);
 
             return (
                 authorityContext.Sid,

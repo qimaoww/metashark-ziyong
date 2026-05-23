@@ -15,7 +15,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         bool HasTmdbMeta,
         bool HasDoubanMeta)
     {
-        public static MetadataAuthorityContext Create(string? sid, string? tmdbId, MetaSource metaSource, bool doubanAllowed, bool hasPersistedDoubanTmdbCorrection)
+        public static MetadataAuthorityContext Create(string? sid, string? tmdbId, MetaSource metaSource, DefaultScraperSemantic semantic, bool doubanAllowed, bool hasPersistedDoubanTmdbCorrection)
         {
             if (metaSource == MetaSource.Tmdb && string.IsNullOrWhiteSpace(tmdbId))
             {
@@ -29,7 +29,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var effectiveSid = doubanAllowed ? sid : null;
             var tmdbSourceIsPrimary = hasPersistedDoubanTmdbCorrection
-                || (metaSource == MetaSource.Tmdb && (!doubanAllowed || string.IsNullOrWhiteSpace(sid)));
+                || (metaSource == MetaSource.Tmdb
+                    && (!doubanAllowed
+                        || (semantic != DefaultScraperSemantic.OverwriteRefresh && string.IsNullOrWhiteSpace(sid))));
             var hasTmdbMeta = !string.IsNullOrEmpty(tmdbId) && (!doubanAllowed || tmdbSourceIsPrimary);
             var hasDoubanMeta = !tmdbSourceIsPrimary && !string.IsNullOrEmpty(effectiveSid);
 

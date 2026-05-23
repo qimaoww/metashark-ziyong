@@ -157,19 +157,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var tmdbId = info.GetProviderId(MetadataProvider.Tmdb);
             var originalTmdbId = tmdbId;
             var originalPublicProviderIds = ProviderIdSnapshot.CreatePublicProviderIdCopy(info.ProviderIds);
-            var hasVerifiedTmdbCorrection = false;
-            var hasPersistedDoubanTmdbCorrection = TryApplyPersistedDoubanTmdbCorrection(nameof(Series), sid, ref tmdbId, info);
-            var hasPersistedDoubanTmdbCompletion = TryApplyPersistedDoubanTmdbCompletion(nameof(Series), sid, ref tmdbId, info);
-            var authorityContext = MetadataAuthorityContext.Create(sid, tmdbId, info.GetMetaSource(MetaSharkPlugin.ProviderId), doubanAllowed, hasPersistedDoubanTmdbCorrection);
-            sid = authorityContext.Sid;
-            tmdbId = authorityContext.TmdbId;
-            var metaSource = authorityContext.MetaSource;
-            var effectiveSid = authorityContext.EffectiveSid;
+            var providerIdStage = this.ApplyInitialSeriesProviderIdStage(info, sid, tmdbId, semantic, doubanAllowed);
+            sid = providerIdStage.Sid;
+            tmdbId = providerIdStage.TmdbId;
+            var metaSource = providerIdStage.MetaSource;
+            var effectiveSid = providerIdStage.EffectiveSid;
             var hasBridgedExplicitSearchMissingMetadataRefreshIntent = this.TryResolveBridgedSearchMissingMetadataRefreshIntent(info);
             var hasBridgedExplicitOverwriteMetadataRefreshIntent = this.TryResolveBridgedOverwriteMetadataRefreshIntent(info);
-            var tmdbSourceIsPrimary = authorityContext.TmdbSourceIsPrimary;
-            var hasTmdbMeta = authorityContext.HasTmdbMeta; // 之前由TMDB插件刮削时，可能存在 tmdbId 但 metaSource 没值。
-            var hasDoubanMeta = authorityContext.HasDoubanMeta;
+            var tmdbSourceIsPrimary = providerIdStage.TmdbSourceIsPrimary;
+            var hasTmdbMeta = providerIdStage.HasTmdbMeta; // 之前由TMDB插件刮削时，可能存在 tmdbId 但 metaSource 没值。
+            var hasDoubanMeta = providerIdStage.HasDoubanMeta;
             TestTraceSink?.Invoke(new SeriesFlowTrace(
                 "Initial",
                 semantic,
@@ -183,21 +180,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 hasBridgedExplicitSearchMissingMetadataRefreshIntent));
             var llmExternalIdResolutionResult = LlmExternalIdResolutionResult.NotTriggered("TmdbProviderIdPresent");
             var tmdbIdResolvedByLlmExternalIds = false;
-            var shouldUseTmdbMetadataAfterCorrection = false;
-            var tmdbCorrectionResult = hasPersistedDoubanTmdbCorrection
-                ? LlmTmdbIdCorrectionResult.NoReplacement("PersistedDoubanTmdbCorrectionApplied")
-                : await this.TryResolveSeriesTmdbCorrectionAsync(info, semantic, originalTmdbId, hasPersistedDoubanTmdbCompletion, hasBridgedExplicitSearchMissingMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
-            if (tmdbCorrectionResult.ShouldReplace && !string.IsNullOrWhiteSpace(tmdbCorrectionResult.ReplacementTmdbId))
-            {
-                tmdbId = tmdbCorrectionResult.ReplacementTmdbId;
-                info.SetProviderId(MetadataProvider.Tmdb, tmdbId);
-                hasVerifiedTmdbCorrection = true;
-                shouldUseTmdbMetadataAfterCorrection = tmdbCorrectionResult.ShouldUseTmdbMetadata;
-                if (shouldUseTmdbMetadataAfterCorrection)
-                {
-                    _ = await this.TryPersistLlmDoubanTmdbCorrectionMapAsync(nameof(Series), sid, tmdbId, cancellationToken).ConfigureAwait(false);
-                }
-            }
+            var correctionStage = await this.TryApplySeriesTmdbCorrectionStageAsync(info, semantic, originalTmdbId, sid, tmdbId, providerIdStage.HasPersistedDoubanTmdbCorrection, providerIdStage.HasPersistedDoubanTmdbCompletion, hasBridgedExplicitSearchMissingMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
+            tmdbId = correctionStage.TmdbId;
+            var hasVerifiedTmdbCorrection = correctionStage.HasVerifiedTmdbCorrection;
+            var shouldUseTmdbMetadataAfterCorrection = correctionStage.ShouldUseTmdbMetadataAfterCorrection;
 
             if (string.IsNullOrWhiteSpace(tmdbId))
             {
@@ -396,7 +382,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
 
                 ApplyLlmTextCompletion(result, llmAssistResult);
-                if (hasPersistedDoubanTmdbCompletion || tmdbIdResolvedByLlmExternalIds)
+                if (providerIdStage.HasPersistedDoubanTmdbCompletion || tmdbIdResolvedByLlmExternalIds)
                 {
                     await this.TryPersistLlmTmdbCompletionProviderIdsAsync(info, tmdbId, result.Item, cancellationToken).ConfigureAwait(false);
                 }
@@ -433,6 +419,44 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             this.Log("剧集匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
             return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+        }
+
+        private (string? Sid, string? TmdbId, string? EffectiveSid, MetaSource MetaSource, bool TmdbSourceIsPrimary, bool HasTmdbMeta, bool HasDoubanMeta, bool HasPersistedDoubanTmdbCorrection, bool HasPersistedDoubanTmdbCompletion) ApplyInitialSeriesProviderIdStage(SeriesInfo info, string? sid, string? tmdbId, DefaultScraperSemantic semantic, bool doubanAllowed)
+        {
+            var hasPersistedDoubanTmdbCorrection = this.TryApplyPersistedDoubanTmdbCorrection(nameof(Series), sid, ref tmdbId, info);
+            var hasPersistedDoubanTmdbCompletion = this.TryApplyPersistedDoubanTmdbCompletion(nameof(Series), sid, ref tmdbId, info);
+            var authorityContext = MetadataAuthorityContext.Create(sid, tmdbId, info.GetMetaSource(MetaSharkPlugin.ProviderId), semantic, doubanAllowed, hasPersistedDoubanTmdbCorrection);
+
+            return (
+                authorityContext.Sid,
+                authorityContext.TmdbId,
+                authorityContext.EffectiveSid,
+                authorityContext.MetaSource,
+                authorityContext.TmdbSourceIsPrimary,
+                authorityContext.HasTmdbMeta,
+                authorityContext.HasDoubanMeta,
+                hasPersistedDoubanTmdbCorrection,
+                hasPersistedDoubanTmdbCompletion);
+        }
+
+        private async Task<(string? TmdbId, bool HasVerifiedTmdbCorrection, bool ShouldUseTmdbMetadataAfterCorrection)> TryApplySeriesTmdbCorrectionStageAsync(SeriesInfo info, DefaultScraperSemantic semantic, string? originalTmdbId, string? sid, string? tmdbId, bool hasPersistedDoubanTmdbCorrection, bool hasPersistedDoubanTmdbCompletion, bool hasBridgedExplicitSearchMissingMetadataRefreshIntent, CancellationToken cancellationToken)
+        {
+            var tmdbCorrectionResult = hasPersistedDoubanTmdbCorrection
+                ? LlmTmdbIdCorrectionResult.NoReplacement("PersistedDoubanTmdbCorrectionApplied")
+                : await this.TryResolveSeriesTmdbCorrectionAsync(info, semantic, originalTmdbId, hasPersistedDoubanTmdbCompletion, hasBridgedExplicitSearchMissingMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
+            if (!tmdbCorrectionResult.ShouldReplace || string.IsNullOrWhiteSpace(tmdbCorrectionResult.ReplacementTmdbId))
+            {
+                return (tmdbId, false, false);
+            }
+
+            tmdbId = tmdbCorrectionResult.ReplacementTmdbId;
+            info.SetProviderId(MetadataProvider.Tmdb, tmdbId);
+            if (tmdbCorrectionResult.ShouldUseTmdbMetadata)
+            {
+                _ = await this.TryPersistLlmDoubanTmdbCorrectionMapAsync(nameof(Series), sid, tmdbId, cancellationToken).ConfigureAwait(false);
+            }
+
+            return (tmdbId, true, tmdbCorrectionResult.ShouldUseTmdbMetadata);
         }
 
         private static MetadataResult<Series> FinalizeMetadataResult(MetadataResult<Series> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
