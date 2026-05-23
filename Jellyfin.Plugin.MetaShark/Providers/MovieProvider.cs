@@ -44,8 +44,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private readonly ILlmTmdbCorrectionMapPersistenceService? llmTmdbCorrectionMapPersistenceService;
         private readonly ILlmTmdbCorrectionMetadataStore? llmTmdbCorrectionMetadataStore;
 
-        public MovieProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmExternalIdResolutionService? llmExternalIdResolutionService = null, ITmdbCorrectionRefreshIntentStore? tmdbCorrectionRefreshIntentStore = null, ILlmTmdbCorrectionMapPersistenceService? llmTmdbCorrectionMapPersistenceService = null, ILlmTmdbCorrectionMetadataStore? llmTmdbCorrectionMetadataStore = null)
-            : base(httpClientFactory, loggerFactory.CreateLogger<MovieProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
+        public MovieProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, IMovieSeriesPeopleOverwriteRefreshCandidateStore? movieSeriesPeopleOverwriteRefreshCandidateStore = null, ILlmMetadataAssistService? llmMetadataAssistService = null, ILlmExternalIdResolutionService? llmExternalIdResolutionService = null, ITmdbCorrectionRefreshIntentStore? tmdbCorrectionRefreshIntentStore = null, ILlmTmdbCorrectionMapPersistenceService? llmTmdbCorrectionMapPersistenceService = null, ILlmTmdbCorrectionMetadataStore? llmTmdbCorrectionMetadataStore = null, ILlmTmdbCorrectionMapFacade? llmTmdbCorrectionMapFacade = null)
+            : base(httpClientFactory, loggerFactory.CreateLogger<MovieProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi, llmTmdbCorrectionMapFacade)
         {
             this.movieSeriesPeopleOverwriteRefreshCandidateStore = movieSeriesPeopleOverwriteRefreshCandidateStore ?? InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared;
             this.llmMetadataAssistService = llmMetadataAssistService;
@@ -371,12 +371,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return result;
         }
 
-        private static bool TryApplyPersistedDoubanTmdbCorrection(string mediaType, string? doubanId, ref string? tmdbId, ItemLookupInfo info)
+        private bool TryApplyPersistedDoubanTmdbCorrection(string mediaType, string? doubanId, ref string? tmdbId, ItemLookupInfo info)
         {
-            if (!Config.EnableLlmTmdbCorrectionPersistence
-                || string.IsNullOrWhiteSpace(doubanId)
-                || !LlmTmdbCorrectionMapParser.Shared.TryGetDoubanCorrection(Config.LlmTmdbCorrectionMap, mediaType, doubanId, out var correctedTmdbId)
-                || string.IsNullOrWhiteSpace(correctedTmdbId))
+            if (string.IsNullOrWhiteSpace(doubanId)
+                || !this.LlmTmdbCorrectionMapFacade.TryGetCorrection(Config, mediaType, doubanId, out var correctedTmdbId))
             {
                 return false;
             }
@@ -387,12 +385,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return true;
         }
 
-        private static bool TryApplyPersistedDoubanTmdbCompletion(string mediaType, string? doubanId, ref string? tmdbId, ItemLookupInfo info)
+        private bool TryApplyPersistedDoubanTmdbCompletion(string mediaType, string? doubanId, ref string? tmdbId, ItemLookupInfo info)
         {
-            if (!Config.EnableLlmTmdbCompletionPersistence
-                || string.IsNullOrWhiteSpace(doubanId)
-                || !LlmTmdbCorrectionMapParser.Shared.TryGetDoubanCorrection(Config.LlmTmdbCompletionMap, mediaType, doubanId, out var completedTmdbId)
-                || string.IsNullOrWhiteSpace(completedTmdbId))
+            if (string.IsNullOrWhiteSpace(doubanId)
+                || !this.LlmTmdbCorrectionMapFacade.TryGetCompletion(Config, mediaType, doubanId, out var completedTmdbId))
             {
                 return false;
             }
