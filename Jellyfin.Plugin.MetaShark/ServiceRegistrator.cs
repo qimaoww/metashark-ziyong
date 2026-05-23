@@ -73,7 +73,12 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<ITmdbCorrectionRefreshIntentStore>((_) => InMemoryTmdbCorrectionRefreshIntentStore.Shared);
             serviceCollection.AddSingleton<ILlmTmdbCorrectionMetadataStore, InMemoryLlmTmdbCorrectionMetadataStore>();
             serviceCollection.AddSingleton<IStartupFilter, TmdbCorrectionRefreshIntentStartupFilter>();
-            serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore, InMemoryEpisodeTitleBackfillCandidateStore>();
+            serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore>((ctx) =>
+            {
+                return new FileEpisodeTitleBackfillCandidateStore(
+                    Path.Combine(dataFolderPath, "title-candidates.json"),
+                    ctx.GetRequiredService<ILoggerFactory>());
+            });
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPendingResolver, EpisodeTitleBackfillPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPersistence, JellyfinEpisodeTitleBackfillPersistence>();
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPostProcessService>((ctx) =>
@@ -97,7 +102,12 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<MetaSharkOrdinaryItemLibraryCapabilityResolver>(),
                     ctx.GetRequiredService<MetaSharkSharedEntityLibraryCapabilityResolver>());
             });
-            serviceCollection.AddSingleton<IEpisodeOverviewCleanupCandidateStore, InMemoryEpisodeOverviewCleanupCandidateStore>();
+            serviceCollection.AddSingleton<IEpisodeOverviewCleanupCandidateStore>((ctx) =>
+            {
+                return new FileEpisodeOverviewCleanupCandidateStore(
+                    Path.Combine(dataFolderPath, "overview-candidates.json"),
+                    ctx.GetRequiredService<ILoggerFactory>());
+            });
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupPendingResolver, EpisodeOverviewCleanupPendingResolver>();
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupPersistence, JellyfinEpisodeOverviewCleanupPersistence>();
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupPostProcessService>((ctx) =>

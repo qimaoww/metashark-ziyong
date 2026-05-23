@@ -7,6 +7,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Text;
     using System.Text.Json;
 
     internal static class JsonStateFile
@@ -54,7 +55,23 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         public static void Write<TState>(string path, Dictionary<Guid, TState>? states)
         {
             var json = JsonSerializer.Serialize(states, SerializerOptions);
-            File.WriteAllText(path, json);
+            var tempPath = CreateTempPath(path);
+            try
+            {
+                var bytes = Encoding.UTF8.GetBytes(json);
+                using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush(flushToDisk: true);
+                }
+
+                File.Move(tempPath, path, overwrite: true);
+            }
+            catch
+            {
+                TryDeleteTempFile(tempPath);
+                throw;
+            }
         }
 
         public static void Update<TState>(
@@ -80,6 +97,28 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             var states = new Dictionary<Guid, TState>();
             Write(path, states);
             return states;
+        }
+
+        private static string CreateTempPath(string path)
+        {
+            return string.Concat(path, ".", Guid.NewGuid().ToString("N"), ".tmp");
+        }
+
+        private static void TryDeleteTempFile(string tempPath)
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
     }
 }

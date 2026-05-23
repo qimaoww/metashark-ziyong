@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using Jellyfin.Plugin.MetaShark.Workers;
 using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Controller;
@@ -37,6 +39,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void RegisterServices_ShouldUseDurableEpisodeCandidateStores()
+        {
+            using var serviceProvider = CreateServiceProvider();
+
+            var titleStore = serviceProvider.GetRequiredService<IEpisodeTitleBackfillCandidateStore>();
+            var overviewStore = serviceProvider.GetRequiredService<IEpisodeOverviewCleanupCandidateStore>();
+
+            Assert.IsInstanceOfType(titleStore, typeof(FileEpisodeTitleBackfillCandidateStore));
+            Assert.IsInstanceOfType(overviewStore, typeof(FileEpisodeOverviewCleanupCandidateStore));
+            Assert.AreEqual("title-candidates.json", Path.GetFileName(GetStateFilePath(titleStore)));
+            Assert.AreEqual("overview-candidates.json", Path.GetFileName(GetStateFilePath(overviewStore)));
+        }
+
+        [TestMethod]
         public void RegisterServices_ShouldNotRegisterMissingMetadataSearchServiceAsHostedService()
         {
             using var serviceProvider = CreateServiceProvider();
@@ -61,6 +77,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
             serviceCollection.AddSingleton(Mock.Of<IEpisodeOverviewCleanupPersistence>());
 
             return serviceCollection.BuildServiceProvider();
+        }
+
+        private static string GetStateFilePath(object store)
+        {
+            var stateFilePathField = store.GetType().GetField("stateFilePath", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(stateFilePathField, $"{store.GetType().Name}.stateFilePath 未找到");
+            return (string)stateFilePathField!.GetValue(store)!;
         }
     }
 }
