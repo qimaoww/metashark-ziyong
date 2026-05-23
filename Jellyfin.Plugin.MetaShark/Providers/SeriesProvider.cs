@@ -149,6 +149,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var fileName = GetOriginalFileName(info);
             var result = new MetadataResult<Series>();
+            var personNameScope = new PersonNameResolver(this.TmdbApi, this.LibraryManager).CreateScope();
             var semantic = this.ResolveMetadataSemantic(info);
             var doubanAllowed = IsDoubanAllowed(semantic);
 
@@ -318,7 +319,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                     if (!string.IsNullOrEmpty(tmdbId))
                     {
-                        var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                        var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
                         ApplyLlmExternalIdWrites(tmdbFallbackResult, llmExternalIdResolutionResult);
                         ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
                         return FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
@@ -390,7 +391,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 if (!string.IsNullOrEmpty(tmdbId))
                 {
-                    var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, cancellationToken).ConfigureAwait(false);
+                    var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, personNameScope, cancellationToken).ConfigureAwait(false);
                     this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
                 }
 
@@ -416,7 +417,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     hasTmdbMeta,
                     hasDoubanMeta,
                     hasBridgedExplicitSearchMissingMetadataRefreshIntent));
-                var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
                 if (tmdbResult.HasMetadata)
                 {
                     await this.TryAssistEpisodeGroupMappingWithLlmAsync(tmdbId, tmdbResult.Item?.Name, info, semantic, hasBridgedExplicitSearchMissingMetadataRefreshIntent, hasBridgedExplicitOverwriteMetadataRefreshIntent, cancellationToken).ConfigureAwait(false);
@@ -1184,7 +1185,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             };
         }
 
-        private async Task<MetadataResult<Series>> GetMetadataByTmdb(string? tmdbId, ItemLookupInfo info, CancellationToken cancellationToken)
+        private async Task<MetadataResult<Series>> GetMetadataByTmdb(string? tmdbId, ItemLookupInfo info, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
             var result = new MetadataResult<Series>();
             if (string.IsNullOrEmpty(tmdbId))
@@ -1208,7 +1209,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ResultLanguage = info.MetadataLanguage ?? tvShow.OriginalLanguage,
             };
 
-            var acceptedPeopleCount = await this.AddTmdbPeopleAsync(tvShow, result, cancellationToken).ConfigureAwait(false);
+            var acceptedPeopleCount = await this.AddTmdbPeopleAsync(tvShow, result, personNameScope, cancellationToken).ConfigureAwait(false);
             this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
 
             result.QueriedById = true;
@@ -1216,7 +1217,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return result;
         }
 
-        private async Task<int> TryAddTmdbPeopleAsync(string tmdbId, ItemLookupInfo info, MetadataResult<Series> result, CancellationToken cancellationToken)
+        private async Task<int> TryAddTmdbPeopleAsync(string tmdbId, ItemLookupInfo info, MetadataResult<Series> result, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
             if (!int.TryParse(tmdbId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbNumericId))
             {
@@ -1232,12 +1233,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return 0;
             }
 
-            return await this.AddTmdbPeopleAsync(tvShow, result, cancellationToken).ConfigureAwait(false);
+            return await this.AddTmdbPeopleAsync(tvShow, result, personNameScope, cancellationToken).ConfigureAwait(false);
         }
 
-        private async Task<int> AddTmdbPeopleAsync(TvShow tvShow, MetadataResult<Series> result, CancellationToken cancellationToken)
+        private async Task<int> AddTmdbPeopleAsync(TvShow tvShow, MetadataResult<Series> result, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
-            var people = await this.GetPersonsAsync(tvShow, cancellationToken).ConfigureAwait(false);
+            var people = await this.GetPersonsAsync(tvShow, personNameScope, cancellationToken).ConfigureAwait(false);
             foreach (var person in people)
             {
                 result.AddPerson(person);
@@ -1476,7 +1477,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
         }
 
-        private async Task<IReadOnlyList<PersonInfo>> GetPersonsAsync(TvShow seriesResult, CancellationToken cancellationToken)
+        private async Task<IReadOnlyList<PersonInfo>> GetPersonsAsync(TvShow seriesResult, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
             var persons = new List<PersonInfo>();
 
@@ -1491,7 +1492,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         break;
                     }
 
-                    var localizedName = await this.ResolveSimplifiedChineseOnlyItemPersonNameAsync(actor.Name, actor.Id, cancellationToken).ConfigureAwait(false);
+                    var localizedName = await personNameScope.ResolveSimplifiedChineseOnlyItemPersonNameAsync(actor.Name, actor.Id, cancellationToken).ConfigureAwait(false);
                     if (localizedName == null)
                     {
                         continue;
@@ -1534,7 +1535,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         break;
                     }
 
-                    var localizedName = await this.ResolveSimplifiedChineseOnlyItemPersonNameAsync(actor.Name, actor.Id, cancellationToken).ConfigureAwait(false);
+                    var localizedName = await personNameScope.ResolveSimplifiedChineseOnlyItemPersonNameAsync(actor.Name, actor.Id, cancellationToken).ConfigureAwait(false);
                     if (localizedName == null)
                     {
                         continue;

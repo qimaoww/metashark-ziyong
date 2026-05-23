@@ -478,16 +478,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
         }
 
-        protected async Task<string> ResolveItemPersonNameAsync(string? currentCreditsName, int personTmdbId, CancellationToken cancellationToken)
-        {
-            return (await this.ResolveItemPersonNameCoreAsync(currentCreditsName, personTmdbId, allowRawNameFallback: true, cancellationToken).ConfigureAwait(false)) ?? string.Empty;
-        }
-
-        protected Task<string?> ResolveSimplifiedChineseOnlyItemPersonNameAsync(string? currentCreditsName, int personTmdbId, CancellationToken cancellationToken)
-        {
-            return this.ResolveItemPersonNameCoreAsync(currentCreditsName, personTmdbId, allowRawNameFallback: false, cancellationToken);
-        }
-
         protected DefaultScraperSemantic ResolveMetadataSemantic(ItemLookupInfo info)
         {
             ArgumentNullException.ThrowIfNull(info);
@@ -1295,111 +1285,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             var encodedUrl = HttpUtility.UrlEncode(url.ToString());
             return new Uri($"{baseUrl.TrimEnd('/')}/plugin/metashark/proxy/image?url={encodedUrl}", UriKind.Absolute);
-        }
-
-        private async Task<string?> ResolveItemPersonNameCoreAsync(string? currentCreditsName, int personTmdbId, bool allowRawNameFallback, CancellationToken cancellationToken)
-        {
-            if (personTmdbId > 0)
-            {
-                var localizedName = await this.GetPreferredZhCnPersonNameAsync(personTmdbId, cancellationToken).ConfigureAwait(false);
-                if (localizedName != null)
-                {
-                    await this.TryAlignExistingLibraryPersonNameAsync(personTmdbId, localizedName, cancellationToken).ConfigureAwait(false);
-                    return localizedName;
-                }
-            }
-
-            if (allowRawNameFallback)
-            {
-                var acceptedRawName = GetTrimmedNonEmptyText(currentCreditsName);
-                if (acceptedRawName != null)
-                {
-                    return acceptedRawName;
-                }
-
-                return string.Empty;
-            }
-
-            return null;
-        }
-
-        private async Task TryAlignExistingLibraryPersonNameAsync(int personTmdbId, string resolvedName, CancellationToken cancellationToken)
-        {
-            var normalizedResolvedName = GetTrimmedNonEmptyText(resolvedName);
-            if (personTmdbId <= 0 || normalizedResolvedName == null)
-            {
-                return;
-            }
-
-            var existingPerson = this.FindExistingLibraryPersonByTmdbId(personTmdbId);
-            if (existingPerson == null)
-            {
-                return;
-            }
-
-            var currentExistingName = GetTrimmedNonEmptyText(existingPerson.Name);
-            if (string.Equals(currentExistingName, normalizedResolvedName, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            existingPerson.Name = normalizedResolvedName;
-            var updateReason = existingPerson.OnMetadataChanged();
-            await existingPerson.UpdateToRepositoryAsync(updateReason, cancellationToken).ConfigureAwait(false);
-        }
-
-        private Person? FindExistingLibraryPersonByTmdbId(int personTmdbId)
-        {
-            var tmdbProviderId = personTmdbId.ToString(CultureInfo.InvariantCulture);
-            var peopleQuery = new InternalItemsQuery
-            {
-                IncludeItemTypes = new[] { BaseItemKind.Person },
-                IsVirtualItem = false,
-                IsMissing = false,
-                Recursive = true,
-            };
-
-            var items = this.LibraryManager.GetItemList(peopleQuery);
-            if (items == null)
-            {
-                return null;
-            }
-
-            return items
-                .OfType<Person>()
-                .FirstOrDefault(person => string.Equals(person.GetProviderId(MetadataProvider.Tmdb), tmdbProviderId, StringComparison.Ordinal));
-        }
-
-        private async Task<string?> GetPreferredZhCnPersonNameAsync(int personTmdbId, CancellationToken cancellationToken)
-        {
-            var person = await this.TmdbApi.GetPersonAsync(personTmdbId, "zh-CN", null, cancellationToken).ConfigureAwait(false);
-            var localizedName = GetTrimmedNonEmptyText(person?.Name);
-            if (localizedName != null)
-            {
-                return localizedName;
-            }
-
-            var translations = await this.TmdbApi.GetPersonTranslationsAsync(personTmdbId, cancellationToken).ConfigureAwait(false);
-            if (translations?.Translations == null)
-            {
-                return null;
-            }
-
-            foreach (var translation in translations.Translations)
-            {
-                if (!IsMatchingPeopleTranslationLanguage(translation, "zh-CN"))
-                {
-                    continue;
-                }
-
-                var translatedName = GetTrimmedNonEmptyText(translation.Data?.Name);
-                if (translatedName != null)
-                {
-                    return translatedName;
-                }
-            }
-
-            return null;
         }
 
         private string GetBaseUrl()

@@ -112,6 +112,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(info);
             var fileName = GetOriginalFileName(info);
             var result = new MetadataResult<Movie>();
+            var personNameScope = new PersonNameResolver(this.TmdbApi, this.LibraryManager).CreateScope();
             var semantic = this.ResolveMetadataSemantic(info);
             var doubanAllowed = IsDoubanAllowed(semantic);
 
@@ -242,7 +243,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                     if (!string.IsNullOrEmpty(tmdbId))
                     {
-                        var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                        var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
                         ApplyLlmExternalProviderIdWrites(tmdbFallbackResult, externalIdResolutionResult);
                         this.ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
                         return FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
@@ -335,7 +336,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 if (!string.IsNullOrEmpty(tmdbId))
                 {
-                    var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, cancellationToken).ConfigureAwait(false);
+                    var acceptedPeopleCount = await this.TryAddTmdbPeopleAsync(tmdbId, info, result, personNameScope, cancellationToken).ConfigureAwait(false);
                     this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
                 }
 
@@ -350,7 +351,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             if (!string.IsNullOrEmpty(tmdbId) && (shouldUseTmdbMetadataAfterCorrection || !doubanAllowed || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid)))
             {
-                var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, cancellationToken).ConfigureAwait(false);
+                var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
                 ApplyLlmExternalProviderIdWrites(tmdbResult, externalIdResolutionResult);
                 this.ApplyLlmTextCompletion(tmdbResult, llmAssistResult);
                 var finalizedResult = FinalizeMetadataResult(tmdbResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
@@ -1016,7 +1017,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 && !string.Equals(parseResult.AnimeType, "MOVIE", StringComparison.OrdinalIgnoreCase);
         }
 
-        private async Task<MetadataResult<Movie>> GetMetadataByTmdb(string tmdbId, MovieInfo info, CancellationToken cancellationToken)
+        private async Task<MetadataResult<Movie>> GetMetadataByTmdb(string tmdbId, MovieInfo info, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
             this.Log("通过 TMDb 获取电影元数据. tmdbId: \"{0}\"", tmdbId);
             var result = new MetadataResult<Movie>();
@@ -1092,13 +1093,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 movie.AddGenre(genre);
             }
 
-            var acceptedPeopleCount = await this.AddTmdbPeopleAsync(movieResult, result, cancellationToken).ConfigureAwait(false);
+            var acceptedPeopleCount = await this.AddTmdbPeopleAsync(movieResult, result, personNameScope, cancellationToken).ConfigureAwait(false);
             this.TryQueueSearchMissingMetadataOverwriteCandidate(info, tmdbId, result.People, acceptedPeopleCount);
 
             return result;
         }
 
-        private async Task<int> TryAddTmdbPeopleAsync(string tmdbId, MovieInfo info, MetadataResult<Movie> result, CancellationToken cancellationToken)
+        private async Task<int> TryAddTmdbPeopleAsync(string tmdbId, MovieInfo info, MetadataResult<Movie> result, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
             var movieResult = await this.TmdbApi
                 .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
@@ -1109,7 +1110,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return 0;
             }
 
-            return await this.AddTmdbPeopleAsync(movieResult, result, cancellationToken).ConfigureAwait(false);
+            return await this.AddTmdbPeopleAsync(movieResult, result, personNameScope, cancellationToken).ConfigureAwait(false);
         }
 
         private void ApplyLlmTextCompletion(MetadataResult<Movie> result, LlmScrapingAssistResult llmAssistResult)
@@ -1196,9 +1197,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 authoritativePeopleSnapshot.People.Count);
         }
 
-        private async Task<int> AddTmdbPeopleAsync(TMDbLib.Objects.Movies.Movie movieResult, MetadataResult<Movie> result, CancellationToken cancellationToken)
+        private async Task<int> AddTmdbPeopleAsync(TMDbLib.Objects.Movies.Movie movieResult, MetadataResult<Movie> result, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
-            var people = await this.GetPersonsAsync(movieResult, cancellationToken).ConfigureAwait(false);
+            var people = await this.GetPersonsAsync(movieResult, personNameScope, cancellationToken).ConfigureAwait(false);
             foreach (var person in people)
             {
                 result.AddPerson(person);
@@ -1207,7 +1208,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return people.Count;
         }
 
-        private async Task<IReadOnlyList<PersonInfo>> GetPersonsAsync(TMDbLib.Objects.Movies.Movie item, CancellationToken cancellationToken)
+        private async Task<IReadOnlyList<PersonInfo>> GetPersonsAsync(TMDbLib.Objects.Movies.Movie item, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
             var persons = new List<PersonInfo>();
 
@@ -1222,7 +1223,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         break;
                     }
 
-                    var localizedName = await this.ResolveSimplifiedChineseOnlyItemPersonNameAsync(actor.Name, actor.Id, cancellationToken).ConfigureAwait(false);
+                    var localizedName = await personNameScope.ResolveSimplifiedChineseOnlyItemPersonNameAsync(actor.Name, actor.Id, cancellationToken).ConfigureAwait(false);
                     if (localizedName == null)
                     {
                         continue;
@@ -1272,7 +1273,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         continue;
                     }
 
-                    var localizedName = await this.ResolveSimplifiedChineseOnlyItemPersonNameAsync(person.Name, person.Id, cancellationToken).ConfigureAwait(false);
+                    var localizedName = await personNameScope.ResolveSimplifiedChineseOnlyItemPersonNameAsync(person.Name, person.Id, cancellationToken).ConfigureAwait(false);
                     if (localizedName == null)
                     {
                         continue;
