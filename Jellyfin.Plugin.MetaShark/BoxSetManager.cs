@@ -284,15 +284,30 @@ public sealed class BoxSetManager : IHostedService, IDisposable
 
     private Task DrainQueuedCollectionsAsync()
     {
+        lock (this.syncRoot)
+        {
+            if (this.isStopped)
+            {
+                return Task.CompletedTask;
+            }
+        }
+
         if (Interlocked.CompareExchange(ref this.drainRunning, 1, 0) != 0)
         {
             return Task.CompletedTask;
         }
 
         string[] tmdbCollectionNames;
-        var drainCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource drainCompletion;
         lock (this.syncRoot)
         {
+            if (this.isStopped)
+            {
+                Interlocked.Exchange(ref this.drainRunning, 0);
+                return Task.CompletedTask;
+            }
+
+            drainCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             tmdbCollectionNames = this.queuedTmdbCollection.ToArray();
             this.queuedTmdbCollection.Clear();
             this.inFlightTmdbCollection = tmdbCollectionNames.ToList();

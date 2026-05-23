@@ -80,6 +80,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var firstDrainStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var releaseFirstDrain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var secondDrainCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondDrainAllowed = false;
 
             harness.CollectionManager
                 .Setup(x => x.AddToCollectionAsync(harness.BoxSets["Saga A"].Id, It.IsAny<IEnumerable<Guid>>()))
@@ -87,7 +88,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 .Returns(async () => await releaseFirstDrain.Task.ConfigureAwait(false));
             harness.CollectionManager
                 .Setup(x => x.AddToCollectionAsync(harness.BoxSets["Saga B"].Id, It.IsAny<IEnumerable<Guid>>()))
-                .Callback(() => secondDrainCompleted.TrySetResult())
+                .Callback(() =>
+                {
+                    Assert.IsTrue(secondDrainAllowed, "Saga B 必须由第二轮 drain 处理，不能在第一轮 drain 内提前处理。");
+                    secondDrainCompleted.TrySetResult();
+                })
                 .Returns(Task.CompletedTask);
 
             using var manager = harness.CreateManager();
@@ -98,12 +103,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             await firstDrainStarted.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
 
             harness.RaiseMovieUpdated("Saga B");
+            Assert.IsFalse(secondDrainCompleted.Task.IsCompleted, "Saga B 不应在第一轮 drain 期间被处理。");
+            harness.CollectionManager.Verify(
+                x => x.AddToCollectionAsync(harness.BoxSets["Saga B"].Id, It.IsAny<IEnumerable<Guid>>()),
+                Times.Never);
             releaseFirstDrain.SetResult();
             await firstDrain.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
 
             Assert.IsTrue(harness.Scheduler.HasScheduledCallback, "drain 中新增的 collection 应留在 pending 并重新安排 debounce。");
+            secondDrainAllowed = true;
             await harness.Scheduler.FireAsync().ConfigureAwait(false);
             await secondDrainCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            Assert.IsFalse(harness.Scheduler.HasScheduledCallback, "第二轮成功后不应残留新的 scheduled callback。");
 
             harness.CollectionManager.Verify(
                 x => x.AddToCollectionAsync(harness.BoxSets["Saga A"].Id, It.IsAny<IEnumerable<Guid>>()),
@@ -148,6 +159,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             await retryCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
 
             Assert.AreEqual(2, attemptCount);
+            Assert.IsFalse(harness.Scheduler.HasScheduledCallback, "成功重试后不应残留新的 scheduled callback。");
             await manager.StopAsync(CancellationToken.None).ConfigureAwait(false);
         }
 
@@ -168,20 +180,50 @@ namespace Jellyfin.Plugin.MetaShark.Test
             await manager.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
             harness.RaiseMovieUpdated("Saga A");
+            Assert.IsTrue(harness.Scheduler.HasScheduledCallback, "更新后应安排 debounce 回调。");
             var drain = harness.Scheduler.FireAsync();
+            await drainStarted.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             var stopTask = manager.StopAsync(CancellationToken.None);
             Assert.IsFalse(stopTask.IsCompleted, "StopAsync 应等待当前 drain 自然结束。");
-
-            await drainStarted.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             releaseDrain.SetResult();
             await drain.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             await stopTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
 
             harness.RaiseMovieUpdated("Saga A");
+            Assert.IsFalse(harness.Scheduler.HasScheduledCallback, "停止后不应再保留新的 scheduled callback。");
+
+            await harness.Scheduler.FireAsync().ConfigureAwait(false);
+            await Task.Delay(100).ConfigureAwait(false);
 
             harness.CollectionManager.Verify(
                 x => x.AddToCollectionAsync(harness.BoxSets["Saga A"].Id, It.IsAny<IEnumerable<Guid>>()),
                 Times.Once);
+        }
+
+        [TestMethod]
+        public async Task StopAsync_DropsCapturedTimerCallbackAfterStop()
+        {
+            var harness = CreateHarness(("Saga A", Guid.NewGuid()));
+            Func<Task>? scheduledCallback;
+
+            using var manager = harness.CreateManager();
+            await manager.StartAsync(CancellationToken.None).ConfigureAwait(false);
+
+            harness.RaiseMovieUpdated("Saga A");
+            Assert.IsTrue(harness.Scheduler.HasScheduledCallback, "更新后应先排队 debounce 回调。");
+            scheduledCallback = harness.Scheduler.TakeScheduledCallback();
+            Assert.IsNotNull(scheduledCallback);
+            Assert.IsFalse(harness.Scheduler.HasScheduledCallback, "取出 pending callback 后，scheduler 应该清空。");
+
+            var stopTask = manager.StopAsync(CancellationToken.None);
+            await stopTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
+            await scheduledCallback!().ConfigureAwait(false);
+            Assert.IsFalse(harness.Scheduler.HasScheduledCallback, "停止后执行已取出的 callback 也不应重新排队。");
+
+            harness.CollectionManager.Verify(
+                x => x.AddToCollectionAsync(harness.BoxSets["Saga A"].Id, It.IsAny<IEnumerable<Guid>>()),
+                Times.Never);
         }
 
         private static Harness CreateHarness(params (string CollectionName, Guid BoxSetId)[] collections)
@@ -408,6 +450,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 var scheduledCallback = this.callback;
                 this.callback = null;
                 return scheduledCallback == null ? Task.CompletedTask : scheduledCallback();
+            }
+
+            public Func<Task>? TakeScheduledCallback()
+            {
+                var scheduledCallback = this.callback;
+                this.callback = null;
+                return scheduledCallback;
             }
 
             public void Dispose()
