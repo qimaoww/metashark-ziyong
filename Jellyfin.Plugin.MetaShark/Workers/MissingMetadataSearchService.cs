@@ -34,7 +34,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
     public sealed class MissingMetadataSearchService : IMissingMetadataSearchService
     {
-        private static readonly TimeSpan QueueRefreshDelay = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan QueueRefreshDelay = TimeSpan.FromSeconds(1);
 
         private static readonly BaseItemKind[] SupportedQueryItemTypes =
         {

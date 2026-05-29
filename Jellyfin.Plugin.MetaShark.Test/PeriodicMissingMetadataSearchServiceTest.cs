@@ -370,7 +370,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 queueInvocations.Select(x => x.ItemId).ToArray());
 
             Assert.AreEqual(7, delayInvocations.Count);
-            Assert.IsTrue(delayInvocations.All(x => x.Delay == TimeSpan.FromSeconds(5)));
+            Assert.IsTrue(delayInvocations.All(x => x.Delay == TimeSpan.FromSeconds(1)));
             Assert.IsTrue(delayInvocations.All(x => x.CancellationToken.Equals(cancellationTokenSource.Token)));
 
             foreach (var invocation in queueInvocations)
@@ -389,7 +389,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ["ItemId"] = missingProviderMovie.Id,
                     ["ItemName"] = "Movie Missing Provider",
                     ["Reason"] = CandidateReason.MissingProviderIds.ToString(),
-                    ["DelaySeconds"] = 5,
+                    ["DelaySeconds"] = 1,
                 },
                 originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
                 messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingProviderIds"]);
@@ -402,7 +402,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ["ItemId"] = missingPeopleMovie.Id,
                     ["ItemName"] = "Movie Missing People State",
                     ["Reason"] = CandidateReason.MissingPeopleRefreshState.ToString(),
-                    ["DelaySeconds"] = 5,
+                    ["DelaySeconds"] = 1,
                 },
                 originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
                 messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingPeopleRefreshState"]);
@@ -415,7 +415,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ["ItemId"] = missingOverviewSeries.Id,
                     ["ItemName"] = "Series Missing Overview",
                     ["Reason"] = CandidateReason.MissingOverview.ToString(),
-                    ["DelaySeconds"] = 5,
+                    ["DelaySeconds"] = 1,
                 },
                 originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
                 messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingOverview"]);
@@ -428,7 +428,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ["ItemId"] = stalePeopleSeries.Id,
                     ["ItemName"] = "Series Stale People State",
                     ["Reason"] = CandidateReason.MissingPeopleRefreshState.ToString(),
-                    ["DelaySeconds"] = 5,
+                    ["DelaySeconds"] = 1,
                 },
                 originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
                 messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingPeopleRefreshState"]);
@@ -441,7 +441,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ["ItemId"] = defaultTitleEpisode.Id,
                     ["ItemName"] = "第 1 集",
                     ["Reason"] = CandidateReason.DefaultEpisodeTitle.ToString(),
-                    ["DelaySeconds"] = 5,
+                    ["DelaySeconds"] = 1,
                 },
                 originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
                 messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=DefaultEpisodeTitle"]);
@@ -454,7 +454,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ["ItemId"] = driftedCurrentMovie.Id,
                     ["ItemName"] = "Movie Drifted Current People State",
                     ["Reason"] = CandidateReason.MissingPeopleRefreshState.ToString(),
-                    ["DelaySeconds"] = 5,
+                    ["DelaySeconds"] = 1,
                 },
                 originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
                 messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingPeopleRefreshState"]);
@@ -467,7 +467,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     ["ItemId"] = currentNoSnapshotMovie.Id,
                     ["ItemName"] = "Movie Current People State Without Snapshot",
                     ["Reason"] = CandidateReason.MissingPeopleRefreshState.ToString(),
-                    ["DelaySeconds"] = 5,
+                    ["DelaySeconds"] = 1,
                 },
                 originalFormatContains: "[MetaShark] 已排队缺失元数据刷新",
                 messageContains: ["[MetaShark] 已排队缺失元数据刷新", "reason=MissingPeopleRefreshState"]);
@@ -517,7 +517,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(2, delayInvocations.Count);
             Assert.AreEqual(2, progress.Values.Count);
             Assert.AreEqual(100d, progress.Values[^1], 0.000001d);
-            Assert.IsTrue(delayInvocations.All(x => x.Delay == TimeSpan.FromSeconds(5)));
+            Assert.IsTrue(delayInvocations.All(x => x.Delay == TimeSpan.FromSeconds(1)));
         }
 
         [TestMethod]
