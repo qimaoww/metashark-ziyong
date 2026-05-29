@@ -52,7 +52,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
             var imageContext = ImageResolutionContext.FromItem(item, imageSemantic, doubanAllowed);
             var currentSeriesTmdbId = series?.GetProviderId(MetadataProvider.Tmdb);
-            var hasPersistedSeriesTmdbCorrection = TryResolvePersistedSeriesTmdbCorrection(series?.GetProviderId(DoubanProviderId), currentSeriesTmdbId, out var correctedSeriesTmdbId);
+            var hasPersistedSeriesTmdbCorrection = this.TryResolvePersistedSeriesTmdbCorrection(series?.GetProviderId(DoubanProviderId), currentSeriesTmdbId, out var correctedSeriesTmdbId);
             var metaSource = series?.GetMetaSource(MetaSharkPlugin.ProviderId) ?? MetaSource.None;
             if (hasPersistedSeriesTmdbCorrection)
             {

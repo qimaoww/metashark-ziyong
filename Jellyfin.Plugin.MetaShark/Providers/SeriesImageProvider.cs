@@ -52,7 +52,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var imageSemantic = this.ResolveImageSemantic();
             var doubanAllowed = IsDoubanAllowed(imageSemantic);
             var imageContext = ImageResolutionContext.FromItem(item, imageSemantic, doubanAllowed);
-            var hasPersistedSeriesTmdbCorrection = TryResolvePersistedSeriesTmdbCorrection(imageContext.DoubanId, imageContext.TmdbId, out var correctedSeriesTmdbId);
+            var hasPersistedSeriesTmdbCorrection = this.TryResolvePersistedSeriesTmdbCorrection(imageContext.DoubanId, imageContext.TmdbId, out var correctedSeriesTmdbId);
             if (hasPersistedSeriesTmdbCorrection)
             {
                 imageContext.ApplySeriesTmdbCorrection(correctedSeriesTmdbId);
@@ -187,7 +187,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var sid = item.GetProviderId(DoubanProviderId);
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var list = new List<RemoteImageInfo>();
-            var hasPersistedSeriesTmdbCorrection = TryResolvePersistedSeriesTmdbCorrection(sid, tmdbId, out var correctedSeriesTmdbId);
+            var hasPersistedSeriesTmdbCorrection = this.TryResolvePersistedSeriesTmdbCorrection(sid, tmdbId, out var correctedSeriesTmdbId);
             if (hasPersistedSeriesTmdbCorrection)
             {
                 tmdbId = correctedSeriesTmdbId;
@@ -257,7 +257,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var tmdbId = item.GetProviderId(MetadataProvider.Tmdb);
             var language = item.GetPreferredMetadataLanguage();
             var list = new List<RemoteImageInfo>();
-            if (TryResolvePersistedSeriesTmdbCorrection(item.GetProviderId(DoubanProviderId), tmdbId, out var correctedSeriesTmdbId))
+            if (this.TryResolvePersistedSeriesTmdbCorrection(item.GetProviderId(DoubanProviderId), tmdbId, out var correctedSeriesTmdbId))
             {
                 tmdbId = correctedSeriesTmdbId;
             }

@@ -62,7 +62,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             var seriesTmdbIdText = series?.GetProviderId(MetadataProvider.Tmdb);
-            if (TryResolvePersistedSeriesTmdbCorrection(series?.GetProviderId(DoubanProviderId), seriesTmdbIdText, out var correctedSeriesTmdbId))
+            if (this.TryResolvePersistedSeriesTmdbCorrection(series?.GetProviderId(DoubanProviderId), seriesTmdbIdText, out var correctedSeriesTmdbId))
             {
                 seriesTmdbIdText = correctedSeriesTmdbId;
             }

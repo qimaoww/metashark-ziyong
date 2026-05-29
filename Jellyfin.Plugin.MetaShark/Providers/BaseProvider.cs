@@ -349,29 +349,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return DefaultScraperPolicy.IsDoubanAllowed(Config, semantic);
         }
 
-        protected bool TryResolvePersistedSeriesTmdbCorrection(string? seriesDoubanId, out string correctedTmdbId)
-        {
-            correctedTmdbId = string.Empty;
-            return !string.IsNullOrWhiteSpace(seriesDoubanId)
-                && this.LlmTmdbCorrectionMapFacade.TryGetCorrection(Config, nameof(Series), seriesDoubanId, out correctedTmdbId);
-        }
-
-        protected bool TryResolvePersistedSeriesTmdbCorrection(string? seriesDoubanId, string? seriesTmdbId, out string correctedTmdbId)
-        {
-            if (this.TryResolvePersistedSeriesTmdbCorrection(seriesDoubanId, out correctedTmdbId))
-            {
-                return true;
-            }
-
-            correctedTmdbId = string.Empty;
-            if (string.IsNullOrWhiteSpace(seriesTmdbId))
-            {
-                return false;
-            }
-
-            return this.LlmTmdbCorrectionMapFacade.TryFindCorrectionByTmdbId(Config, nameof(Series), seriesTmdbId, out correctedTmdbId);
-        }
-
         /// <summary>
          /// Adjusts the image's language code preferring the 5 letter language code eg. en-US.
          /// </summary>
@@ -489,6 +466,29 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return info.IsAutomated ? DefaultScraperSemantic.AutomaticRefresh : DefaultScraperSemantic.UserRefresh;
+        }
+
+        protected bool TryResolvePersistedSeriesTmdbCorrection(string? seriesDoubanId, out string correctedTmdbId)
+        {
+            correctedTmdbId = string.Empty;
+            return !string.IsNullOrWhiteSpace(seriesDoubanId)
+                && this.LlmTmdbCorrectionMapFacade.TryGetCorrection(Config, nameof(Series), seriesDoubanId, out correctedTmdbId);
+        }
+
+        protected bool TryResolvePersistedSeriesTmdbCorrection(string? seriesDoubanId, string? seriesTmdbId, out string correctedTmdbId)
+        {
+            if (this.TryResolvePersistedSeriesTmdbCorrection(seriesDoubanId, out correctedTmdbId))
+            {
+                return true;
+            }
+
+            correctedTmdbId = string.Empty;
+            if (string.IsNullOrWhiteSpace(seriesTmdbId))
+            {
+                return false;
+            }
+
+            return this.LlmTmdbCorrectionMapFacade.TryFindCorrectionByTmdbId(Config, nameof(Series), seriesTmdbId, out correctedTmdbId);
         }
 
 #pragma warning disable SA1204
