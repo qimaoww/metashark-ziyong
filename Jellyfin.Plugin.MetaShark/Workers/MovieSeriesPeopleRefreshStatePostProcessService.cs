@@ -118,8 +118,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
+            var itemLocked = MetadataLockGuard.IsItemLocked(item);
             var currentState = this.stateStore.GetState(item.Id);
-            if (this.TryQueueSearchMissingMetadataOverwriteRefresh(item, triggerName, e.UpdateReason, out var authoritativePeopleSnapshot))
+            TmdbAuthoritativePeopleSnapshot? authoritativePeopleSnapshot = null;
+            if (!itemLocked && this.TryQueueSearchMissingMetadataOverwriteRefresh(item, triggerName, e.UpdateReason, out authoritativePeopleSnapshot))
             {
                 return;
             }
@@ -130,12 +132,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            var legacyResidueRemoved = RemoveLegacyPeopleRefreshStateProviderId(item);
+            var legacyResidueRemoved = !itemLocked && RemoveLegacyPeopleRefreshStateProviderId(item);
 
             if (authoritativePeopleSnapshot == null && PeopleRefreshState.HasCurrentState(item, currentState))
             {
                 await this.PersistLegacyResidueCleanupAsync(item, triggerName, e.UpdateReason, legacyResidueRemoved, cancellationToken).ConfigureAwait(false);
-                var legacyNfoResidueRemoved = this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
+                var legacyNfoResidueRemoved = !itemLocked && this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
 
                 if (legacyResidueRemoved || legacyNfoResidueRemoved)
                 {
@@ -187,7 +189,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
 
             await this.PersistLegacyResidueCleanupAsync(item, triggerName, e.UpdateReason, legacyResidueRemoved, cancellationToken).ConfigureAwait(false);
-            this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
+            if (!itemLocked)
+            {
+                this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
+            }
 
             this.logger.LogInformation(
                 "[MetaShark] 已结清影视人物刷新状态. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} stateVersion={StateVersion}.",

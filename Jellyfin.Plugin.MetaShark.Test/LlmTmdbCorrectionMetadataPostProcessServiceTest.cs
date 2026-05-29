@@ -109,6 +109,111 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(store.Peek(item.Id));
         }
 
+        [TestMethod]
+        public async Task TryApplyAsync_NameLockedWithQueuedCorrectionSnapshot_PreservesNameAndOriginalTitle()
+        {
+            var store = new InMemoryLlmTmdbCorrectionMetadataStore();
+            var item = new TrackingSeries
+            {
+                Id = Guid.NewGuid(),
+                Name = "名称锁旧标题",
+                OriginalTitle = "Name Locked Original",
+                Overview = "旧简介",
+                ProductionYear = 2001,
+                PremiereDate = new DateTime(2001, 1, 1),
+                Path = "/dongman/动画/名称锁剧集",
+                LockedFields = new[] { MetadataField.Name },
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [Providers.BaseProvider.DoubanProviderId] = "name-locked-douban",
+                    [MetaSharkPlugin.ProviderId] = "Douban_name-locked-douban",
+                    [MetadataProvider.Tmdb.ToString()] = "111",
+                },
+            };
+            var snapshot = new LlmTmdbCorrectionMetadataSnapshot
+            {
+                ItemId = item.Id,
+                ItemPath = item.Path,
+                TmdbId = "222",
+                Name = "权威新标题",
+                OriginalTitle = "Authoritative Original",
+                Overview = "权威新简介",
+                ProductionYear = 2024,
+                PremiereDate = new DateTime(2024, 2, 3),
+            };
+            snapshot.ProviderIds[MetadataProvider.Imdb.ToString()] = "ttnew";
+            store.Save(snapshot);
+            var service = new LlmTmdbCorrectionMetadataPostProcessService(store, NullLogger<LlmTmdbCorrectionMetadataPostProcessService>.Instance);
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = item,
+                    UpdateReason = ItemUpdateType.MetadataImport | ItemUpdateType.MetadataDownload,
+                },
+                LlmTmdbCorrectionMetadataPostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual("名称锁旧标题", item.Name);
+            Assert.AreEqual("Name Locked Original", item.OriginalTitle);
+            Assert.AreEqual("权威新简介", item.Overview);
+            Assert.AreEqual(2024, item.ProductionYear);
+            Assert.AreEqual(new DateTime(2024, 2, 3), item.PremiereDate);
+            Assert.AreEqual("222", item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("Tmdb_222", item.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.AreEqual("ttnew", item.GetProviderId(MetadataProvider.Imdb));
+            Assert.IsFalse(item.ProviderIds.ContainsKey(Providers.BaseProvider.DoubanProviderId));
+            Assert.AreEqual(1, item.UpdateToRepositoryCallCount);
+            Assert.IsNull(store.Peek(item.Id));
+        }
+
+        [TestMethod]
+        public async Task TryApplyAsync_OverviewLockedWithQueuedCorrectionSnapshot_PreservesOverview()
+        {
+            var store = new InMemoryLlmTmdbCorrectionMetadataStore();
+            var item = new TrackingSeries
+            {
+                Id = Guid.NewGuid(),
+                Name = "旧标题",
+                Overview = "简介锁旧简介",
+                Path = "/dongman/动画/简介锁剧集",
+                LockedFields = new[] { MetadataField.Overview },
+                ProviderIds = new Dictionary<string, string>
+                {
+                    [Providers.BaseProvider.DoubanProviderId] = "overview-locked-douban",
+                    [MetaSharkPlugin.ProviderId] = "Douban_overview-locked-douban",
+                    [MetadataProvider.Tmdb.ToString()] = "111",
+                },
+            };
+            var snapshot = new LlmTmdbCorrectionMetadataSnapshot
+            {
+                ItemId = item.Id,
+                ItemPath = item.Path,
+                TmdbId = "222",
+                Name = "权威新标题",
+                Overview = "权威新简介",
+            };
+            store.Save(snapshot);
+            var service = new LlmTmdbCorrectionMetadataPostProcessService(store, NullLogger<LlmTmdbCorrectionMetadataPostProcessService>.Instance);
+
+            await service.TryApplyAsync(
+                new ItemChangeEventArgs
+                {
+                    Item = item,
+                    UpdateReason = ItemUpdateType.MetadataImport | ItemUpdateType.MetadataDownload,
+                },
+                LlmTmdbCorrectionMetadataPostProcessService.ItemUpdatedTrigger,
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual("权威新标题", item.Name);
+            Assert.AreEqual("简介锁旧简介", item.Overview);
+            Assert.AreEqual("222", item.GetProviderId(MetadataProvider.Tmdb));
+            Assert.AreEqual("Tmdb_222", item.GetProviderId(MetaSharkPlugin.ProviderId));
+            Assert.IsFalse(item.ProviderIds.ContainsKey(Providers.BaseProvider.DoubanProviderId));
+            Assert.AreEqual(1, item.UpdateToRepositoryCallCount);
+            Assert.IsNull(store.Peek(item.Id));
+        }
+
         private sealed class TrackingSeries : Series
         {
             public int MetadataChangedCallCount { get; private set; }

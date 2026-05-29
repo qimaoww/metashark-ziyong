@@ -5,7 +5,6 @@
 namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
 {
     using System;
-    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Core;
@@ -131,7 +130,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
                 return;
             }
 
-            if (episode.IsLocked || episode.LockedFields?.Contains(MetadataField.Name) == true)
+            if (!MetadataLockGuard.CanWriteField(episode, MetadataField.Name))
             {
                 this.pendingResolver.Complete(candidate);
                 this.LogSkip("Locked", triggerName, episode, currentTitle, candidateTitle, e.UpdateReason, null);

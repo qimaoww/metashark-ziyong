@@ -10,6 +10,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
@@ -70,16 +71,24 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            if (item.IsLocked)
+            if (MetadataLockGuard.IsItemLocked(item))
             {
                 this.metadataStore.ReleaseClaim(snapshot.ItemId, snapshot.ItemPath, claimToken);
                 return;
             }
 
             var changed = false;
-            changed |= SetTextIfDifferent(item.Name, snapshot.Name, value => item.Name = value);
-            changed |= SetTextIfDifferent(item.OriginalTitle, snapshot.OriginalTitle, value => item.OriginalTitle = value);
-            changed |= SetTextIfDifferent(item.Overview, snapshot.Overview, value => item.Overview = value);
+            if (MetadataLockGuard.CanWriteNameLikeField(item))
+            {
+                changed |= SetTextIfDifferent(item.Name, snapshot.Name, value => item.Name = value);
+                changed |= SetTextIfDifferent(item.OriginalTitle, snapshot.OriginalTitle, value => item.OriginalTitle = value);
+            }
+
+            if (MetadataLockGuard.CanWriteField(item, MetadataField.Overview))
+            {
+                changed |= SetTextIfDifferent(item.Overview, snapshot.Overview, value => item.Overview = value);
+            }
+
             changed |= SetIntIfDifferent(item.ProductionYear, snapshot.ProductionYear, value => item.ProductionYear = value);
             changed |= SetDateIfDifferent(item.PremiereDate, snapshot.PremiereDate, value => item.PremiereDate = value);
             changed |= SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), snapshot.TmdbId);

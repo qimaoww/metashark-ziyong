@@ -176,6 +176,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     return;
                 }
 
+                if (!MetadataLockGuard.CanWriteField(existingPerson, MetadataField.Name))
+                {
+                    return;
+                }
+
                 var currentExistingName = GetTrimmedNonEmptyText(existingPerson.Name);
                 if (string.Equals(currentExistingName, normalizedResolvedName, StringComparison.Ordinal))
                 {

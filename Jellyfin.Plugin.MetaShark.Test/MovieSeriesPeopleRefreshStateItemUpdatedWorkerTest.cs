@@ -571,6 +571,52 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public async Task TryApplyAsync_LockedCurrentStateWithLegacyResidue_ShouldNotRewriteProviderIdsOrNfo()
+        {
+            var stateStore = new TestPeopleRefreshStateStore();
+            var service = CreatePostProcessService(stateStore);
+            var tempRoot = Path.Combine(Path.GetTempPath(), $"metashark-locked-nfo-cleanup-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tempRoot);
+
+            try
+            {
+                var series = CreateSeries(includeTmdb: true);
+                series.IsLocked = true;
+                series.Path = tempRoot;
+                AddLegacyPeopleRefreshStateProviderId(series, "tmdb-people-strict-zh-cn-v1");
+                var nfoPath = Path.Combine(tempRoot, "tvshow.nfo");
+                File.WriteAllText(
+                    nfoPath,
+                    "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n<tvshow>\n  <title>Series A</title>\n  <metasharkpeoplerefreshstateid>tmdb-people-strict-zh-cn-v1</metasharkpeoplerefreshstateid>\n  <tmdbid>123456</tmdbid>\n</tvshow>\n");
+                PeopleRefreshStateTestHelper.SaveState(stateStore, series, PeopleRefreshState.CurrentVersion);
+                var originalSaveCallCount = stateStore.SaveCallCount;
+
+                await service.TryApplyAsync(
+                    new ItemChangeEventArgs
+                    {
+                        Item = series,
+                        UpdateReason = ItemUpdateType.MetadataDownload,
+                    },
+                    MovieSeriesPeopleRefreshStatePostProcessService.ItemUpdatedTrigger,
+                    CancellationToken.None).ConfigureAwait(false);
+
+                Assert.AreEqual(originalSaveCallCount, stateStore.SaveCallCount);
+                Assert.AreEqual(0, series.MetadataChangedCallCount);
+                Assert.AreEqual(0, series.UpdateToRepositoryCallCount);
+                Assert.IsTrue(series.ProviderIds?.ContainsKey("MetaSharkPeopleRefreshState") ?? false);
+                var nfo = File.ReadAllText(nfoPath);
+                Assert.IsTrue(nfo.Contains("metasharkpeoplerefreshstateid", StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                if (Directory.Exists(tempRoot))
+                {
+                    Directory.Delete(tempRoot, recursive: true);
+                }
+            }
+        }
+
+        [TestMethod]
         public async Task StartAsync_ForwardsItemUpdatedEventToPostProcessServiceAndLogsStructuredMessage()
         {
             var libraryManagerStub = new Mock<ILibraryManager>();

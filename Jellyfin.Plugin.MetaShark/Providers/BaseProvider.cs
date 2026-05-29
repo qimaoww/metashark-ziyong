@@ -525,10 +525,23 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return;
             }
 
+            if (MetadataLockGuard.IsItemLocked(item))
+            {
+                return;
+            }
+
             var metadataChanged = false;
-            metadataChanged |= SetTextIfDifferent(item.Name, authoritativeMetadataItem.Name, value => item.Name = value);
-            metadataChanged |= SetTextIfDifferent(item.OriginalTitle, authoritativeMetadataItem.OriginalTitle, value => item.OriginalTitle = value);
-            metadataChanged |= SetTextIfDifferent(item.Overview, authoritativeMetadataItem.Overview, value => item.Overview = value);
+            if (MetadataLockGuard.CanWriteNameLikeField(item))
+            {
+                metadataChanged |= SetTextIfDifferent(item.Name, authoritativeMetadataItem.Name, value => item.Name = value);
+                metadataChanged |= SetTextIfDifferent(item.OriginalTitle, authoritativeMetadataItem.OriginalTitle, value => item.OriginalTitle = value);
+            }
+
+            if (MetadataLockGuard.CanWriteField(item, MetadataField.Overview))
+            {
+                metadataChanged |= SetTextIfDifferent(item.Overview, authoritativeMetadataItem.Overview, value => item.Overview = value);
+            }
+
             metadataChanged |= SetProductionYearIfDifferent(item, authoritativeMetadataItem);
             metadataChanged |= SetPremiereDateIfDifferent(item, authoritativeMetadataItem);
 
@@ -582,6 +595,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 _ => null,
             };
             if (item == null)
+            {
+                return;
+            }
+
+            if (MetadataLockGuard.IsItemLocked(item))
             {
                 return;
             }

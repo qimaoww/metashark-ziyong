@@ -5,7 +5,6 @@
 namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
-    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Core;
@@ -105,7 +104,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            if (episode.IsLocked || episode.LockedFields?.Contains(MetadataField.Overview) == true)
+            if (!MetadataLockGuard.CanWriteField(episode, MetadataField.Overview))
             {
                 this.pendingResolver.Complete(candidate);
                 return;
