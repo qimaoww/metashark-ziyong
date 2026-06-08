@@ -207,6 +207,29 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
         }
 
         [TestMethod]
+        public void RefreshSeriesByEpisodeGroupMap_DuplicateTmdbIdWithMissingOldPath_QueuesOnlyExistingPath()
+        {
+            const string oldPath = "/old/Series A";
+            const string newPath = "/new/Series A";
+            var staleSeries = CreateSeries(Guid.NewGuid(), "Series stale path", "65942", oldPath);
+            var currentSeries = CreateSeries(Guid.NewGuid(), "Series current path", "65942", newPath);
+
+            using var harness = CreateHarness(
+                items: new[] { staleSeries, currentSeries },
+                existingPaths: new[] { newPath });
+
+            var result = harness.Controller.RefreshSeriesByEpisodeGroupMap(new TmdbEpisodeGroupRefreshRequest
+            {
+                OldMapping = string.Empty,
+                NewMapping = "65942=group-a",
+            });
+
+            Assert.AreEqual(1, result.Code);
+            Assert.AreEqual(CreateExpectedSummary(queued: 1, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
+            AssertQueuedSeries(harness.QueueCalls, currentSeries.Id);
+        }
+
+        [TestMethod]
         public void RefreshSeriesByEpisodeGroupMap_LlmWrittenCanonicalMap_UsesExistingAddedMappingQueueSemantics()
         {
             var llmMappedSeries = CreateSeries(Guid.NewGuid(), "LLM mapped series", "65942");
@@ -226,12 +249,13 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             AssertQueuedSeries(harness.QueueCalls, llmMappedSeries.Id);
         }
 
-        private static Series CreateSeries(Guid id, string name, string tmdbId)
+        private static Series CreateSeries(Guid id, string name, string tmdbId, string? path = null)
         {
             return new Series
             {
                 Id = id,
                 Name = name,
+                Path = path,
                 ProviderIds = new Dictionary<string, string>
                 {
                     [MetadataProvider.Tmdb.ToString()] = tmdbId,
@@ -347,7 +371,7 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.Fail("Could not replace MetaSharkPlugin configuration for tests.");
         }
 
-        private ControllerHarness CreateHarness(IEnumerable<BaseItem> items, string currentMapping = "", string currentLlmMapping = "")
+        private ControllerHarness CreateHarness(IEnumerable<BaseItem> items, string currentMapping = "", string currentLlmMapping = "", IEnumerable<string>? existingPaths = null)
         {
             EnsurePluginInstance();
             ReplacePluginConfiguration(new PluginConfiguration
@@ -368,6 +392,12 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
                 .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, options, priority) => queueCalls.Add(new QueueRefreshCall(itemId, options, priority)));
 
+            var existingPathSet = new HashSet<string>(existingPaths ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+            var fileSystemStub = new Mock<IFileSystem>();
+            fileSystemStub
+                .Setup(x => x.DirectoryExists(It.IsAny<string>()))
+                .Returns<string>(path => existingPathSet.Contains(path));
+
             var loggerStub = new Mock<ILogger<ApiController>>();
             loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
 
@@ -376,7 +406,7 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 new DoubanApi(this.loggerFactory),
                 libraryManagerStub.Object,
                 providerManagerStub.Object,
-                new Mock<IFileSystem>().Object,
+                fileSystemStub.Object,
                 loggerStub.Object);
 
             return new ControllerHarness(controller, materializedItems, libraryManagerStub, queueCalls, loggerStub);

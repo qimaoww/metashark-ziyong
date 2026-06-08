@@ -243,6 +243,10 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 ReplaceAllMetadata = true,
                 ReplaceAllImages = false,
             };
+            var queueableItems = EpisodeGroupRefreshQueueSelector.SelectQueueableItems(
+                items,
+                this.fileSystem,
+                item => item.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var tmdbId) ? tmdbId : null);
 
             var queued = 0;
             foreach (var item in items)
@@ -257,6 +261,11 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 var newGroupId = refreshResult.NewSnapshot.TryGetGroupId(tmdbId, out var resolvedGroupId)
                     ? resolvedGroupId
                     : string.Empty;
+
+                if (!queueableItems.Contains(item))
+                {
+                    continue;
+                }
 
                 if (IsRecentlyQueuedRefresh(tmdbId, newGroupId))
                 {

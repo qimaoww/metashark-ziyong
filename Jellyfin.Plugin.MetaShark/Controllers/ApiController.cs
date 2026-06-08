@@ -173,6 +173,10 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
                 ReplaceAllMetadata = true,
                 ReplaceAllImages = false,
             };
+            var queueableItems = EpisodeGroupRefreshQueueSelector.SelectQueueableItems(
+                items,
+                this.fileSystem,
+                item => item.ProviderIds.TryGetValue(MediaBrowser.Model.Entities.MetadataProvider.Tmdb.ToString(), out var tmdbId) ? tmdbId : null);
 
             var queued = 0;
             foreach (var item in items)
@@ -190,6 +194,11 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
                 if (item.Id == Guid.Empty)
                 {
                     LogSkipRefreshEmptyId(this.logger, item.Name, null);
+                    continue;
+                }
+
+                if (!queueableItems.Contains(item))
+                {
                     continue;
                 }
 
