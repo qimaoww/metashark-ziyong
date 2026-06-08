@@ -494,12 +494,144 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("123=candidate-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("映射后命中的正片", result.Item!.Name);
-            Assert.AreEqual(2, result.Item.ParentIndexNumber);
+            Assert.AreEqual(1, result.Item.ParentIndexNumber);
             Assert.AreEqual(1, result.Item.IndexNumber);
             AssertQueuedSeries(harness.QueueRefreshCalls, mappedSeries.Id);
             var prompt = harness.LlmEpisodeGroupMappingApi.Prompts.Single();
             LlmProviderFlowTestHelpers.AssertNoSensitiveContent(prompt);
             StringAssert.Contains(prompt, "TV/Series A/Season 02/S02E01.mkv");
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenManualGroupMappingResolvesDifferentPosition_ReturnsMappedPosition()
+        {
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(TestItemIdString(), replaceAllMetadata: true),
+                tmdbEpisodeName: null,
+                parentIndexNumber: 2,
+                indexNumber: 1);
+            MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap = "123=manual-group";
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                harness.TmdbApi,
+                "manual-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 2,
+                    name: "映射第二季",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 0, seasonNumber: 1, episodeNumber: 1)));
+            SeedEpisode(harness.TmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "手动映射后的真实单集",
+                Overview = "手动映射命中第一季第一集。",
+                VoteAverage = 7.9,
+                AirDate = new DateTime(2024, 3, 4),
+            });
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("手动映射后的真实单集", result.Item!.Name);
+            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(1, result.Item.IndexNumber);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenLlmGroupMappingResolvesDifferentPosition_ReturnsMappedPosition()
+        {
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(TestItemIdString(), replaceAllMetadata: true),
+                tmdbEpisodeName: null,
+                parentIndexNumber: 2,
+                indexNumber: 1);
+            MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap = "123=llm-group";
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                harness.TmdbApi,
+                "llm-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 2,
+                    name: "LLM 映射第二季",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 0, seasonNumber: 1, episodeNumber: 1)));
+            SeedEpisode(harness.TmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "LLM 映射后的真实单集",
+                Overview = "LLM 映射命中第一季第一集。",
+                VoteAverage = 8.1,
+                AirDate = new DateTime(2024, 4, 5),
+            });
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("LLM 映射后的真实单集", result.Item!.Name);
+            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(1, result.Item.IndexNumber);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenManualAndLlmGroupMappingsExist_ManualMappedPositionWins()
+        {
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(TestItemIdString(), replaceAllMetadata: true),
+                tmdbEpisodeName: null,
+                parentIndexNumber: 2,
+                indexNumber: 1);
+            MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap = "123=manual-group";
+            MetaSharkPlugin.Instance.Configuration.LlmTmdbEpisodeGroupMap = "123=llm-group";
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                harness.TmdbApi,
+                "manual-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 2,
+                    name: "手动映射第二季",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 0, seasonNumber: 1, episodeNumber: 1)));
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                harness.TmdbApi,
+                "llm-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 2,
+                    name: "LLM 映射第二季",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 0, seasonNumber: 3, episodeNumber: 7)));
+            SeedEpisode(harness.TmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "手动映射优先的真实单集",
+                VoteAverage = 8.0,
+                AirDate = new DateTime(2024, 6, 7),
+            });
+            SeedEpisode(harness.TmdbApi, 123, 3, 7, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "不应使用的 LLM 映射单集",
+                VoteAverage = 6.0,
+                AirDate = new DateTime(2024, 7, 8),
+            });
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("手动映射优先的真实单集", result.Item!.Name);
+            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(1, result.Item.IndexNumber);
+        }
+
+        [TestMethod]
+        public async Task GetMetadata_WhenGroupMappingInvalid_ReturnsOriginalPosition()
+        {
+            using var harness = CreateHarness(
+                httpContext: LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(TestItemIdString(), replaceAllMetadata: true),
+                tmdbEpisodeName: "原始位置单集",
+                parentIndexNumber: 2,
+                indexNumber: 1);
+            MetaSharkPlugin.Instance!.Configuration.TmdbEpisodeGroupMap = "123=invalid-group";
+            ExplicitEpisodeGroupMappingTestHelper.SeedMissingEpisodeGroupById(harness.TmdbApi, "invalid-group", "zh-CN");
+
+            var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.AreEqual("原始位置单集", result.Item!.Name);
+            Assert.AreEqual(2, result.Item.ParentIndexNumber);
+            Assert.AreEqual(1, result.Item.IndexNumber);
         }
 
         [TestMethod]

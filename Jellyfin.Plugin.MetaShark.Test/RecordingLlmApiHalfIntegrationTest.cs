@@ -182,7 +182,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             recordingApi.ExpectNoBackendCall("TextCompletionDisabled");
-            loggerFactory.ExpectRejectedReason("TextCompletionDisabled", "Movie");
+            loggerFactory.ExpectNoLlmAssistTriggerReason("TextCompletionDisabled", "Movie");
             recordingApi.AssertNoSensitiveLogFields();
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("Disabled Text Movie overview", result.Item!.Overview);
@@ -207,7 +207,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             recordingApi.ExpectNoBackendCall("TextCompletionDisabled");
-            loggerFactory.ExpectRejectedReason("TextCompletionDisabled", "Series");
+            loggerFactory.ExpectNoLlmAssistTriggerReason("TextCompletionDisabled", "Series");
             recordingApi.AssertNoSensitiveLogFields();
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("Disabled Text Series overview", result.Item!.Overview);
@@ -228,7 +228,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             recordingApi.ExpectNoBackendCall("TextCompletionDisabled");
-            loggerFactory.ExpectRejectedReason("TextCompletionDisabled", "Season");
+            loggerFactory.ExpectNoLlmAssistTriggerReason("TextCompletionDisabled", "Season");
             recordingApi.AssertNoSensitiveLogFields();
             Assert.IsFalse(result.HasMetadata);
         }
@@ -251,7 +251,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
 
             recordingApi.ExpectNoBackendCall("TextCompletionDisabled");
-            loggerFactory.ExpectRejectedReason("TextCompletionDisabled", "Episode");
+            loggerFactory.ExpectNoLlmAssistTriggerReason("TextCompletionDisabled", "Episode");
             recordingApi.AssertNoSensitiveLogFields();
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("第 1 集", result.Item!.Name);
@@ -958,6 +958,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         && entry.State.TryGetValue("MediaType", out var actualMediaType)
                         && string.Equals(actualMediaType?.ToString(), mediaType, StringComparison.Ordinal)),
                     $"Expected captured LLM rejection reason {reasonCode} for {mediaType} on {eventName}.");
+            }
+
+            public void ExpectNoLlmAssistTriggerReason(string reasonCode, string mediaType)
+            {
+                Assert.IsFalse(
+                    this.provider.Entries.Any(entry =>
+                        entry.Level == LogLevel.Information
+                        && (string.Equals(entry.EventId.Name, "LlmAssistTrigger.Evaluated", StringComparison.Ordinal)
+                            || string.Equals(entry.EventId.Name, "LlmAssistTrigger.Rejected", StringComparison.Ordinal))
+                        && entry.State.TryGetValue("ReasonCode", out var actualReason)
+                        && string.Equals(actualReason?.ToString(), reasonCode, StringComparison.Ordinal)
+                        && entry.State.TryGetValue("MediaType", out var actualMediaType)
+                        && string.Equals(actualMediaType?.ToString(), mediaType, StringComparison.Ordinal)),
+                    $"Did not expect captured LLM trigger reason {reasonCode} for {mediaType}.");
             }
 
             public void ExpectReasonCode(string reasonCode, string mediaType)

@@ -190,7 +190,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 await this.TryAssistEpisodeGroupMappingWithLlmAsync(seriesTmdbId, info, semantic, cancellationToken).ConfigureAwait(false);
             }
 
-            var episodeResult = await this.GetEpisodeAsync(
+            var resolvedEpisodeRequest = await this.ResolveEpisodeRequestAsync(
                     seriesTmdbId.ToInt(),
                     seasonNumber,
                     episodeNumber,
@@ -199,9 +199,25 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     titleMetadataLanguage,
                     cancellationToken)
                 .ConfigureAwait(false);
+            if (resolvedEpisodeRequest == null)
+            {
+                this.Log("未能解析 TMDb 单集请求. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, seasonNumber, episodeNumber, info.SeriesDisplayOrder);
+                return result;
+            }
+
+            var resolvedSeasonNumber = resolvedEpisodeRequest.Value.SeasonNumber;
+            var resolvedEpisodeNumber = resolvedEpisodeRequest.Value.EpisodeNumber;
+            var episodeResult = await this.TmdbApi.GetEpisodeAsync(
+                    seriesTmdbId.ToInt(),
+                    resolvedSeasonNumber,
+                    resolvedEpisodeNumber,
+                    titleMetadataLanguage ?? string.Empty,
+                    titleMetadataLanguage ?? string.Empty,
+                    cancellationToken)
+                .ConfigureAwait(false);
             if (episodeResult == null)
             {
-                this.Log("未找到 TMDb 单集数据. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, seasonNumber, episodeNumber, info.SeriesDisplayOrder);
+                this.Log("未找到 TMDb 单集数据. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, resolvedSeasonNumber, resolvedEpisodeNumber, info.SeriesDisplayOrder);
                 return result;
             }
 
@@ -221,11 +237,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var seasonOverview = seasonItem?.Overview;
             var titleResolution = await this.ResolveEffectiveEpisodeProviderTitleAsync(
                     seriesTmdbId.ToInt(),
-                    seasonNumber,
-                    episodeNumber,
-                    info.SeriesDisplayOrder,
+                    resolvedSeasonNumber,
+                    resolvedEpisodeNumber,
                     titleMetadataLanguage,
-                    info.MetadataLanguage,
                     episodeResult.Name,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -233,13 +247,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var detailsOverview = TrimEpisodeLocalizedValue(CreateEpisodeLocalizedValue(
                 episodeResult.Overview,
                 ResolveEpisodeOverviewSourceLanguage(titleMetadataLanguage)));
-            var translationOverview = await this.GetEpisodeTranslationOverviewAsync(
+            var translationOverview = await this.TmdbApi.GetEpisodeTranslationOverviewAsync(
                     seriesTmdbId.ToInt(),
-                    seasonNumber,
-                    episodeNumber,
-                    info.SeriesDisplayOrder,
+                    resolvedSeasonNumber,
+                    resolvedEpisodeNumber,
                     titleMetadataLanguage,
-                    info.MetadataLanguage,
                     cancellationToken)
                 .ConfigureAwait(false);
             var overviewDecision = ResolveEpisodeOverviewPersistence(translationOverview?.SourceLanguage, translationOverview?.Value, seriesOverview, seasonOverview);
@@ -250,8 +262,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var item = new Episode
             {
-                IndexNumber = episodeNumber,
-                ParentIndexNumber = seasonNumber,
+                IndexNumber = resolvedEpisodeNumber,
+                ParentIndexNumber = resolvedSeasonNumber,
             };
 
             if (!suppressLlmForImplicitSearchMissingFallback)
@@ -280,7 +292,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 result.ResultLanguage = overviewDecision.ResultLanguage;
             }
 
-            if (seasonNumber == 0 && Config.EnableTvdbSpecialsWithinSeasons)
+            if (resolvedSeasonNumber == 0 && Config.EnableTvdbSpecialsWithinSeasons)
             {
                 var seriesTvdbId = await this.ResolveSeriesTvdbIdAsync(info, seriesTmdbId, cancellationToken)
                     .ConfigureAwait(false);
@@ -289,11 +301,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     LogTvdbPlacementLookup(
                         this.Logger,
                         seriesTvdbId,
-                        seasonNumber.Value,
-                        episodeNumber.Value,
+                        resolvedSeasonNumber,
+                        resolvedEpisodeNumber,
                         info.MetadataLanguage ?? string.Empty,
                         null);
-                    var placement = await this.TryBuildTvdbSpecialPlacementAsync(seriesTvdbId, episodeNumber, info.MetadataLanguage, cancellationToken)
+                    var placement = await this.TryBuildTvdbSpecialPlacementAsync(seriesTvdbId, resolvedEpisodeNumber, info.MetadataLanguage, cancellationToken)
                         .ConfigureAwait(false);
                     if (placement != null)
                     {
@@ -303,20 +315,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         this.Log(
                             "TVDB 特别篇定位结果. tvdbId: {0} s{1}e{2} -> beforeSeason: {3} beforeEpisode: {4} afterSeason: {5}",
                             seriesTvdbId,
-                            seasonNumber,
-                            episodeNumber,
+                            resolvedSeasonNumber,
+                            resolvedEpisodeNumber,
                             item.AirsBeforeSeasonNumber,
                             item.AirsBeforeEpisodeNumber,
                             item.AirsAfterSeasonNumber);
                     }
                     else
                     {
-                        LogTvdbPlacementNotFound(this.Logger, seriesTvdbId, seasonNumber.Value, episodeNumber.Value, null);
+                        LogTvdbPlacementNotFound(this.Logger, seriesTvdbId, resolvedSeasonNumber, resolvedEpisodeNumber, null);
                     }
                 }
                 else
                 {
-                    this.Log("跳过 TVDB 特别篇定位，缺少 TVDB id. s{0}e{1}", seasonNumber, episodeNumber);
+                    this.Log("跳过 TVDB 特别篇定位，缺少 TVDB id. s{0}e{1}", resolvedSeasonNumber, resolvedEpisodeNumber);
                 }
             }
 
@@ -836,7 +848,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return hasTraditional ? "traditional" : "unknown";
         }
 
-        private async Task<(EpisodeLocalizedValue? DetailsTitle, EpisodeLocalizedValue? TranslationTitle, EpisodeLocalizedValue? EffectiveProviderTitle)> ResolveEffectiveEpisodeProviderTitleAsync(int seriesTmdbId, int? seasonNumber, int? episodeNumber, string displayOrder, string? titleMetadataLanguage, string? imageLanguages, string? providerTitle, CancellationToken cancellationToken)
+        private async Task<(EpisodeLocalizedValue? DetailsTitle, EpisodeLocalizedValue? TranslationTitle, EpisodeLocalizedValue? EffectiveProviderTitle)> ResolveEffectiveEpisodeProviderTitleAsync(int seriesTmdbId, int seasonNumber, int episodeNumber, string? titleMetadataLanguage, string? providerTitle, CancellationToken cancellationToken)
         {
             var normalizedTitleMetadataLanguage = string.IsNullOrWhiteSpace(titleMetadataLanguage) ? null : ChineseLocalePolicy.CanonicalizeLanguage(titleMetadataLanguage);
             var detailsTitle = TrimEpisodeLocalizedValue(CreateEpisodeLocalizedValue(
@@ -849,13 +861,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return (detailsTitle, null, detailsTitle);
             }
 
-            var translationTitle = TrimEpisodeLocalizedValue(await this.GetEpisodeTranslationTitleAsync(
+            var translationTitle = TrimEpisodeLocalizedValue(await this.TmdbApi.GetEpisodeTranslationTitleAsync(
                     seriesTmdbId,
                     seasonNumber,
                     episodeNumber,
-                    displayOrder,
                     normalizedTitleMetadataLanguage,
-                    imageLanguages,
                     cancellationToken)
                 .ConfigureAwait(false));
             var trimmedTranslationTitle = translationTitle?.Value;

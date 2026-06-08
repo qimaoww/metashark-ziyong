@@ -41,6 +41,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             var reasonCode = NormalizeReasonCode(decision.Reason);
+            if (!decision.ShouldTrigger && ShouldSuppressLlmAssistTriggerLog(reasonCode))
+            {
+                return;
+            }
+
             var mediaType = NormalizeValue(context.MediaType);
             var semantic = context.Semantic.ToString();
             LogLlmAssistTriggerEvaluated(logger, reasonCode, decision.ShouldTrigger, mediaType, semantic, context.IsImageProvider, null);
@@ -61,6 +66,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             }
 
             var normalizedReason = NormalizeReasonCode(reasonCode);
+            if (ShouldSuppressLlmAssistTriggerLog(normalizedReason))
+            {
+                return;
+            }
+
             var normalizedMediaType = NormalizeValue(mediaType);
             var semanticText = semantic.ToString();
             LogLlmAssistTriggerEvaluated(logger, normalizedReason, false, normalizedMediaType, semanticText, isImageProvider, null);
@@ -156,6 +166,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private static string NormalizeValue(string? value)
         {
             return string.IsNullOrWhiteSpace(value) ? "Unknown" : value.Trim();
+        }
+
+        private static bool ShouldSuppressLlmAssistTriggerLog(string reasonCode)
+        {
+            return string.Equals(reasonCode, "LlmAssistDisabled", StringComparison.Ordinal)
+                || string.Equals(reasonCode, "TextCompletionDisabled", StringComparison.Ordinal);
         }
     }
 }

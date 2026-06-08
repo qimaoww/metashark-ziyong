@@ -25,6 +25,16 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         {
             ArgumentNullException.ThrowIfNull(context);
 
+            if (context.Configuration == null)
+            {
+                return this.Rejected(context, "LlmConfigurationMissing");
+            }
+
+            if (!context.Configuration.EnableLlmAssist)
+            {
+                return this.Rejected(context, "LlmAssistDisabled");
+            }
+
             if (!HasCompleteConfiguration(context.Configuration))
             {
                 return this.Rejected(context, "LlmConfigurationMissing");
@@ -109,7 +119,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private static bool HasCompleteConfiguration(PluginConfiguration? configuration)
         {
             return configuration != null
-                && configuration.EnableLlmAssist
                 && !string.IsNullOrWhiteSpace(configuration.LlmBaseUrl)
                 && !string.IsNullOrWhiteSpace(configuration.LlmModel)
                 && !string.IsNullOrWhiteSpace(configuration.LlmApiKey);

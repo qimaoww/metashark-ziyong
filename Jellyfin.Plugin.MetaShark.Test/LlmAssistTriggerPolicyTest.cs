@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 using System.Text.Json;
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
@@ -228,8 +229,19 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("LlmConfigurationMissing", decision.Reason);
         }
 
+        [TestMethod]
+        public void Evaluate_RejectsDisabledAssist()
+        {
+            var context = CreateContext(DefaultScraperSemantic.ManualMatch, "Movie", CreateManualApplyContext());
+            context.Configuration!.EnableLlmAssist = false;
+
+            var decision = new LlmAssistTriggerPolicy().Evaluate(context);
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("LlmAssistDisabled", decision.Reason);
+        }
+
         [DataTestMethod]
-        [DataRow("TextCompletionDisabled")]
         [DataRow("ImplicitRefreshRejected")]
         [DataRow("AutomaticRefreshRejected")]
         [DataRow("LlmConfigurationMissing")]
@@ -267,6 +279,35 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 },
                 originalFormatContains: "[MetaShark] LLM 触发已拒绝. reason={ReasonCode} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}",
                 messageContains: ["LLM 触发已拒绝"]);
+        }
+
+        [DataTestMethod]
+        [DataRow("LlmAssistDisabled")]
+        [DataRow("TextCompletionDisabled")]
+        public void Observability_ShouldSuppressDisabledReasonCodes(string reasonCode)
+        {
+            var loggerStub = new Mock<ILogger<LlmMetadataAssistService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+            LlmObservabilityLog.LogLlmAssistRejected(loggerStub.Object, reasonCode, "Movie", DefaultScraperSemantic.UserRefresh, false);
+
+            Assert.AreEqual(0, CountLogInvocations(loggerStub), $"Disabled reason {reasonCode} should not emit LLM trigger logs.");
+        }
+
+        [TestMethod]
+        public void Evaluate_WhenLoggerProvided_ShouldSuppressDisabledAssistDecision()
+        {
+            var loggerStub = new Mock<ILogger<LlmAssistTriggerPolicy>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var policy = new LlmAssistTriggerPolicy(loggerStub.Object);
+            var context = CreateContext(DefaultScraperSemantic.ManualMatch, "Movie", CreateManualApplyContext());
+            context.Configuration!.EnableLlmAssist = false;
+
+            var decision = policy.Evaluate(context);
+
+            Assert.IsFalse(decision.ShouldTrigger);
+            Assert.AreEqual("LlmAssistDisabled", decision.Reason);
+            Assert.AreEqual(0, CountLogInvocations(loggerStub), "Disabled LLM assist should not emit policy trigger logs.");
         }
 
         [TestMethod]
@@ -383,6 +424,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 IsImageProvider = isImageProvider,
                 HttpContext = httpContext,
             };
+        }
+
+        private static int CountLogInvocations(Mock logger)
+        {
+            return logger.Invocations.Count(invocation =>
+                string.Equals(invocation.Method.Name, nameof(ILogger.Log), StringComparison.Ordinal)
+                && invocation.Arguments.Count == 5);
         }
 
         private static PluginConfiguration CreateConfiguration()
