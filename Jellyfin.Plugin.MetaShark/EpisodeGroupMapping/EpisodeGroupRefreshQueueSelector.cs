@@ -95,6 +95,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 refreshOptions.MetadataRefreshMode = MetadataRefreshMode.Default;
                 refreshOptions.ImageRefreshMode = MetadataRefreshMode.Default;
                 refreshOptions.ReplaceAllMetadata = false;
+                refreshOptions.IsAutomated = false;
                 return refreshOptions;
             }
 
