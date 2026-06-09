@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
@@ -164,12 +165,100 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.IsTrue(queueCalls.Single().Options.ReplaceAllMetadata);
         }
 
+        [TestMethod]
+        public async Task SuggestWriteAndRefreshAsync_WhenAffectedSeriesHasSeasons_QueuesSeasonScanRefresh()
+        {
+            var currentSeries = CreateSeries(Guid.NewGuid(), "Re:Zero current", "65942", "/new/ReZero");
+            var firstSeason = CreateSeason(Guid.NewGuid(), "Season 1", currentSeries.Id);
+            var secondSeason = CreateSeason(Guid.NewGuid(), "Season 2", currentSeries.Id);
+            var queueCalls = new List<QueueRefreshCall>();
+            var loggerStub = new Mock<ILogger<LlmEpisodeGroupMappingProviderAssistService>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            using var loggerFactory = LoggerFactory.Create(builder => { });
+            var tmdbApi = new TmdbApi(loggerFactory);
+            SeedTmdbSeries(tmdbApi, 65942, "zh-CN", "candidate-group");
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(tmdbApi, "candidate-group", "zh-CN");
+            var llmApi = new RecordingLlmApi("candidate-group", 0.95);
+            var persistenceService = new RecordingPersistenceService();
+            var providerManagerStub = new Mock<IProviderManager>();
+            providerManagerStub
+                .Setup(x => x.QueueRefresh(It.IsAny<Guid>(), It.IsAny<MetadataRefreshOptions>(), It.IsAny<RefreshPriority>()))
+                .Callback<Guid, MetadataRefreshOptions, RefreshPriority>((itemId, options, priority) => queueCalls.Add(new QueueRefreshCall(itemId, options, priority)));
+            var service = new LlmEpisodeGroupMappingProviderAssistService(
+                new LlmEpisodeGroupMappingAssistService(llmApi, tmdbApi, EpisodeGroupMapParser.Shared, persistenceService),
+                tmdbApi,
+                CreateLibraryManager(
+                    new BaseItem[] { currentSeries },
+                    new Dictionary<Guid, IReadOnlyList<BaseItem>>
+                    {
+                        [currentSeries.Id] = new BaseItem[] { firstSeason, secondSeason },
+                    }).Object,
+                providerManagerStub.Object,
+                Mock.Of<IFileSystem>(),
+                new LlmAssistTriggerPolicy(),
+                new EpisodeGroupRefreshService(),
+                loggerStub.Object);
+            var configuration = new PluginConfiguration
+            {
+                EnableLlmAssist = true,
+                EnableLlmEpisodeGroupMappingAssist = true,
+                LlmAllowTextCompletion = true,
+                LlmBaseUrl = "http://localhost",
+                LlmModel = "test-model",
+                LlmApiKey = "test-key",
+                LlmEpisodeGroupMappingMinConfidence = 0.8,
+            };
+
+            var result = await service.SuggestWriteAndRefreshAsync(
+                    new LlmEpisodeGroupMappingProviderAssistRequest
+                    {
+                        Configuration = configuration,
+                        SeriesTmdbId = 65942,
+                        SeriesTitle = "Re:Zero",
+                        MetadataLanguage = "zh-CN",
+                        MediaType = nameof(Series),
+                        Semantic = DefaultScraperSemantic.UserRefresh,
+                        HttpContext = LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture), replaceAllMetadata: true),
+                    },
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+
+            Assert.AreEqual(LlmEpisodeGroupMappingAssistStatus.Updated, result.Status);
+            CollectionAssert.AreEquivalent(new[] { firstSeason.Id, secondSeason.Id }, queueCalls.Select(x => x.ItemId).ToArray());
+            foreach (var queueCall in queueCalls)
+            {
+                Assert.AreEqual(RefreshPriority.High, queueCall.Priority);
+                Assert.AreEqual(MetadataRefreshMode.Default, queueCall.Options.MetadataRefreshMode);
+                Assert.AreEqual(MetadataRefreshMode.Default, queueCall.Options.ImageRefreshMode);
+                Assert.IsFalse(queueCall.Options.ReplaceAllMetadata);
+                Assert.IsFalse(queueCall.Options.ReplaceAllImages);
+            }
+        }
+
         private static Mock<ILibraryManager> CreateLibraryManager(params BaseItem[] items)
         {
+            return CreateLibraryManager(items, null);
+        }
+
+        private static Mock<ILibraryManager> CreateLibraryManager(
+            IEnumerable<BaseItem> items,
+            IReadOnlyDictionary<Guid, IReadOnlyList<BaseItem>>? seasonsBySeriesId)
+        {
             var libraryManagerStub = new Mock<ILibraryManager>();
+            var materializedItems = items.ToList();
+            var materializedSeasonsBySeriesId = seasonsBySeriesId ?? new Dictionary<Guid, IReadOnlyList<BaseItem>>();
             libraryManagerStub
                 .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
-                .Returns(items.ToList());
+                .Returns(new List<BaseItem>());
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeriesQuery(query))))
+                .Returns(materializedItems);
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => HasSingleIncludeItemType(query, BaseItemKind.Season))))
+                .Returns<InternalItemsQuery>(query =>
+                    materializedSeasonsBySeriesId.TryGetValue(query.ParentId, out var seasons)
+                        ? seasons.ToList()
+                        : new List<BaseItem>());
             return libraryManagerStub;
         }
 
@@ -185,6 +274,30 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                     [MetadataProvider.Tmdb.ToString()] = tmdbId,
                 },
             };
+        }
+
+        private static Season CreateSeason(Guid id, string name, Guid seriesId)
+        {
+            return new Season
+            {
+                Id = id,
+                Name = name,
+                SeriesId = seriesId,
+            };
+        }
+
+        private static bool IsSeriesQuery(InternalItemsQuery query)
+        {
+            return HasSingleIncludeItemType(query, BaseItemKind.Series)
+                && query.IsVirtualItem == false
+                && query.IsMissing == false
+                && query.Recursive;
+        }
+
+        private static bool HasSingleIncludeItemType(InternalItemsQuery query, BaseItemKind itemType)
+        {
+            return query.IncludeItemTypes.Length == 1
+                && query.IncludeItemTypes[0] == itemType;
         }
 
         private sealed record QueueRefreshCall(Guid ItemId, MetadataRefreshOptions Options, RefreshPriority Priority);

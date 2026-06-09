@@ -2581,6 +2581,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var libraryManagerStub = new Mock<ILibraryManager>();
             libraryManagerStub
                 .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem>());
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeriesQuery(query))))
                 .Returns(libraryItems.ToList());
 
             var providerManagerStub = new Mock<IProviderManager>();
@@ -2610,6 +2613,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Assert.IsTrue(queueCall.Options.ReplaceAllMetadata);
                 Assert.IsFalse(queueCall.Options.ReplaceAllImages);
             }
+        }
+
+        private static bool IsSeriesQuery(InternalItemsQuery query)
+        {
+            return HasSingleIncludeItemType(query, BaseItemKind.Series)
+                && query.IsVirtualItem == false
+                && query.IsMissing == false
+                && query.Recursive;
+        }
+
+        private static bool HasSingleIncludeItemType(InternalItemsQuery query, BaseItemKind itemType)
+        {
+            return query.IncludeItemTypes.Length == 1
+                && query.IncludeItemTypes[0] == itemType;
         }
 
         private static SeriesInfo CreateSeriesInfo(string name = "测试剧集", string path = "/library/tv/测试剧集")
@@ -2681,6 +2698,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var libraryManagerStub = new Mock<ILibraryManager>();
             libraryManagerStub
                 .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem>());
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeriesQuery(query))))
                 .Returns(itemList.ToList());
             return libraryManagerStub;
         }

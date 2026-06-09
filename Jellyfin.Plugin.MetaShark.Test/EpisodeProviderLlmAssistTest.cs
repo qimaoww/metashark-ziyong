@@ -1,3 +1,4 @@
+using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark;
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
@@ -1176,7 +1177,10 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                 this.LibraryManagerStub = new Mock<ILibraryManager>();
                 this.LibraryManagerStub.Setup(x => x.FindByPath(this.Info.Path, false)).Returns(this.Episode);
-                this.LibraryManagerStub.Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>())).Returns(seriesForRefresh == null ? new List<BaseItem>() : new List<BaseItem> { seriesForRefresh });
+                this.LibraryManagerStub.Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>())).Returns(new List<BaseItem>());
+                this.LibraryManagerStub
+                    .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeriesQuery(query))))
+                    .Returns(seriesForRefresh == null ? new List<BaseItem>() : new List<BaseItem> { seriesForRefresh });
                 if (!string.IsNullOrWhiteSpace(seriesOverview) || !string.IsNullOrWhiteSpace(seasonOverview))
                 {
                     var seasonPath = Path.GetDirectoryName(this.Info.Path)!;
@@ -1330,6 +1334,20 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 Assert.IsTrue(queueCall.Options.ReplaceAllMetadata);
                 Assert.IsFalse(queueCall.Options.ReplaceAllImages);
             }
+        }
+
+        private static bool IsSeriesQuery(InternalItemsQuery query)
+        {
+            return HasSingleIncludeItemType(query, BaseItemKind.Series)
+                && query.IsVirtualItem == false
+                && query.IsMissing == false
+                && query.Recursive;
+        }
+
+        private static bool HasSingleIncludeItemType(InternalItemsQuery query, BaseItemKind itemType)
+        {
+            return query.IncludeItemTypes.Length == 1
+                && query.IncludeItemTypes[0] == itemType;
         }
 
         private sealed record QueueRefreshCall(Guid ItemId, MetadataRefreshOptions Options, RefreshPriority Priority);

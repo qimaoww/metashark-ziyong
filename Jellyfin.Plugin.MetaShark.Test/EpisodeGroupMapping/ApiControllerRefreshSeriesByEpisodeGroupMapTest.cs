@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Controllers;
@@ -79,6 +80,34 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 },
                 originalFormatContains: "[MetaShark] 已排队剧集组映射刷新",
                 messageContains: ["[MetaShark] 已排队剧集组映射刷新", "Count=1"]);
+        }
+
+        [TestMethod]
+        public void RefreshSeriesByEpisodeGroupMap_AddMapping_WhenSeriesHasSeasons_QueuesSeasonScanRefresh()
+        {
+            var addedSeries = CreateSeries(Guid.NewGuid(), "Added series", "65942");
+            var firstSeason = CreateSeason(Guid.NewGuid(), "Season 1", addedSeries.Id);
+            var secondSeason = CreateSeason(Guid.NewGuid(), "Season 2", addedSeries.Id);
+
+            using var harness = CreateHarness(
+                items: new[] { addedSeries },
+                seasonsBySeriesId: new Dictionary<Guid, IReadOnlyList<BaseItem>>
+                {
+                    [addedSeries.Id] = new BaseItem[] { firstSeason, secondSeason },
+                });
+
+            var result = harness.Controller.RefreshSeriesByEpisodeGroupMap(new TmdbEpisodeGroupRefreshRequest
+            {
+                OldMapping = string.Empty,
+                NewMapping = "65942=group-a",
+            });
+
+            Assert.AreEqual(1, result.Code);
+            Assert.AreEqual(CreateExpectedSummary(queued: 2, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
+            AssertQueuedSeasonScans(harness.QueueCalls, firstSeason.Id, secondSeason.Id);
+            harness.LibraryManagerStub.Verify(
+                x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeasonQueryForParent(query, addedSeries.Id))),
+                Times.Once);
         }
 
         [TestMethod]
@@ -263,6 +292,16 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             };
         }
 
+        private static Season CreateSeason(Guid id, string name, Guid seriesId)
+        {
+            return new Season
+            {
+                Id = id,
+                Name = name,
+                SeriesId = seriesId,
+            };
+        }
+
         private static string CreateExpectedSummary(
             int queued,
             int affected,
@@ -302,6 +341,43 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 Assert.IsTrue(queueCall.Options.ReplaceAllMetadata);
                 Assert.IsFalse(queueCall.Options.ReplaceAllImages);
             }
+        }
+
+        private static void AssertQueuedSeasonScans(IReadOnlyCollection<QueueRefreshCall> queueCalls, params Guid[] expectedIds)
+        {
+            CollectionAssert.AreEquivalent(expectedIds, queueCalls.Select(x => x.ItemId).ToArray());
+
+            foreach (var queueCall in queueCalls)
+            {
+                Assert.AreEqual(RefreshPriority.High, queueCall.Priority);
+                Assert.AreEqual(MetadataRefreshMode.Default, queueCall.Options.MetadataRefreshMode);
+                Assert.AreEqual(MetadataRefreshMode.Default, queueCall.Options.ImageRefreshMode);
+                Assert.IsFalse(queueCall.Options.ReplaceAllMetadata);
+                Assert.IsFalse(queueCall.Options.ReplaceAllImages);
+            }
+        }
+
+        private static bool IsSeriesQuery(InternalItemsQuery query)
+        {
+            return HasSingleIncludeItemType(query, BaseItemKind.Series)
+                && query.IsVirtualItem == false
+                && query.IsMissing == false
+                && query.Recursive;
+        }
+
+        private static bool IsSeasonQueryForParent(InternalItemsQuery query, Guid parentId)
+        {
+            return HasSingleIncludeItemType(query, BaseItemKind.Season)
+                && query.IsVirtualItem == false
+                && query.IsMissing == false
+                && !query.Recursive
+                && query.ParentId == parentId;
+        }
+
+        private static bool HasSingleIncludeItemType(InternalItemsQuery query, BaseItemKind itemType)
+        {
+            return query.IncludeItemTypes.Length == 1
+                && query.IncludeItemTypes[0] == itemType;
         }
 
         private static void EnsurePluginInstance()
@@ -371,7 +447,12 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.Fail("Could not replace MetaSharkPlugin configuration for tests.");
         }
 
-        private ControllerHarness CreateHarness(IEnumerable<BaseItem> items, string currentMapping = "", string currentLlmMapping = "", IEnumerable<string>? existingPaths = null)
+        private ControllerHarness CreateHarness(
+            IEnumerable<BaseItem> items,
+            string currentMapping = "",
+            string currentLlmMapping = "",
+            IEnumerable<string>? existingPaths = null,
+            IReadOnlyDictionary<Guid, IReadOnlyList<BaseItem>>? seasonsBySeriesId = null)
         {
             EnsurePluginInstance();
             ReplacePluginConfiguration(new PluginConfiguration
@@ -381,10 +462,17 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             });
 
             var materializedItems = items.ToList();
+            var materializedSeasonsBySeriesId = seasonsBySeriesId ?? new Dictionary<Guid, IReadOnlyList<BaseItem>>();
             var libraryManagerStub = new Mock<ILibraryManager>();
             libraryManagerStub
-                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeriesQuery(query))))
                 .Returns(materializedItems);
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => HasSingleIncludeItemType(query, BaseItemKind.Season))))
+                .Returns<InternalItemsQuery>(query =>
+                    materializedSeasonsBySeriesId.TryGetValue(query.ParentId, out var seasons)
+                        ? seasons.ToList()
+                        : new List<BaseItem>());
 
             var queueCalls = new List<QueueRefreshCall>();
             var providerManagerStub = new Mock<IProviderManager>();

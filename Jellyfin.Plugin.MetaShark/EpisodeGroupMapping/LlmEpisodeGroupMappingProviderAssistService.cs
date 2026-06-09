@@ -227,54 +227,34 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             }
 
             var affectedSeriesIds = new HashSet<string>(refreshResult.AffectedSeriesIds, StringComparer.OrdinalIgnoreCase);
-            var items = this.libraryManager.GetItemList(new InternalItemsQuery
-            {
-                IncludeItemTypes = new[] { BaseItemKind.Series },
-                IsVirtualItem = false,
-                IsMissing = false,
-                Recursive = true,
-                HasTmdbId = true,
-            });
-
-            var refreshOptions = new MetadataRefreshOptions(new DirectoryService(this.fileSystem))
-            {
-                MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
-                ImageRefreshMode = MetadataRefreshMode.FullRefresh,
-                ReplaceAllMetadata = true,
-                ReplaceAllImages = false,
-            };
-            var queueableItems = EpisodeGroupRefreshQueueSelector.SelectQueueableItems(
-                items,
+            var queueablePlans = EpisodeGroupRefreshQueueSelector.SelectQueueableRefreshPlans(
+                this.libraryManager,
                 this.fileSystem,
+                affectedSeriesIds,
                 item => item.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var tmdbId) ? tmdbId : null);
 
             var queued = 0;
-            foreach (var item in items)
+            foreach (var plan in queueablePlans)
             {
-                if (!item.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var tmdbId)
-                    || !affectedSeriesIds.Contains(tmdbId)
-                    || item.Id == Guid.Empty)
+                if (plan.Series.Id == Guid.Empty)
                 {
                     continue;
                 }
 
-                var newGroupId = refreshResult.NewSnapshot.TryGetGroupId(tmdbId, out var resolvedGroupId)
+                var newGroupId = refreshResult.NewSnapshot.TryGetGroupId(plan.GroupKey, out var resolvedGroupId)
                     ? resolvedGroupId
                     : string.Empty;
 
-                if (!queueableItems.Contains(item))
+                if (IsRecentlyQueuedRefresh(plan.GroupKey, newGroupId))
                 {
                     continue;
                 }
 
-                if (IsRecentlyQueuedRefresh(tmdbId, newGroupId))
-                {
-                    continue;
-                }
-
-                MarkRefreshQueued(tmdbId, newGroupId);
-                this.providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.High);
-                queued++;
+                MarkRefreshQueued(plan.GroupKey, newGroupId);
+                queued += EpisodeGroupRefreshQueueSelector.QueueRefreshTargets(
+                    plan,
+                    this.providerManager,
+                    this.fileSystem);
             }
 
             LogQueuedRefresh(this.logger, queued, null);

@@ -156,54 +156,20 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
             }
 
             var affectedSeriesIds = new System.Collections.Generic.HashSet<string>(refreshResult.AffectedSeriesIds, StringComparer.OrdinalIgnoreCase);
-
-            var items = this.libraryManager.GetItemList(new InternalItemsQuery
-            {
-                IncludeItemTypes = new[] { BaseItemKind.Series },
-                IsVirtualItem = false,
-                IsMissing = false,
-                Recursive = true,
-                HasTmdbId = true,
-            });
-
-            var refreshOptions = new MetadataRefreshOptions(new DirectoryService(this.fileSystem))
-            {
-                MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
-                ImageRefreshMode = MetadataRefreshMode.FullRefresh,
-                ReplaceAllMetadata = true,
-                ReplaceAllImages = false,
-            };
-            var queueableItems = EpisodeGroupRefreshQueueSelector.SelectQueueableItems(
-                items,
+            var queueablePlans = EpisodeGroupRefreshQueueSelector.SelectQueueableRefreshPlans(
+                this.libraryManager,
                 this.fileSystem,
+                affectedSeriesIds,
                 item => item.ProviderIds.TryGetValue(MediaBrowser.Model.Entities.MetadataProvider.Tmdb.ToString(), out var tmdbId) ? tmdbId : null);
 
             var queued = 0;
-            foreach (var item in items)
+            foreach (var plan in queueablePlans)
             {
-                if (!item.ProviderIds.TryGetValue(MediaBrowser.Model.Entities.MetadataProvider.Tmdb.ToString(), out var tmdbId))
-                {
-                    continue;
-                }
-
-                if (!affectedSeriesIds.Contains(tmdbId))
-                {
-                    continue;
-                }
-
-                if (item.Id == Guid.Empty)
-                {
-                    LogSkipRefreshEmptyId(this.logger, item.Name, null);
-                    continue;
-                }
-
-                if (!queueableItems.Contains(item))
-                {
-                    continue;
-                }
-
-                this.providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.High);
-                queued++;
+                queued += EpisodeGroupRefreshQueueSelector.QueueRefreshTargets(
+                    plan,
+                    this.providerManager,
+                    this.fileSystem,
+                    item => LogSkipRefreshEmptyId(this.logger, item.Name, null));
             }
 
             LogQueuedRefresh(this.logger, queued, null);
