@@ -256,7 +256,8 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             libraryManagerStub
                 .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => HasSingleIncludeItemType(query, BaseItemKind.Season))))
                 .Returns<InternalItemsQuery>(query =>
-                    materializedSeasonsBySeriesId.TryGetValue(query.ParentId, out var seasons)
+                    query.AncestorIds.Length == 1
+                    && materializedSeasonsBySeriesId.TryGetValue(query.AncestorIds[0], out var seasons)
                         ? seasons.ToList()
                         : new List<BaseItem>());
             return libraryManagerStub;

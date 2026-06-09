@@ -157,10 +157,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             var seasons = libraryManager.GetItemList(new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { BaseItemKind.Season },
-                IsVirtualItem = false,
-                IsMissing = false,
-                ParentId = series.Id,
-                Recursive = false,
+                AncestorIds = new[] { series.Id },
             });
             if (seasons.Count > 0)
             {

@@ -106,7 +106,7 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             Assert.AreEqual(CreateExpectedSummary(queued: 2, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
             AssertQueuedSeasonScans(harness.QueueCalls, firstSeason.Id, secondSeason.Id);
             harness.LibraryManagerStub.Verify(
-                x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeasonQueryForParent(query, addedSeries.Id))),
+                x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeasonQueryForAncestor(query, addedSeries.Id))),
                 Times.Once);
         }
 
@@ -365,13 +365,14 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 && query.Recursive;
         }
 
-        private static bool IsSeasonQueryForParent(InternalItemsQuery query, Guid parentId)
+        private static bool IsSeasonQueryForAncestor(InternalItemsQuery query, Guid ancestorId)
         {
             return HasSingleIncludeItemType(query, BaseItemKind.Season)
-                && query.IsVirtualItem == false
-                && query.IsMissing == false
-                && !query.Recursive
-                && query.ParentId == parentId;
+                && query.IsVirtualItem == null
+                && query.IsMissing == null
+                && query.ParentId == Guid.Empty
+                && query.AncestorIds.Length == 1
+                && query.AncestorIds[0] == ancestorId;
         }
 
         private static bool HasSingleIncludeItemType(InternalItemsQuery query, BaseItemKind itemType)
@@ -470,7 +471,8 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             libraryManagerStub
                 .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => HasSingleIncludeItemType(query, BaseItemKind.Season))))
                 .Returns<InternalItemsQuery>(query =>
-                    materializedSeasonsBySeriesId.TryGetValue(query.ParentId, out var seasons)
+                    query.AncestorIds.Length == 1
+                    && materializedSeasonsBySeriesId.TryGetValue(query.AncestorIds[0], out var seasons)
                         ? seasons.ToList()
                         : new List<BaseItem>());
 
