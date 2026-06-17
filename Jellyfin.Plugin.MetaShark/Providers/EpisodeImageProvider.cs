@@ -7,11 +7,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System;
     using System.Collections.Generic;
     using System.Globalization;
+    using System.IO;
     using System.Linq;
     using System.Net.Http;
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Workers;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.TV;
@@ -93,9 +95,34 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 .ConfigureAwait(false);
             if (episodeResult == null)
             {
-                this.outcomeReporter.ReportHardMiss(item, "EpisodeNotFound");
-                this.Log("未找到 TMDb 单集图片数据. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, seasonNumber, episodeNumber, displayOrder);
-                return Enumerable.Empty<RemoteImageInfo>();
+                var fallbackEpisodeNumber = this.TryResolveEpisodeGroupNumberFromPath(episode, seasonNumber.Value, episodeNumber.Value);
+                if (fallbackEpisodeNumber != null)
+                {
+                    this.Log(
+                        "TMDb 单集图片按当前编号未命中，尝试按文件名剧集组编号回退. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} fallbackSeasonNumber: {3} fallbackEpisodeNumber: {4} displayOrder: {5}",
+                        seriesTmdbId,
+                        seasonNumber,
+                        episodeNumber,
+                        fallbackEpisodeNumber.Value.SeasonNumber,
+                        fallbackEpisodeNumber.Value.EpisodeNumber,
+                        displayOrder);
+                    episodeResult = await this.GetEpisodeAsync(
+                            seriesTmdbId,
+                            fallbackEpisodeNumber.Value.SeasonNumber,
+                            fallbackEpisodeNumber.Value.EpisodeNumber,
+                            displayOrder,
+                            language,
+                            language,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (episodeResult == null)
+                {
+                    this.outcomeReporter.ReportHardMiss(item, "EpisodeNotFound");
+                    this.Log("未找到 TMDb 单集图片数据. seriesTmdbId: {0} seasonNumber: {1} episodeNumber: {2} displayOrder: {3}", seriesTmdbId, seasonNumber, episodeNumber, displayOrder);
+                    return Enumerable.Empty<RemoteImageInfo>();
+                }
             }
 
             var stillPath = episodeResult.StillPath;
@@ -129,6 +156,57 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return result;
+        }
+
+        private (int SeasonNumber, int EpisodeNumber)? TryResolveEpisodeGroupNumberFromPath(Episode episode, int currentSeasonNumber, int currentEpisodeNumber)
+        {
+            var path = episode.Path;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            var fileName = Path.GetFileNameWithoutExtension(path);
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return null;
+            }
+
+            var parseResult = NameParser.ParseEpisode(fileName);
+            var fallbackEpisodeNumber = parseResult.IndexNumber;
+            if (fallbackEpisodeNumber is null or <= 0)
+            {
+                return null;
+            }
+
+            var fallbackSeasonNumber = parseResult.ParentIndexNumber;
+            if (!fallbackSeasonNumber.HasValue)
+            {
+                var seasonPath = Path.GetDirectoryName(path);
+                if (!string.IsNullOrWhiteSpace(seasonPath))
+                {
+                    fallbackSeasonNumber = this.LibraryManager.GetSeasonNumberFromPath(seasonPath)
+                        ?? this.GuessSeasonNumberByDirectoryName(seasonPath);
+                }
+            }
+
+            if (fallbackSeasonNumber is null)
+            {
+                return null;
+            }
+
+            if (fallbackSeasonNumber.Value == currentSeasonNumber
+                && fallbackEpisodeNumber.Value == currentEpisodeNumber)
+            {
+                return null;
+            }
+
+            this.Log(
+                "已从文件路径解析单集图片回退编号. path: {0} seasonNumber: {1} episodeNumber: {2}",
+                path,
+                fallbackSeasonNumber.Value,
+                fallbackEpisodeNumber.Value);
+            return (fallbackSeasonNumber.Value, fallbackEpisodeNumber.Value);
         }
 
         private sealed class NullTvImageRefillOutcomeReporter : ITvImageRefillOutcomeReporter

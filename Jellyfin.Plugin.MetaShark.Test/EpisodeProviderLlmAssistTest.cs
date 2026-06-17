@@ -495,7 +495,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("123=candidate-group", MetaSharkPlugin.Instance!.Configuration.LlmTmdbEpisodeGroupMap);
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("映射后命中的正片", result.Item!.Name);
-            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(2, result.Item.ParentIndexNumber);
             Assert.AreEqual(1, result.Item.IndexNumber);
             AssertQueuedSeries(harness.QueueRefreshCalls, mappedSeries.Id);
             var prompt = harness.LlmEpisodeGroupMappingApi.Prompts.Single();
@@ -504,7 +504,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task GetMetadata_WhenManualGroupMappingResolvesDifferentPosition_ReturnsMappedPosition()
+        public async Task GetMetadata_WhenManualGroupMappingResolvesDifferentPosition_KeepsGroupPosition()
         {
             using var harness = CreateHarness(
                 httpContext: LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(TestItemIdString(), replaceAllMetadata: true),
@@ -532,12 +532,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("手动映射后的真实单集", result.Item!.Name);
-            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(2, result.Item.ParentIndexNumber);
             Assert.AreEqual(1, result.Item.IndexNumber);
         }
 
         [TestMethod]
-        public async Task GetMetadata_WhenLlmGroupMappingResolvesDifferentPosition_ReturnsMappedPosition()
+        public async Task GetMetadata_WhenLlmGroupMappingResolvesDifferentPosition_KeepsGroupPosition()
         {
             using var harness = CreateHarness(
                 httpContext: LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(TestItemIdString(), replaceAllMetadata: true),
@@ -565,7 +565,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("LLM 映射后的真实单集", result.Item!.Name);
-            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(2, result.Item.ParentIndexNumber);
             Assert.AreEqual(1, result.Item.IndexNumber);
         }
 
@@ -612,7 +612,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("手动映射优先的真实单集", result.Item!.Name);
-            Assert.AreEqual(1, result.Item.ParentIndexNumber);
+            Assert.AreEqual(2, result.Item.ParentIndexNumber);
             Assert.AreEqual(1, result.Item.IndexNumber);
         }
 
