@@ -10,6 +10,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
 using Jellyfin.Plugin.MetaShark.Providers.Llm;
+using Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Providers;
@@ -470,6 +471,49 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("7001", lookupInfo.ProviderIds[MetadataProvider.Tvdb.ToString()]);
             Assert.AreEqual(1, result.ProviderIdWrites.Count);
             Assert.AreEqual(MetadataProvider.Tvdb.ToString(), result.ProviderIdWrites[0].ProviderIdKey);
+        }
+
+        [TestMethod]
+        public async Task ResolveAsync_WhenTmdbEpisodeUsesEpisodeGroupMapping_ShouldVerifyMappedEpisodeId()
+        {
+            ReplacePluginConfiguration(new PluginConfiguration
+            {
+                TmdbEpisodeGroupMap = "65942=rezero-production-group",
+            });
+            var tmdbApi = this.CreateTmdbApi();
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                tmdbApi,
+                "rezero-production-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 4,
+                    name: "Season 4",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 9, seasonNumber: 1, episodeNumber: 76)));
+            SeedTmdbEpisode(tmdbApi, 65942, 1, 76, "zh-CN", string.Empty, 900176);
+            var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "900176", "Episode")));
+            var service = this.CreateService(llmApi, tmdbApi);
+            var lookupInfo = new EpisodeInfo
+            {
+                Name = "杀人会成为一种习惯",
+                MetadataLanguage = "zh-CN",
+                ParentIndexNumber = 4,
+                IndexNumber = 10,
+                ProviderIds = new Dictionary<string, string>(),
+                SeriesProviderIds = new Dictionary<string, string>
+                {
+                    [MetadataProvider.Tmdb.ToString()] = "65942",
+                },
+            };
+
+            var request = CreateRequest(lookupInfo, mediaType: "Episode");
+            request.Configuration!.TmdbEpisodeGroupMap = "65942=rezero-production-group";
+
+            var result = await service.ResolveAsync(request, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual(LlmExternalIdResolutionStatus.Succeeded, result.Status, result.Diagnostic);
+            Assert.AreEqual("900176", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
+            Assert.AreEqual(1, result.ProviderIdWrites.Count);
+            Assert.AreEqual(MetadataProvider.Tmdb.ToString(), result.ProviderIdWrites[0].ProviderIdKey);
         }
 
         [TestMethod]
@@ -1708,6 +1752,17 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Name = name,
                     OriginalName = originalName,
                     FirstAirDate = firstAirDate,
+                },
+                TimeSpan.FromMinutes(5));
+        }
+
+        private static void SeedTmdbEpisode(TmdbApi tmdbApi, int seriesTmdbId, int seasonNumber, int episodeNumber, string language, string imageLanguages, int episodeId)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"episode-{seriesTmdbId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}",
+                new TMDbLib.Objects.TvShows.TvEpisode
+                {
+                    Id = episodeId,
                 },
                 TimeSpan.FromMinutes(5));
         }

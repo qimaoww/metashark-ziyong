@@ -14,6 +14,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Configuration;
     using Jellyfin.Plugin.MetaShark.Core;
+    using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
     using Jellyfin.Plugin.MetaShark.Model;
     using Jellyfin.Plugin.MetaShark.Providers;
     using MediaBrowser.Controller.Providers;
@@ -44,6 +45,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private readonly LlmTmdbIdCorrectionTriggerPolicy tmdbCorrectionTriggerPolicy;
         private readonly LlmExternalIdCandidateValidator candidateValidator;
         private readonly ILlmRequestLimiter requestLimiter;
+        private readonly EpisodeGroupMappingFacade episodeGroupMappingFacade = new EpisodeGroupMappingFacade();
         private readonly LlmScrapeContextBuilder scrapeContextBuilder = new LlmScrapeContextBuilder();
         private readonly LlmScrapeMismatchDetector mismatchDetector = new LlmScrapeMismatchDetector();
         private readonly ILogger<LlmExternalIdResolutionService>? logger;
@@ -113,7 +115,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
             foreach (var existingProviderId in existingProviderIds)
             {
-                var assessment = await this.AssessExistingProviderIdAsync(existingProviderId, request.LookupInfo, mediaType, localContext, cancellationToken).ConfigureAwait(false);
+                var assessment = await this.AssessExistingProviderIdAsync(existingProviderId, request.LookupInfo, mediaType, request.Configuration, localContext, cancellationToken).ConfigureAwait(false);
                 if (assessment == ExistingProviderIdAssessment.Conflict)
                 {
                     return LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict");
@@ -209,7 +211,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 LlmExternalIdVerificationResult verification;
                 try
                 {
-                    verification = await this.VerifyCandidateAsync(candidate, request.LookupInfo, mediaType, cancellationToken).ConfigureAwait(false);
+                    verification = await this.VerifyCandidateAsync(candidate, request.LookupInfo, mediaType, request.Configuration, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -766,11 +768,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return string.IsNullOrWhiteSpace(joined) ? fallback : joined;
         }
 
-        private async Task<ExistingProviderIdAssessment> AssessExistingProviderIdAsync(ExistingProviderIdReference existingProviderId, ItemLookupInfo lookupInfo, string targetMediaType, LlmPromptContext localContext, CancellationToken cancellationToken)
+        private async Task<ExistingProviderIdAssessment> AssessExistingProviderIdAsync(ExistingProviderIdReference existingProviderId, ItemLookupInfo lookupInfo, string targetMediaType, PluginConfiguration? configuration, LlmPromptContext localContext, CancellationToken cancellationToken)
         {
             if (string.Equals(existingProviderId.Provider, TmdbProvider, StringComparison.Ordinal))
             {
-                return await this.AssessExistingTmdbProviderIdAsync(existingProviderId, lookupInfo, targetMediaType, localContext, cancellationToken).ConfigureAwait(false);
+                return await this.AssessExistingTmdbProviderIdAsync(existingProviderId, lookupInfo, targetMediaType, configuration, localContext, cancellationToken).ConfigureAwait(false);
             }
 
             if (string.Equals(existingProviderId.Provider, ImdbProvider, StringComparison.Ordinal))
@@ -782,7 +784,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             {
                 if (string.Equals(existingProviderId.MediaType, EpisodeMediaType, StringComparison.Ordinal))
                 {
-                    var verification = await this.VerifyCandidateAsync(CreateCandidate(TvdbProvider, existingProviderId.Id, EpisodeMediaType), lookupInfo, targetMediaType, cancellationToken).ConfigureAwait(false);
+                    var verification = await this.VerifyCandidateAsync(CreateCandidate(TvdbProvider, existingProviderId.Id, EpisodeMediaType), lookupInfo, targetMediaType, configuration, cancellationToken).ConfigureAwait(false);
                     return verification.Success ? ExistingProviderIdAssessment.Consistent : ExistingProviderIdAssessment.Conflict;
                 }
 
@@ -797,11 +799,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return ExistingProviderIdAssessment.Inconclusive;
         }
 
-        private async Task<ExistingProviderIdAssessment> AssessExistingTmdbProviderIdAsync(ExistingProviderIdReference existingProviderId, ItemLookupInfo lookupInfo, string targetMediaType, LlmPromptContext localContext, CancellationToken cancellationToken)
+        private async Task<ExistingProviderIdAssessment> AssessExistingTmdbProviderIdAsync(ExistingProviderIdReference existingProviderId, ItemLookupInfo lookupInfo, string targetMediaType, PluginConfiguration? configuration, LlmPromptContext localContext, CancellationToken cancellationToken)
         {
             if (string.Equals(existingProviderId.MediaType, EpisodeMediaType, StringComparison.Ordinal))
             {
-                var verification = await this.VerifyCandidateAsync(CreateCandidate(TmdbProvider, existingProviderId.Id, EpisodeMediaType), lookupInfo, targetMediaType, cancellationToken).ConfigureAwait(false);
+                var verification = await this.VerifyCandidateAsync(CreateCandidate(TmdbProvider, existingProviderId.Id, EpisodeMediaType), lookupInfo, targetMediaType, configuration, cancellationToken).ConfigureAwait(false);
                 return verification.Success ? ExistingProviderIdAssessment.Consistent : ExistingProviderIdAssessment.Conflict;
             }
 
@@ -1052,7 +1054,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return TmdbCorrectionEvidenceResult.Failed("DoubanOwnershipUnverifiable");
         }
 
-        private async Task<LlmExternalIdVerificationResult> VerifyCandidateAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, string targetMediaType, CancellationToken cancellationToken)
+        private async Task<LlmExternalIdVerificationResult> VerifyCandidateAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, string targetMediaType, PluginConfiguration? configuration, CancellationToken cancellationToken)
         {
             if (!IsCandidateMediaTypeCompatible(candidate, targetMediaType))
             {
@@ -1061,7 +1063,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
             if (string.Equals(candidate.Provider, TmdbProvider, StringComparison.Ordinal))
             {
-                return await this.VerifyTmdbCandidateAsync(candidate, lookupInfo, targetMediaType, cancellationToken).ConfigureAwait(false);
+                return await this.VerifyTmdbCandidateAsync(candidate, lookupInfo, targetMediaType, configuration, cancellationToken).ConfigureAwait(false);
             }
 
             if (string.Equals(candidate.Provider, ImdbProvider, StringComparison.Ordinal))
@@ -1082,7 +1084,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return VerificationFailed("provider is not supported", candidate);
         }
 
-        private async Task<LlmExternalIdVerificationResult> VerifyTmdbCandidateAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, string targetMediaType, CancellationToken cancellationToken)
+        private async Task<LlmExternalIdVerificationResult> VerifyTmdbCandidateAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, string targetMediaType, PluginConfiguration? configuration, CancellationToken cancellationToken)
         {
             if (!TryParsePositiveInt(candidate.Id, out var tmdbId))
             {
@@ -1143,7 +1145,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                     return series == null ? VerificationFailed("TMDb parent series detail was not found", candidate) : VerificationSucceeded(CreateDerivedCandidate(candidate, TmdbProvider, candidate.Id!, SeriesMediaType));
                 }
 
-                return await this.VerifyTmdbEpisodeCandidateAsync(candidate, lookupInfo, tmdbId, cancellationToken).ConfigureAwait(false);
+                return await this.VerifyTmdbEpisodeCandidateAsync(candidate, lookupInfo, tmdbId, configuration, cancellationToken).ConfigureAwait(false);
             }
 
             return VerificationFailed("target media type is unsupported", candidate);
@@ -1168,7 +1170,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 return series == null ? VerificationFailed("TMDb series detail was not found", candidate) : VerificationSucceeded(candidate);
             }
 
-            return await this.VerifyTmdbCandidateAsync(candidate, new ItemLookupInfo { MetadataLanguage = language }, targetMediaType, cancellationToken).ConfigureAwait(false);
+            return await this.VerifyTmdbCandidateAsync(candidate, new ItemLookupInfo { MetadataLanguage = language }, targetMediaType, null, cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<LlmExternalIdVerificationResult?> VerifyTmdbCandidateSemanticAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, string targetMediaType, LlmScrapingSuggestion suggestion, CancellationToken cancellationToken)
@@ -1237,7 +1239,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             };
         }
 
-        private async Task<LlmExternalIdVerificationResult> VerifyTmdbEpisodeCandidateAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, int candidateEpisodeId, CancellationToken cancellationToken)
+        private async Task<LlmExternalIdVerificationResult> VerifyTmdbEpisodeCandidateAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, int candidateEpisodeId, PluginConfiguration? configuration, CancellationToken cancellationToken)
         {
             if (lookupInfo is not EpisodeInfo episodeInfo)
             {
@@ -1252,8 +1254,29 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 return VerificationFailed("episode parent TMDb series, season, and episode numbers are required", candidate);
             }
 
-            var episode = await this.tmdbApi.GetEpisodeAsync(seriesId, episodeInfo.ParentIndexNumber.Value, episodeInfo.IndexNumber.Value, episodeInfo.MetadataLanguage, string.Empty, cancellationToken).ConfigureAwait(false);
+            var resolvedEpisodeRequest = await this.ResolveTmdbEpisodeRequestAsync(
+                    configuration,
+                    seriesId,
+                    episodeInfo.ParentIndexNumber.Value,
+                    episodeInfo.IndexNumber.Value,
+                    episodeInfo.MetadataLanguage,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var episode = await this.tmdbApi.GetEpisodeAsync(seriesId, resolvedEpisodeRequest.SeasonNumber, resolvedEpisodeRequest.EpisodeNumber, episodeInfo.MetadataLanguage, string.Empty, cancellationToken).ConfigureAwait(false);
             return episode?.Id == candidateEpisodeId ? VerificationSucceeded(candidate) : VerificationFailed("TMDb episode detail did not match the same series, season, and episode", candidate);
+        }
+
+        private async Task<(int SeasonNumber, int EpisodeNumber)> ResolveTmdbEpisodeRequestAsync(PluginConfiguration? configuration, int seriesId, int seasonNumber, int episodeNumber, string? language, CancellationToken cancellationToken)
+        {
+            if (!this.episodeGroupMappingFacade.TryGetEffectiveGroupId(configuration, seriesId.ToString(CultureInfo.InvariantCulture), out var groupId))
+            {
+                return (seasonNumber, episodeNumber);
+            }
+
+            var group = await this.tmdbApi.GetEpisodeGroupByIdAsync(groupId, language ?? string.Empty, cancellationToken).ConfigureAwait(false);
+            var season = group?.Groups.Find(item => item.Order == seasonNumber);
+            var episode = season?.Episodes.Find(item => item.Order == episodeNumber - 1);
+            return episode == null ? (seasonNumber, episodeNumber) : (episode.SeasonNumber, episode.EpisodeNumber);
         }
 
         private static bool IsCandidateMediaTypeCompatible(LlmExternalIdCandidate candidate, string targetMediaType)
