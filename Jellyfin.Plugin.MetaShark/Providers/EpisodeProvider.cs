@@ -262,8 +262,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var item = new Episode
             {
-                IndexNumber = resolvedEpisodeNumber,
-                ParentIndexNumber = resolvedSeasonNumber,
+                IndexNumber = episodeNumber,
+                ParentIndexNumber = seasonNumber,
             };
 
             if (!suppressLlmForImplicitSearchMissingFallback)

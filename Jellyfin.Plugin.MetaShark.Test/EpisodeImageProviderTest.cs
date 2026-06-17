@@ -3,6 +3,7 @@ using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
+using Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping;
 using Jellyfin.Plugin.MetaShark.Workers;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -171,6 +172,135 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                 outcomeReporterStub.Verify(x => x.ReportSuccess(info), Times.Once);
                 outcomeReporterStub.Verify(x => x.ReportHardMiss(It.IsAny<BaseItem>(), It.IsAny<string>()), Times.Never);
+            });
+        }
+
+        [TestMethod]
+        public void GetImages_WhenEpisodeGroupMapsToTmdbAbsoluteEpisode_UsesMappedTmdbStill()
+        {
+            RequireOutcomeReporterContract();
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(new Jellyfin.Plugin.MetaShark.Configuration.PluginConfiguration
+            {
+                EnableTmdb = true,
+                TmdbEpisodeGroupMap = "65942=rezero-production-group",
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var outcomeReporterStub = new Mock<ITvImageRefillOutcomeReporter>();
+
+            WithLibraryManager(libraryManagerStub.Object, () =>
+            {
+                var tmdbApi = CreateConfiguredTmdbApi();
+                ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                    tmdbApi,
+                    "rezero-production-group",
+                    "zh",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                        order: 4,
+                        name: "Season 4",
+                        ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 9, seasonNumber: 1, episodeNumber: 76)));
+                SeedTmdbEpisode(tmdbApi, 65942, 1, 76, "zh", "/rezero-s1e76-still.jpg", 8.4d, 42);
+
+                var provider = CreateProvider(libraryManagerStub.Object, outcomeReporterStub.Object, tmdbApi);
+                var info = new MediaBrowser.Controller.Entities.TV.Episode
+                {
+                    Name = "杀人会成为一种习惯",
+                    PreferredMetadataLanguage = "zh",
+                    ParentIndexNumber = 4,
+                    IndexNumber = 10,
+                };
+                SetSeries(
+                    info,
+                    libraryManagerStub,
+                    new MediaBrowser.Controller.Entities.TV.Series
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Re：从零开始的异世界生活",
+                        PreferredMetadataLanguage = "zh",
+                        DisplayOrder = "production",
+                        ProviderIds = new Dictionary<string, string>
+                        {
+                            { MetadataProvider.Tmdb.ToString(), "65942" },
+                        },
+                    });
+
+                List<RemoteImageInfo>? result = null;
+                Task.Run(async () =>
+                {
+                    result = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                }).GetAwaiter().GetResult();
+
+                outcomeReporterStub.Verify(x => x.ReportSuccess(info), Times.Once);
+                outcomeReporterStub.Verify(x => x.ReportHardMiss(It.IsAny<BaseItem>(), It.IsAny<string>()), Times.Never);
+                Assert.IsNotNull(result);
+                Assert.AreEqual(1, result!.Count);
+                Assert.AreEqual("https://image.tmdb.org/t/p/w300/rezero-s1e76-still.jpg", result[0].Url);
+            });
+        }
+
+        [TestMethod]
+        public void GetImages_WhenStoredEpisodeNumberWasPollutedByTmdbAbsoluteEpisode_FallsBackToFileNameGroupNumber()
+        {
+            RequireOutcomeReporterContract();
+            EnsurePluginInstance();
+            ReplacePluginConfiguration(new Jellyfin.Plugin.MetaShark.Configuration.PluginConfiguration
+            {
+                EnableTmdb = true,
+                TmdbEpisodeGroupMap = "65942=rezero-production-group",
+            });
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            var outcomeReporterStub = new Mock<ITvImageRefillOutcomeReporter>();
+
+            WithLibraryManager(libraryManagerStub.Object, () =>
+            {
+                var tmdbApi = CreateConfiguredTmdbApi();
+                ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                    tmdbApi,
+                    "rezero-production-group",
+                    "zh",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                        order: 4,
+                        name: "Season 4",
+                        ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 9, seasonNumber: 1, episodeNumber: 76)));
+                SeedTmdbEpisode(tmdbApi, 65942, 1, 76, "zh", "/rezero-s1e76-still.jpg", 8.4d, 42);
+
+                var provider = CreateProvider(libraryManagerStub.Object, outcomeReporterStub.Object, tmdbApi);
+                var info = new MediaBrowser.Controller.Entities.TV.Episode
+                {
+                    Name = "杀人会成为一种习惯",
+                    Path = "/test/Re：从零开始的异世界生活 (2016)/Season 4/Re：从零开始的异世界生活 - S04E10 - 第10集.mkv",
+                    PreferredMetadataLanguage = "zh",
+                    ParentIndexNumber = 4,
+                    IndexNumber = 76,
+                };
+                SetSeries(
+                    info,
+                    libraryManagerStub,
+                    new MediaBrowser.Controller.Entities.TV.Series
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Re：从零开始的异世界生活",
+                        PreferredMetadataLanguage = "zh",
+                        DisplayOrder = "production",
+                        ProviderIds = new Dictionary<string, string>
+                        {
+                            { MetadataProvider.Tmdb.ToString(), "65942" },
+                        },
+                    });
+
+                List<RemoteImageInfo>? result = null;
+                Task.Run(async () =>
+                {
+                    result = (await provider.GetImages(info, CancellationToken.None)).ToList();
+                }).GetAwaiter().GetResult();
+
+                outcomeReporterStub.Verify(x => x.ReportSuccess(info), Times.Once);
+                outcomeReporterStub.Verify(x => x.ReportHardMiss(It.IsAny<BaseItem>(), It.IsAny<string>()), Times.Never);
+                Assert.IsNotNull(result);
+                Assert.AreEqual(1, result!.Count);
+                Assert.AreEqual("https://image.tmdb.org/t/p/w300/rezero-s1e76-still.jpg", result[0].Url);
             });
         }
 

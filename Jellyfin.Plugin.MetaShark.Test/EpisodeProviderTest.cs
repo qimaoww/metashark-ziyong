@@ -3,6 +3,7 @@ using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Core;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Providers;
+using Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
@@ -183,6 +184,60 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
 
+
+        [TestMethod]
+        public async Task GetMetadata_WhenEpisodeGroupMapsToTmdbAbsoluteEpisode_KeepsEpisodeGroupNumber()
+        {
+            ReplacePluginConfiguration(new PluginConfiguration
+            {
+                EnableTmdb = true,
+                TmdbEpisodeGroupMap = "65942=rezero-production-group",
+            });
+
+            var tmdbApi = new TmdbApi(loggerFactory);
+            ExplicitEpisodeGroupMappingTestHelper.SeedEpisodeGroupById(
+                tmdbApi,
+                "rezero-production-group",
+                "zh-CN",
+                ExplicitEpisodeGroupMappingTestHelper.CreateGroup(
+                    order: 4,
+                    name: "Season 4",
+                    ExplicitEpisodeGroupMappingTestHelper.CreateEpisode(order: 9, seasonNumber: 1, episodeNumber: 76)));
+            SeedEpisode(tmdbApi, 65942, 1, 76, "zh-CN", "zh-CN", new TvEpisode
+            {
+                Name = "杀人会成为一种习惯",
+                Overview = "昴一行人开始在唯有踏沙声回响的地下通道中前进。",
+                AirDate = new DateTime(2025, 3, 5),
+                VoteAverage = 8.4,
+            });
+            SeedEpisodeTranslationOverview(tmdbApi, 65942, 1, 76, "zh-CN", null);
+
+            var provider = CreateProvider(new Mock<ILibraryManager>().Object, new Mock<IHttpContextAccessor>().Object, tmdbApi);
+            var result = await provider.GetMetadata(
+                new EpisodeInfo
+                {
+                    Name = "第10集",
+                    Path = "/test/Re：从零开始的异世界生活 (2016)/Season 4/Re：从零开始的异世界生活 - S04E10 - 第10集.mkv",
+                    MetadataLanguage = "zh-CN",
+                    ParentIndexNumber = 4,
+                    IndexNumber = 10,
+                    SeriesDisplayOrder = "production",
+                    SeriesProviderIds = new Dictionary<string, string>
+                    {
+                        { MetadataProvider.Tmdb.ToString(), "65942" },
+                    },
+                    IsAutomated = true,
+                },
+                CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsTrue(result.HasMetadata);
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual(4, result.Item!.ParentIndexNumber, "Jellyfin 应保留剧集组内的季号，而不是 TMDb 原始季号。");
+            Assert.AreEqual(10, result.Item.IndexNumber, "Jellyfin 应保留剧集组内的集号，而不是 TMDb 原始集号。");
+            Assert.AreEqual("杀人会成为一种习惯", result.Item.Name);
+            Assert.AreEqual("昴一行人开始在唯有踏沙声回响的地下通道中前进。", result.Item.Overview);
+            Assert.AreEqual(new DateTime(2025, 3, 5), result.Item.PremiereDate);
+        }
 
         [TestMethod]
         public void TestGetMetadata()
