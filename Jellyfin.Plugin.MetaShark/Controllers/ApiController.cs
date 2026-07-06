@@ -10,19 +10,11 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     using System.Net.Http;
     using System.Threading;
     using System.Threading.Tasks;
-    using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
-    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
     using Jellyfin.Plugin.MetaShark.Model;
     using MediaBrowser.Common.Extensions;
     using MediaBrowser.Common.Net;
-    using MediaBrowser.Controller.Entities;
-    using MediaBrowser.Controller.Library;
-    using MediaBrowser.Controller.Providers;
-    using MediaBrowser.Model.Entities;
-    using MediaBrowser.Model.IO;
-    using MediaBrowser.Model.Providers;
     using Microsoft.AspNetCore.Authorization;
     using Microsoft.AspNetCore.Mvc;
     using Microsoft.AspNetCore.Mvc.ModelBinding;
@@ -41,12 +33,9 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
 
         private readonly DoubanApi doubanApi;
         private readonly IHttpClientFactory httpClientFactory;
-        private readonly ILibraryManager libraryManager;
-        private readonly IProviderManager providerManager;
-        private readonly IFileSystem fileSystem;
         private readonly ILogger<ApiController> logger;
         private readonly IEpisodeGroupMappingFacade episodeGroupMappingFacade;
-        private readonly EpisodeGroupRefreshService episodeGroupRefreshService = new();
+        private readonly EpisodeGroupRefreshCoordinator episodeGroupRefreshCoordinator;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ApiController"/> class.
@@ -55,19 +44,15 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         public ApiController(
             IHttpClientFactory httpClientFactory,
             DoubanApi doubanApi,
-            ILibraryManager libraryManager,
-            IProviderManager providerManager,
-            IFileSystem fileSystem,
             ILogger<ApiController> logger,
-            IEpisodeGroupMappingFacade? episodeGroupMappingFacade = null)
+            IEpisodeGroupMappingFacade episodeGroupMappingFacade,
+            EpisodeGroupRefreshCoordinator episodeGroupRefreshCoordinator)
         {
             this.httpClientFactory = httpClientFactory;
             this.doubanApi = doubanApi;
-            this.libraryManager = libraryManager;
-            this.providerManager = providerManager;
-            this.fileSystem = fileSystem;
             this.logger = logger;
-            this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? new EpisodeGroupMappingFacade();
+            this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? throw new ArgumentNullException(nameof(episodeGroupMappingFacade));
+            this.episodeGroupRefreshCoordinator = episodeGroupRefreshCoordinator ?? throw new ArgumentNullException(nameof(episodeGroupRefreshCoordinator));
         }
 
         /// <summary>
@@ -146,34 +131,13 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         {
             var configuration = MetaSharkPlugin.Instance?.Configuration;
             var currentMapping = this.episodeGroupMappingFacade.GetEffectiveMappingText(configuration);
-            var refreshResult = this.episodeGroupRefreshService.CreateRefreshResult(
+            var outcome = this.episodeGroupRefreshCoordinator.QueueAffectedSeriesRefresh(
                 request?.OldMapping ?? string.Empty,
-                request?.NewMapping ?? currentMapping);
+                request?.NewMapping ?? currentMapping,
+                item => LogSkipRefreshEmptyId(this.logger, item.Name, null));
 
-            if (refreshResult.AffectedSeriesIds.Count == 0)
-            {
-                return new ApiResult(1, refreshResult.CreateSummaryMessage(0));
-            }
-
-            var affectedSeriesIds = new System.Collections.Generic.HashSet<string>(refreshResult.AffectedSeriesIds, StringComparer.OrdinalIgnoreCase);
-            var queueablePlans = EpisodeGroupRefreshQueueSelector.SelectQueueableRefreshPlans(
-                this.libraryManager,
-                this.fileSystem,
-                affectedSeriesIds,
-                item => item.ProviderIds.TryGetValue(MediaBrowser.Model.Entities.MetadataProvider.Tmdb.ToString(), out var tmdbId) ? tmdbId : null);
-
-            var queued = 0;
-            foreach (var plan in queueablePlans)
-            {
-                queued += EpisodeGroupRefreshQueueSelector.QueueRefreshTargets(
-                    plan,
-                    this.providerManager,
-                    this.fileSystem,
-                    item => LogSkipRefreshEmptyId(this.logger, item.Name, null));
-            }
-
-            LogQueuedRefresh(this.logger, queued, null);
-            return new ApiResult(1, refreshResult.CreateSummaryMessage(queued));
+            LogQueuedRefresh(this.logger, outcome.QueuedCount, null);
+            return new ApiResult(1, outcome.RefreshResult.CreateSummaryMessage(outcome.QueuedCount));
         }
 
         private HttpClient GetHttpClient()

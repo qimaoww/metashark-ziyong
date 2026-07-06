@@ -45,6 +45,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddHostedService<EpisodeOverviewCleanupItemUpdatedWorker>();
             serviceCollection.AddHostedService<EpisodeOverviewCleanupDeferredRetryWorker>();
             serviceCollection.AddHostedService<LlmTmdbCorrectionMetadataItemUpdatedWorker>();
+            serviceCollection.AddHostedService<EpisodeGroupMappingConfigurationRefreshService>();
             serviceCollection.AddSingleton<ITvImageRefillStateStore>((ctx) =>
             {
                 return new FileTvImageRefillStateStore(
@@ -189,6 +190,13 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<ILlmTmdbCorrectionMapFacade>((_) => new LlmTmdbCorrectionMapFacade(LlmTmdbCorrectionMapParser.Shared));
             serviceCollection.AddSingleton<ILlmTmdbCorrectionMapPersistenceService>((_) => new LlmTmdbCorrectionMapPersistenceService(LlmTmdbCorrectionMapParser.Shared));
             serviceCollection.AddSingleton<IEpisodeGroupMappingFacade>((_) => new EpisodeGroupMappingFacade());
+            serviceCollection.AddSingleton<EpisodeGroupRefreshCoordinator>((ctx) =>
+            {
+                return new EpisodeGroupRefreshCoordinator(
+                    ctx.GetRequiredService<ILibraryManager>(),
+                    ctx.GetRequiredService<IProviderManager>(),
+                    ctx.GetRequiredService<IFileSystem>());
+            });
             serviceCollection.AddSingleton<ITmdbEpisodeGroupMapPersistenceService>((_) => new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared, saveLlmMapping: true));
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
             {
@@ -206,9 +214,7 @@ namespace Jellyfin.Plugin.MetaShark
                 return new LlmEpisodeGroupMappingProviderAssistService(
                     ctx.GetRequiredService<ILlmEpisodeGroupMappingAssistService>(),
                     ctx.GetRequiredService<TmdbApi>(),
-                    ctx.GetRequiredService<ILibraryManager>(),
-                    ctx.GetRequiredService<IProviderManager>(),
-                    ctx.GetRequiredService<IFileSystem>(),
+                    ctx.GetRequiredService<EpisodeGroupRefreshCoordinator>(),
                     ctx.GetRequiredService<IEpisodeGroupMappingFacade>(),
                     ctx.GetRequiredService<LlmAssistTriggerPolicy>(),
                     ctx.GetRequiredService<ILogger<LlmEpisodeGroupMappingProviderAssistService>>());

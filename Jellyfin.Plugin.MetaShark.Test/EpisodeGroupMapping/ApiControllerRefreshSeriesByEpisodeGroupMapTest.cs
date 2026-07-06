@@ -4,6 +4,7 @@ using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using Jellyfin.Plugin.MetaShark.Controllers;
+using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
 using Jellyfin.Plugin.MetaShark.Model;
 using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
@@ -83,17 +84,23 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
         }
 
         [TestMethod]
-        public void RefreshSeriesByEpisodeGroupMap_AddMapping_WhenSeriesHasSeasons_QueuesSeasonScanRefresh()
+        public void RefreshSeriesByEpisodeGroupMap_AddMapping_WhenSeriesHasSeasonsAndEpisodes_QueuesMetadataRefresh()
         {
             var addedSeries = CreateSeries(Guid.NewGuid(), "Added series", "65942");
             var firstSeason = CreateSeason(Guid.NewGuid(), "Season 1", addedSeries.Id);
             var secondSeason = CreateSeason(Guid.NewGuid(), "Season 2", addedSeries.Id);
+            var firstEpisode = CreateEpisode(Guid.NewGuid(), "Episode 1", addedSeries.Id);
+            var secondEpisode = CreateEpisode(Guid.NewGuid(), "Episode 2", addedSeries.Id);
 
             using var harness = CreateHarness(
                 items: new[] { addedSeries },
                 seasonsBySeriesId: new Dictionary<Guid, IReadOnlyList<BaseItem>>
                 {
                     [addedSeries.Id] = new BaseItem[] { firstSeason, secondSeason },
+                },
+                episodesBySeriesId: new Dictionary<Guid, IReadOnlyList<BaseItem>>
+                {
+                    [addedSeries.Id] = new BaseItem[] { firstEpisode, secondEpisode },
                 });
 
             var result = harness.Controller.RefreshSeriesByEpisodeGroupMap(new TmdbEpisodeGroupRefreshRequest
@@ -103,10 +110,13 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             });
 
             Assert.AreEqual(1, result.Code);
-            Assert.AreEqual(CreateExpectedSummary(queued: 2, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
-            AssertQueuedSeasonScans(harness.QueueCalls, firstSeason.Id, secondSeason.Id);
+            Assert.AreEqual(CreateExpectedSummary(queued: 4, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
+            AssertQueuedMetadataRefreshes(harness.QueueCalls, firstSeason.Id, secondSeason.Id, firstEpisode.Id, secondEpisode.Id);
             harness.LibraryManagerStub.Verify(
                 x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeasonQueryForAncestor(query, addedSeries.Id))),
+                Times.Once);
+            harness.LibraryManagerStub.Verify(
+                x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsEpisodeQueryForAncestor(query, addedSeries.Id))),
                 Times.Once);
         }
 
@@ -236,6 +246,38 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
         }
 
         [TestMethod]
+        public void Constructor_ShouldRequireSharedEpisodeGroupRefreshCoordinator()
+        {
+            var constructor = typeof(ApiController).GetConstructors().Single();
+            var coordinatorParameter = constructor.GetParameters().SingleOrDefault(parameter => parameter.ParameterType == typeof(EpisodeGroupRefreshCoordinator));
+
+            Assert.IsNotNull(coordinatorParameter, "ApiController 必须由 DI 注入共享 EpisodeGroupRefreshCoordinator。");
+            Assert.IsFalse(coordinatorParameter!.HasDefaultValue, "EpisodeGroupRefreshCoordinator 不能是可选 fallback，否则配置页 POST 无法复用后台服务的去重状态。");
+        }
+
+        [TestMethod]
+        public void RefreshSeriesByEpisodeGroupMap_WhenConfigurationServiceAlreadyQueued_DoesNotQueueDuplicateApiPost()
+        {
+            var series = CreateSeries(Guid.NewGuid(), "Series 65942", "65942");
+
+            using var harness = CreateHarness(items: new[] { series });
+            var firstOutcome = harness.Coordinator.QueueAffectedSeriesRefresh(string.Empty, "65942=group-a");
+
+            Assert.AreEqual(1, firstOutcome.QueuedCount);
+            AssertQueuedSeries(harness.QueueCalls, series.Id);
+
+            var result = harness.Controller.RefreshSeriesByEpisodeGroupMap(new TmdbEpisodeGroupRefreshRequest
+            {
+                OldMapping = string.Empty,
+                NewMapping = "65942=group-a",
+            });
+
+            Assert.AreEqual(1, result.Code);
+            Assert.AreEqual(CreateExpectedSummary(queued: 0, affected: 1, added: 1, removed: 0, changed: 0, noOp: false), result.Msg);
+            Assert.AreEqual(1, harness.QueueCalls.Count);
+        }
+
+        [TestMethod]
         public void RefreshSeriesByEpisodeGroupMap_DuplicateTmdbIdWithMissingOldPath_QueuesOnlyExistingPath()
         {
             const string oldPath = "/old/Series A";
@@ -302,6 +344,16 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             };
         }
 
+        private static Episode CreateEpisode(Guid id, string name, Guid seriesId)
+        {
+            return new Episode
+            {
+                Id = id,
+                Name = name,
+                SeriesId = seriesId,
+            };
+        }
+
         private static string CreateExpectedSummary(
             int queued,
             int affected,
@@ -343,16 +395,16 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             }
         }
 
-        private static void AssertQueuedSeasonScans(IReadOnlyCollection<QueueRefreshCall> queueCalls, params Guid[] expectedIds)
+        private static void AssertQueuedMetadataRefreshes(IReadOnlyCollection<QueueRefreshCall> queueCalls, params Guid[] expectedIds)
         {
             CollectionAssert.AreEquivalent(expectedIds, queueCalls.Select(x => x.ItemId).ToArray());
 
             foreach (var queueCall in queueCalls)
             {
                 Assert.AreEqual(RefreshPriority.High, queueCall.Priority);
-                Assert.AreEqual(MetadataRefreshMode.Default, queueCall.Options.MetadataRefreshMode);
-                Assert.AreEqual(MetadataRefreshMode.Default, queueCall.Options.ImageRefreshMode);
-                Assert.IsFalse(queueCall.Options.ReplaceAllMetadata);
+                Assert.AreEqual(MetadataRefreshMode.FullRefresh, queueCall.Options.MetadataRefreshMode);
+                Assert.AreEqual(MetadataRefreshMode.FullRefresh, queueCall.Options.ImageRefreshMode);
+                Assert.IsTrue(queueCall.Options.ReplaceAllMetadata);
                 Assert.IsFalse(queueCall.Options.ReplaceAllImages);
             }
         }
@@ -370,6 +422,16 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             return HasSingleIncludeItemType(query, BaseItemKind.Season)
                 && query.IsVirtualItem == null
                 && query.IsMissing == null
+                && query.ParentId == Guid.Empty
+                && query.AncestorIds.Length == 1
+                && query.AncestorIds[0] == ancestorId;
+        }
+
+        private static bool IsEpisodeQueryForAncestor(InternalItemsQuery query, Guid ancestorId)
+        {
+            return HasSingleIncludeItemType(query, BaseItemKind.Episode)
+                && query.IsVirtualItem == false
+                && query.IsMissing == false
                 && query.ParentId == Guid.Empty
                 && query.AncestorIds.Length == 1
                 && query.AncestorIds[0] == ancestorId;
@@ -453,7 +515,8 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             string currentMapping = "",
             string currentLlmMapping = "",
             IEnumerable<string>? existingPaths = null,
-            IReadOnlyDictionary<Guid, IReadOnlyList<BaseItem>>? seasonsBySeriesId = null)
+            IReadOnlyDictionary<Guid, IReadOnlyList<BaseItem>>? seasonsBySeriesId = null,
+            IReadOnlyDictionary<Guid, IReadOnlyList<BaseItem>>? episodesBySeriesId = null)
         {
             EnsurePluginInstance();
             ReplacePluginConfiguration(new PluginConfiguration
@@ -464,6 +527,7 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
 
             var materializedItems = items.ToList();
             var materializedSeasonsBySeriesId = seasonsBySeriesId ?? new Dictionary<Guid, IReadOnlyList<BaseItem>>();
+            var materializedEpisodesBySeriesId = episodesBySeriesId ?? new Dictionary<Guid, IReadOnlyList<BaseItem>>();
             var libraryManagerStub = new Mock<ILibraryManager>();
             libraryManagerStub
                 .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => IsSeriesQuery(query))))
@@ -474,6 +538,13 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                     query.AncestorIds.Length == 1
                     && materializedSeasonsBySeriesId.TryGetValue(query.AncestorIds[0], out var seasons)
                         ? seasons.ToList()
+                        : new List<BaseItem>());
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.Is<InternalItemsQuery>(query => HasSingleIncludeItemType(query, BaseItemKind.Episode))))
+                .Returns<InternalItemsQuery>(query =>
+                    query.AncestorIds.Length == 1
+                    && materializedEpisodesBySeriesId.TryGetValue(query.AncestorIds[0], out var episodes)
+                        ? episodes.ToList()
                         : new List<BaseItem>());
 
             var queueCalls = new List<QueueRefreshCall>();
@@ -490,16 +561,19 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
 
             var loggerStub = new Mock<ILogger<ApiController>>();
             loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var coordinator = new EpisodeGroupRefreshCoordinator(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                fileSystemStub.Object);
 
             var controller = new ApiController(
                 new Mock<IHttpClientFactory>().Object,
                 new DoubanApi(this.loggerFactory),
-                libraryManagerStub.Object,
-                providerManagerStub.Object,
-                fileSystemStub.Object,
-                loggerStub.Object);
+                loggerStub.Object,
+                new EpisodeGroupMappingFacade(),
+                coordinator);
 
-            return new ControllerHarness(controller, materializedItems, libraryManagerStub, queueCalls, loggerStub);
+            return new ControllerHarness(controller, materializedItems, libraryManagerStub, queueCalls, loggerStub, coordinator);
         }
 
         private sealed record QueueRefreshCall(Guid ItemId, MetadataRefreshOptions Options, RefreshPriority Priority);
@@ -511,13 +585,15 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
                 IReadOnlyList<BaseItem> items,
                 Mock<ILibraryManager> libraryManagerStub,
                 IReadOnlyCollection<QueueRefreshCall> queueCalls,
-                Mock<ILogger<ApiController>> loggerStub)
+                Mock<ILogger<ApiController>> loggerStub,
+                EpisodeGroupRefreshCoordinator coordinator)
             {
                 this.Controller = controller;
                 this.Items = items;
                 this.LibraryManagerStub = libraryManagerStub;
                 this.QueueCalls = queueCalls;
                 this.LoggerStub = loggerStub;
+                this.Coordinator = coordinator;
             }
 
             public ApiController Controller { get; }
@@ -529,6 +605,8 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             public IReadOnlyCollection<QueueRefreshCall> QueueCalls { get; }
 
             public Mock<ILogger<ApiController>> LoggerStub { get; }
+
+            public EpisodeGroupRefreshCoordinator Coordinator { get; }
 
             public void Dispose()
             {

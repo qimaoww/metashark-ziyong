@@ -19,7 +19,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         public enum EpisodeGroupRefreshQueueMode
         {
             SeriesFullRefresh,
-            SeasonScanRefresh,
+            MetadataRefresh,
         }
 
         private enum QueueCandidatePathState
@@ -90,18 +90,10 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 ReplaceAllImages = false,
             };
 
-            if (mode == EpisodeGroupRefreshQueueMode.SeasonScanRefresh)
-            {
-                refreshOptions.MetadataRefreshMode = MetadataRefreshMode.Default;
-                refreshOptions.ImageRefreshMode = MetadataRefreshMode.Default;
-                refreshOptions.ReplaceAllMetadata = false;
-                refreshOptions.IsAutomated = false;
-                return refreshOptions;
-            }
-
             refreshOptions.MetadataRefreshMode = MetadataRefreshMode.FullRefresh;
             refreshOptions.ImageRefreshMode = MetadataRefreshMode.FullRefresh;
             refreshOptions.ReplaceAllMetadata = true;
+            refreshOptions.IsAutomated = false;
             return refreshOptions;
         }
 
@@ -160,14 +152,23 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 IncludeItemTypes = new[] { BaseItemKind.Season },
                 AncestorIds = new[] { series.Id },
             });
-            if (seasons.Count > 0)
+            var episodes = libraryManager.GetItemList(new InternalItemsQuery
+            {
+                IncludeItemTypes = new[] { BaseItemKind.Episode },
+                AncestorIds = new[] { series.Id },
+                IsVirtualItem = false,
+                IsMissing = false,
+            });
+            var itemTargets = seasons
+                .Concat(episodes)
+                .Select(item => new EpisodeGroupRefreshQueueTarget(item, EpisodeGroupRefreshQueueMode.MetadataRefresh))
+                .ToArray();
+            if (itemTargets.Length > 0)
             {
                 return new EpisodeGroupRefreshQueuePlan(
                     series,
                     groupKey,
-                    seasons
-                        .Select(season => new EpisodeGroupRefreshQueueTarget(season, EpisodeGroupRefreshQueueMode.SeasonScanRefresh))
-                        .ToArray());
+                    itemTargets);
             }
 
             return new EpisodeGroupRefreshQueuePlan(

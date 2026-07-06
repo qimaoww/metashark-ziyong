@@ -16,10 +16,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Providers;
     using Jellyfin.Plugin.MetaShark.Providers.Llm;
-    using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
-    using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.IO;
     using Microsoft.Extensions.Logging;
     using TMDbLib.Objects.TvShows;
@@ -41,12 +39,9 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
         private readonly ILlmEpisodeGroupMappingAssistService assistService;
         private readonly TmdbApi tmdbApi;
-        private readonly ILibraryManager libraryManager;
-        private readonly IProviderManager providerManager;
-        private readonly IFileSystem fileSystem;
         private readonly IEpisodeGroupMappingFacade episodeGroupMappingFacade;
         private readonly LlmAssistTriggerPolicy triggerPolicy;
-        private readonly EpisodeGroupRefreshService refreshService;
+        private readonly EpisodeGroupRefreshCoordinator episodeGroupRefreshCoordinator;
         private readonly ILogger<LlmEpisodeGroupMappingProviderAssistService> logger;
 
         public LlmEpisodeGroupMappingProviderAssistService(
@@ -57,7 +52,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             IFileSystem fileSystem,
             LlmAssistTriggerPolicy triggerPolicy,
             ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
-            : this(assistService, tmdbApi, libraryManager, providerManager, fileSystem, new EpisodeGroupMappingFacade(), triggerPolicy, new EpisodeGroupRefreshService(), logger)
+            : this(assistService, tmdbApi, new EpisodeGroupRefreshCoordinator(libraryManager, providerManager, fileSystem), new EpisodeGroupMappingFacade(), triggerPolicy, logger)
         {
         }
 
@@ -70,7 +65,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             IEpisodeGroupMappingFacade episodeGroupMappingFacade,
             LlmAssistTriggerPolicy triggerPolicy,
             ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
-            : this(assistService, tmdbApi, libraryManager, providerManager, fileSystem, episodeGroupMappingFacade, triggerPolicy, new EpisodeGroupRefreshService(), logger)
+            : this(assistService, tmdbApi, new EpisodeGroupRefreshCoordinator(libraryManager, providerManager, fileSystem), episodeGroupMappingFacade, triggerPolicy, logger)
         {
         }
 
@@ -83,7 +78,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             LlmAssistTriggerPolicy triggerPolicy,
             EpisodeGroupRefreshService refreshService,
             ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
-            : this(assistService, tmdbApi, libraryManager, providerManager, fileSystem, new EpisodeGroupMappingFacade(), triggerPolicy, refreshService, logger)
+            : this(assistService, tmdbApi, new EpisodeGroupRefreshCoordinator(libraryManager, providerManager, fileSystem, refreshService), new EpisodeGroupMappingFacade(), triggerPolicy, logger)
         {
         }
 
@@ -96,16 +91,24 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             IEpisodeGroupMappingFacade episodeGroupMappingFacade,
             LlmAssistTriggerPolicy triggerPolicy,
             EpisodeGroupRefreshService refreshService,
+            ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
+            : this(assistService, tmdbApi, new EpisodeGroupRefreshCoordinator(libraryManager, providerManager, fileSystem, refreshService), episodeGroupMappingFacade, triggerPolicy, logger)
+        {
+        }
+
+        public LlmEpisodeGroupMappingProviderAssistService(
+            ILlmEpisodeGroupMappingAssistService assistService,
+            TmdbApi tmdbApi,
+            EpisodeGroupRefreshCoordinator episodeGroupRefreshCoordinator,
+            IEpisodeGroupMappingFacade episodeGroupMappingFacade,
+            LlmAssistTriggerPolicy triggerPolicy,
             ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
         {
             this.assistService = assistService ?? throw new ArgumentNullException(nameof(assistService));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
-            this.libraryManager = libraryManager ?? throw new ArgumentNullException(nameof(libraryManager));
-            this.providerManager = providerManager ?? throw new ArgumentNullException(nameof(providerManager));
-            this.fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+            this.episodeGroupRefreshCoordinator = episodeGroupRefreshCoordinator ?? throw new ArgumentNullException(nameof(episodeGroupRefreshCoordinator));
             this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? throw new ArgumentNullException(nameof(episodeGroupMappingFacade));
             this.triggerPolicy = triggerPolicy ?? throw new ArgumentNullException(nameof(triggerPolicy));
-            this.refreshService = refreshService ?? throw new ArgumentNullException(nameof(refreshService));
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
@@ -220,44 +223,14 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
         private void QueueAffectedSeriesRefresh(string oldMapping, string newMapping)
         {
-            var refreshResult = this.refreshService.CreateRefreshResult(oldMapping, newMapping);
-            if (refreshResult.AffectedSeriesIds.Count == 0)
-            {
-                return;
-            }
+            var outcome = this.episodeGroupRefreshCoordinator.QueueAffectedSeriesRefresh(
+                oldMapping,
+                newMapping,
+                suppressRecentlyQueued: true,
+                additionalSkip: IsRecentlyQueuedRefresh,
+                queuedHandler: MarkRefreshQueued);
 
-            var affectedSeriesIds = new HashSet<string>(refreshResult.AffectedSeriesIds, StringComparer.OrdinalIgnoreCase);
-            var queueablePlans = EpisodeGroupRefreshQueueSelector.SelectQueueableRefreshPlans(
-                this.libraryManager,
-                this.fileSystem,
-                affectedSeriesIds,
-                item => item.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var tmdbId) ? tmdbId : null);
-
-            var queued = 0;
-            foreach (var plan in queueablePlans)
-            {
-                if (plan.Series.Id == Guid.Empty)
-                {
-                    continue;
-                }
-
-                var newGroupId = refreshResult.NewSnapshot.TryGetGroupId(plan.GroupKey, out var resolvedGroupId)
-                    ? resolvedGroupId
-                    : string.Empty;
-
-                if (IsRecentlyQueuedRefresh(plan.GroupKey, newGroupId))
-                {
-                    continue;
-                }
-
-                MarkRefreshQueued(plan.GroupKey, newGroupId);
-                queued += EpisodeGroupRefreshQueueSelector.QueueRefreshTargets(
-                    plan,
-                    this.providerManager,
-                    this.fileSystem);
-            }
-
-            LogQueuedRefresh(this.logger, queued, null);
+            LogQueuedRefresh(this.logger, outcome.QueuedCount, null);
         }
 
         private static SemaphoreSlim GetSeriesLock(string seriesTmdbId)

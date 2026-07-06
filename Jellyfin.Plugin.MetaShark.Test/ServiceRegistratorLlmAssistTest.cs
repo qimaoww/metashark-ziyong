@@ -51,6 +51,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var episodeGroupMappingAssistSecondResolve = serviceProvider.GetRequiredService<ILlmEpisodeGroupMappingAssistService>();
             var episodeGroupMapPersistenceService = serviceProvider.GetRequiredService<ITmdbEpisodeGroupMapPersistenceService>();
             var episodeGroupMapPersistenceServiceSecondResolve = serviceProvider.GetRequiredService<ITmdbEpisodeGroupMapPersistenceService>();
+            var episodeGroupRefreshCoordinator = serviceProvider.GetRequiredService<EpisodeGroupRefreshCoordinator>();
+            var episodeGroupRefreshCoordinatorSecondResolve = serviceProvider.GetRequiredService<EpisodeGroupRefreshCoordinator>();
             var externalIdValidator = serviceProvider.GetRequiredService<LlmExternalIdCandidateValidator>();
             var externalIdValidatorSecondResolve = serviceProvider.GetRequiredService<LlmExternalIdCandidateValidator>();
             var externalIdResolutionService = serviceProvider.GetRequiredService<ILlmExternalIdResolutionService>();
@@ -73,9 +75,22 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreSame(episodeGroupMappingAssist, episodeGroupMappingAssistSecondResolve);
             Assert.AreSame(episodeGroupMapPersistenceService, episodeGroupMapPersistenceServiceSecondResolve);
             Assert.IsInstanceOfType(episodeGroupMapPersistenceService, typeof(TmdbEpisodeGroupMapPersistenceService));
+            Assert.AreSame(episodeGroupRefreshCoordinator, episodeGroupRefreshCoordinatorSecondResolve);
             Assert.AreSame(externalIdValidator, externalIdValidatorSecondResolve);
             Assert.AreSame(externalIdResolutionService, externalIdResolutionServiceConcrete);
             Assert.AreSame(externalIdResolutionService, externalIdResolutionServiceSecondResolve);
+        }
+
+        [TestMethod]
+        public void RegisterServices_ShouldRegisterEpisodeGroupMappingConfigurationRefreshHostedService()
+        {
+            using var serviceProvider = CreateServiceProvider();
+
+            var hostedServices = serviceProvider.GetServices<IHostedService>().ToArray();
+
+            Assert.IsTrue(
+                hostedServices.Any(service => service is EpisodeGroupMappingConfigurationRefreshService),
+                "剧集组映射配置变更必须通过后台服务监听，不能只依赖配置页二次 POST。");
         }
 
         [TestMethod]
