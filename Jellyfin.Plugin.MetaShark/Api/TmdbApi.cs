@@ -69,6 +69,15 @@ namespace Jellyfin.Plugin.MetaShark.Api
             this.tmDbClient.ThrowApiExceptions = false;
         }
 
+        public string ResolveMetadataLanguage(string? language, string? countryCode = null)
+        {
+            return ChineseLocalePolicy.ResolveTmdbMetadataLanguage(
+                    language,
+                    countryCode,
+                    this.configurationSnapshot.DefaultChineseMetadataLocale)
+                ?? string.Empty;
+        }
+
         /// <summary>
         /// Gets a movie from the TMDb API based on its TMDb id.
         /// </summary>
@@ -1407,12 +1416,20 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return language;
             }
 
-            return ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
+            return ChineseLocalePolicy.ResolveTmdbMetadataLanguage(
+                    language,
+                    null,
+                    MetaSharkPlugin.Instance?.Configuration.DefaultChineseMetadataLocale)
+                ?? language;
         }
 
         private static string NormalizeLanguage(string language, string? countryCode)
         {
-            var normalizedLanguage = NormalizeLanguage(language);
+            var normalizedLanguage = ChineseLocalePolicy.ResolveTmdbMetadataLanguage(
+                    language,
+                    countryCode,
+                    MetaSharkPlugin.Instance?.Configuration.DefaultChineseMetadataLocale)
+                ?? language;
             if (string.IsNullOrEmpty(normalizedLanguage))
             {
                 return normalizedLanguage;
@@ -1496,7 +1513,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 var parts = preferredLanguage.Split(',');
                 foreach (var lang in parts)
                 {
-                    var l = NormalizeLanguage(lang);
+                    var l = NormalizeImageLanguage(lang);
                     if (string.IsNullOrWhiteSpace(l))
                     {
                         continue;
@@ -1524,7 +1541,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private static string? GetEpisodeFallbackImageLanguagesParam(string language, string preferredImageLanguage)
         {
             var imageLanguages = GetImageLanguagesParam(preferredImageLanguage);
-            var normalizedLanguage = NormalizeLanguage(language);
+            var normalizedLanguage = NormalizeImageLanguage(language);
             if (!string.Equals(normalizedLanguage, "zh", StringComparison.OrdinalIgnoreCase)
                 || string.IsNullOrWhiteSpace(imageLanguages))
             {
@@ -1551,6 +1568,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
 
             return string.Join(',', languages);
+        }
+
+        private static string NormalizeImageLanguage(string language)
+        {
+            return ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
         }
 
         private static void AddLanguageIfMissing(List<string> languages, string language)
@@ -1672,11 +1694,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
         private sealed class TmdbConfigurationSnapshot
         {
-            private TmdbConfigurationSnapshot(string apiKey, string apiHost, IWebProxy? proxy)
+            private TmdbConfigurationSnapshot(string apiKey, string apiHost, IWebProxy? proxy, string defaultChineseMetadataLocale)
             {
                 this.ApiKey = apiKey;
                 this.ApiHost = apiHost;
                 this.Proxy = proxy;
+                this.DefaultChineseMetadataLocale = defaultChineseMetadataLocale;
             }
 
             public string ApiKey { get; }
@@ -1685,11 +1708,14 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
             public IWebProxy? Proxy { get; }
 
+            public string DefaultChineseMetadataLocale { get; }
+
             public static TmdbConfigurationSnapshot Create(PluginConfiguration? config)
             {
                 var apiKey = string.IsNullOrEmpty(config?.TmdbApiKey) ? DefaultApiKey : config.TmdbApiKey;
                 var apiHost = string.IsNullOrEmpty(config?.TmdbHost) ? DefaultApiHost : config.TmdbHost;
-                return new TmdbConfigurationSnapshot(apiKey, apiHost, config?.GetTmdbWebProxy());
+                var defaultChineseMetadataLocale = ChineseLocalePolicy.NormalizeDefaultChineseMetadataLocale(config?.DefaultChineseMetadataLocale);
+                return new TmdbConfigurationSnapshot(apiKey, apiHost, config?.GetTmdbWebProxy(), defaultChineseMetadataLocale);
             }
         }
     }
