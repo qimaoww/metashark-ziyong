@@ -44,6 +44,54 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(expected, result);
         }
 
+        [DataTestMethod]
+        [DataRow("zh-CN", "TW", "zh-HK", "zh-CN")]
+        [DataRow("zh-SG", "TW", "zh-HK", "zh-SG")]
+        [DataRow("zh-TW", "CN", "zh-CN", "zh-TW")]
+        [DataRow("zh-HK", "CN", "zh-CN", "zh-HK")]
+        [DataRow("zh-MO", null, "zh-CN", "zh-HK")]
+        [DataRow("zh-Hans", "SG", "zh-TW", "zh-SG")]
+        [DataRow("zh-Hans", "TW", "zh-TW", "zh-CN")]
+        [DataRow("zh-Hant", "HK", "zh-CN", "zh-HK")]
+        [DataRow("zh-Hant", "MO", "zh-CN", "zh-HK")]
+        [DataRow("zh-Hant", "CN", "zh-CN", "zh-TW")]
+        [DataRow("zh", "CN", "zh-TW", "zh-CN")]
+        [DataRow("zh", "SG", "zh-TW", "zh-SG")]
+        [DataRow("zh", "TW", "zh-CN", "zh-TW")]
+        [DataRow("zh", "HK", "zh-CN", "zh-HK")]
+        [DataRow("zh", "MO", "zh-CN", "zh-HK")]
+        [DataRow("zh", "AU", "zh-TW", "zh-TW")]
+        [DataRow("zh", null, "zh-HK", "zh-HK")]
+        [DataRow("en-us", "CN", "zh-CN", "en-US")]
+        public void ShouldResolveTmdbMetadataLanguage(string language, string? countryCode, string defaultLocale, string expected)
+        {
+            var result = ChineseLocalePolicy.ResolveTmdbMetadataLanguage(language, countryCode, defaultLocale);
+
+            Assert.AreEqual(expected, result);
+        }
+
+        [DataTestMethod]
+        [DataRow(null)]
+        [DataRow("")]
+        [DataRow("invalid")]
+        [DataRow("zh-Hans")]
+        public void ShouldNormalizeInvalidDefaultChineseLocaleToZhCn(string? value)
+        {
+            Assert.AreEqual("zh-CN", ChineseLocalePolicy.NormalizeDefaultChineseMetadataLocale(value));
+        }
+
+        [DataTestMethod]
+        [DataRow("zh-CN", "CN")]
+        [DataRow("zh-SG", "SG")]
+        [DataRow("zh-TW", "TW")]
+        [DataRow("zh-HK", "HK")]
+        [DataRow("zh", null)]
+        [DataRow("en-US", null)]
+        public void ShouldMapResolvedChineseLocaleToTmdbRegion(string language, string? expected)
+        {
+            Assert.AreEqual(expected, ChineseLocalePolicy.GetTmdbChineseRegionCode(language));
+        }
+
         [TestMethod]
         public void ShouldRejectTraditionalTextThatMissedLegacyBlacklistUnderStrictZhCn()
         {

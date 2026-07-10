@@ -16,6 +16,11 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
     public static class ChineseLocalePolicy
     {
+        public const string TmdbChineseLocaleZhCn = "zh-CN";
+        public const string TmdbChineseLocaleZhSg = "zh-SG";
+        public const string TmdbChineseLocaleZhTw = "zh-TW";
+        public const string TmdbChineseLocaleZhHk = "zh-HK";
+
         private static readonly HashSet<char> HansDistinctiveCharacters = new HashSet<char>();
         private static readonly HashSet<char> HantDistinctiveCharacters = new HashSet<char>();
 
@@ -188,6 +193,62 @@ namespace Jellyfin.Plugin.MetaShark.Core
             return string.Join('-', parts);
         }
 
+        public static string NormalizeDefaultChineseMetadataLocale(string? value)
+        {
+            return CanonicalizeLanguage(value) switch
+            {
+                TmdbChineseLocaleZhCn => TmdbChineseLocaleZhCn,
+                TmdbChineseLocaleZhSg => TmdbChineseLocaleZhSg,
+                TmdbChineseLocaleZhTw => TmdbChineseLocaleZhTw,
+                TmdbChineseLocaleZhHk => TmdbChineseLocaleZhHk,
+                _ => TmdbChineseLocaleZhCn,
+            };
+        }
+
+        public static string? ResolveTmdbMetadataLanguage(string? language, string? countryCode, string? defaultChineseLocale)
+        {
+            var canonicalLanguage = CanonicalizeLanguage(language);
+            if (string.IsNullOrWhiteSpace(canonicalLanguage) || !IsChineseRequest(canonicalLanguage))
+            {
+                return canonicalLanguage;
+            }
+
+            var normalizedCountry = string.IsNullOrWhiteSpace(countryCode)
+                ? null
+                : countryCode.Trim().ToUpperInvariant();
+            var normalizedDefault = NormalizeDefaultChineseMetadataLocale(defaultChineseLocale);
+
+            return canonicalLanguage switch
+            {
+                TmdbChineseLocaleZhCn => TmdbChineseLocaleZhCn,
+                TmdbChineseLocaleZhSg => TmdbChineseLocaleZhSg,
+                TmdbChineseLocaleZhTw => TmdbChineseLocaleZhTw,
+                TmdbChineseLocaleZhHk => TmdbChineseLocaleZhHk,
+                "zh-MO" => TmdbChineseLocaleZhHk,
+                "zh-Hans" => string.Equals(normalizedCountry, "SG", StringComparison.Ordinal)
+                    ? TmdbChineseLocaleZhSg
+                    : TmdbChineseLocaleZhCn,
+                "zh-Hant" => string.Equals(normalizedCountry, "HK", StringComparison.Ordinal)
+                    || string.Equals(normalizedCountry, "MO", StringComparison.Ordinal)
+                        ? TmdbChineseLocaleZhHk
+                        : TmdbChineseLocaleZhTw,
+                "zh" => ResolveGenericChineseLocale(normalizedCountry, normalizedDefault),
+                _ => normalizedDefault,
+            };
+        }
+
+        public static string? GetTmdbChineseRegionCode(string? resolvedLanguage)
+        {
+            return CanonicalizeLanguage(resolvedLanguage) switch
+            {
+                TmdbChineseLocaleZhCn => "CN",
+                TmdbChineseLocaleZhSg => "SG",
+                TmdbChineseLocaleZhTw => "TW",
+                TmdbChineseLocaleZhHk => "HK",
+                _ => null,
+            };
+        }
+
         public static bool IsChineseRequest(string? language)
         {
             var canonicalLanguage = CanonicalizeLanguage(language);
@@ -291,6 +352,19 @@ namespace Jellyfin.Plugin.MetaShark.Core
         private static string? GetTrimmedNonEmptyValue(string? value)
         {
             return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+
+        private static string ResolveGenericChineseLocale(string? countryCode, string defaultLocale)
+        {
+            return countryCode switch
+            {
+                "CN" => TmdbChineseLocaleZhCn,
+                "SG" => TmdbChineseLocaleZhSg,
+                "TW" => TmdbChineseLocaleZhTw,
+                "HK" => TmdbChineseLocaleZhHk,
+                "MO" => TmdbChineseLocaleZhHk,
+                _ => defaultLocale,
+            };
         }
     }
 }
