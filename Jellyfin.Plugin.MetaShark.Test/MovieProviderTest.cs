@@ -223,6 +223,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Id = tmdbId,
                     Title = title,
                     OriginalTitle = title,
+                    OriginalLanguage = "zh",
                     ImdbId = "tt0000001",
                     Overview = "TMDb seeded movie overview",
                     Tagline = "TMDb seeded movie tagline",
@@ -239,6 +240,41 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 $"movie-{tmdbId}-{language}-{language}",
                 movie,
                 TimeSpan.FromMinutes(5));
+        }
+
+        private static TmdbMovie CreateTmdbMovie(int id, string title, string originalTitle, string originalLanguage)
+        {
+            return new TmdbMovie
+            {
+                Id = id,
+                Title = title,
+                OriginalTitle = originalTitle,
+                OriginalLanguage = originalLanguage,
+                Overview = "TMDb movie overview",
+                ProductionCountries = new List<ProductionCountry>(),
+                Genres = new List<TmdbGenre>(),
+            };
+        }
+
+        private static void SeedMovieRegionalTitle(TmdbApi tmdbApi, int tmdbId, string region, string? title)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"movie-alternative-title-{region}-{tmdbId.ToString(CultureInfo.InvariantCulture)}",
+                title,
+                TimeSpan.FromMinutes(5));
+        }
+
+        private MovieProvider CreateMovieProvider(TmdbApi tmdbApi)
+        {
+            return new MovieProvider(
+                new DefaultHttpClientFactory(),
+                this.loggerFactory,
+                new Mock<ILibraryManager>().Object,
+                CreateManualMatchContextAccessor(),
+                new DoubanApi(this.loggerFactory),
+                tmdbApi,
+                new OmdbApi(this.loggerFactory),
+                new ImdbApi(this.loggerFactory));
         }
 
         private static void SeedTmdbPerson(TmdbApi tmdbApi, int tmdbId, string? name, string? language = null, string? countryCode = null)
@@ -624,6 +660,54 @@ namespace Jellyfin.Plugin.MetaShark.Test
             }).GetAwaiter().GetResult();
         }
 
+        [TestMethod]
+        public async Task GetMetadataByTmdb_UsesConfiguredCnTitleForAmbiguousZh()
+        {
+            const int tmdbId = 5001;
+            ReplacePluginConfiguration(new PluginConfiguration { DefaultChineseMetadataLocale = "zh-CN" });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            var tmdbMovie = CreateTmdbMovie(tmdbId, "劇場版チェンソーマン", "劇場版チェンソーマン", "ja");
+            var info = new MovieInfo
+            {
+                Name = "劇場版チェンソーマン",
+                MetadataLanguage = "zh",
+                MetadataCountryCode = "AU",
+                ProviderIds = ProviderIdSet.ForTmdb(tmdbId),
+            };
+            var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+            SeedTmdbMovie(tmdbApi, tmdbId, tmdbLanguage, tmdbMovie);
+            SeedMovieRegionalTitle(tmdbApi, tmdbId, "CN", "电锯人：剧场版");
+
+            var result = await this.CreateMovieProvider(tmdbApi).GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("电锯人：剧场版", result.Item.Name);
+            Assert.AreEqual("劇場版チェンソーマン", result.Item.OriginalTitle);
+            Assert.AreEqual("zh-CN", result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByTmdb_PreservesExplicitTwLocaleAndLocalizedTitle()
+        {
+            const int tmdbId = 5002;
+            ReplacePluginConfiguration(new PluginConfiguration { DefaultChineseMetadataLocale = "zh-CN" });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedTmdbMovie(tmdbApi, tmdbId, "zh-TW", CreateTmdbMovie(tmdbId, "鏈鋸人電影版", "チェンソーマン", "ja"));
+            SeedMovieRegionalTitle(tmdbApi, tmdbId, "TW", "不应覆盖");
+
+            var result = await this.CreateMovieProvider(tmdbApi).GetMetadata(new MovieInfo
+            {
+                Name = "鏈鋸人電影版",
+                MetadataLanguage = "zh-TW",
+                MetadataCountryCode = "CN",
+                ProviderIds = ProviderIdSet.ForTmdb(tmdbId),
+            }, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("鏈鋸人電影版", result.Item.Name);
+            Assert.AreEqual("zh-TW", result.ResultLanguage);
+        }
+
         [DataTestMethod]
         [DataRow(null, false)]
         [DataRow("", false)]
@@ -649,10 +733,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var doubanApi = new DoubanApi(this.loggerFactory);
             var tmdbApi = new TmdbApi(this.loggerFactory);
             ConfigureTmdbImageConfig(tmdbApi);
+            var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
             SeedTmdbMovie(
                 tmdbApi,
                 tmdbId,
-                "zh",
+                tmdbLanguage,
                 new TmdbMovie
                 {
                     Id = tmdbId,
@@ -705,7 +790,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
             var doubanApi = DoubanApiTestHelper.CreateBlockedDoubanApi(loggerFactory);
             var tmdbApi = new TmdbApi(loggerFactory);
-            SeedTmdbMovie(tmdbApi, 38142, "zh", "秒速5厘米");
+            var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+            SeedTmdbMovie(tmdbApi, 38142, tmdbLanguage, "秒速5厘米");
             var omdbApi = new OmdbApi(loggerFactory);
             var imdbApi = new ImdbApi(loggerFactory);
 
@@ -764,7 +850,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 };
                 var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动电影元数据链路不应再访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
-                SeedTmdbMovie(tmdbApi, 38142, "zh", "秒速5厘米");
+                var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+                SeedTmdbMovie(tmdbApi, 38142, tmdbLanguage, "秒速5厘米");
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 
@@ -824,7 +911,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 };
                 var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动电影元数据链路不应因文件名里的 douban hint 回落到 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
-                SeedTmdbMovie(tmdbApi, 38142, "zh", "秒速5厘米");
+                var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+                SeedTmdbMovie(tmdbApi, 38142, tmdbLanguage, "秒速5厘米");
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 
@@ -889,7 +977,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     : new HttpContextAccessor { HttpContext = null };
                 var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, $"tmdb-only {routeName} 电影元数据链路不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
-                SeedTmdbMovie(tmdbApi, 38142, "zh", "秒速5厘米");
+                var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+                SeedTmdbMovie(tmdbApi, 38142, tmdbLanguage, "秒速5厘米");
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 

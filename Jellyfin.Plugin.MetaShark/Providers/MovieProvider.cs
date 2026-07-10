@@ -87,7 +87,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 从tmdb搜索
             if (Config.EnableTmdbSearch)
             {
-                var tmdbList = await this.TmdbApi.SearchMovieAsync(searchInfo.Name, searchInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+                var tmdbLanguage = this.ResolveTmdbMetadataLanguage(searchInfo);
+                var tmdbList = await this.TmdbApi.SearchMovieAsync(searchInfo.Name, tmdbLanguage, cancellationToken).ConfigureAwait(false);
                 result.AddRange(tmdbList.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x =>
                 {
                     return new RemoteSearchResult
@@ -1088,8 +1089,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             this.Log("通过 TMDb 获取电影元数据. tmdbId: \"{0}\"", tmdbId);
             var result = new MetadataResult<Movie>();
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
             var movieResult = await this.TmdbApi
-                            .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                            .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), tmdbLanguage, tmdbLanguage, cancellationToken)
                             .ConfigureAwait(false);
 
             if (movieResult == null)
@@ -1097,9 +1099,26 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return result;
             }
 
+            var resolvedTitle = movieResult.Title ?? movieResult.OriginalTitle;
+            if (TmdbTitleFallbackPolicy.ShouldTryRegionalAlternativeTitle(
+                    tmdbLanguage,
+                    movieResult.Title,
+                    movieResult.OriginalTitle,
+                    movieResult.OriginalLanguage))
+            {
+                var region = ChineseLocalePolicy.GetTmdbChineseRegionCode(tmdbLanguage);
+                var regionalTitle = await this.TmdbApi
+                    .GetMovieRegionalAlternativeTitleAsync(movieResult.Id, region, cancellationToken)
+                    .ConfigureAwait(false);
+                resolvedTitle = TmdbTitleFallbackPolicy.ResolveTitle(
+                    movieResult.Title,
+                    movieResult.OriginalTitle,
+                    regionalTitle);
+            }
+
             var movie = new Movie
             {
-                Name = movieResult.Title ?? movieResult.OriginalTitle,
+                Name = resolvedTitle,
                 OriginalTitle = movieResult.OriginalTitle,
                 Overview = movieResult.Overview?.Replace("\n\n", "\n", StringComparison.InvariantCulture),
                 Tagline = movieResult.Tagline,
@@ -1124,7 +1143,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             {
                 QueriedById = true,
                 HasMetadata = true,
-                ResultLanguage = info.MetadataLanguage,
+                ResultLanguage = tmdbLanguage,
                 Item = movie,
             };
 
@@ -1168,8 +1187,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private async Task<int> TryAddTmdbPeopleAsync(string tmdbId, MovieInfo info, MetadataResult<Movie> result, PersonNameResolver.Scope personNameScope, CancellationToken cancellationToken)
         {
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
             var movieResult = await this.TmdbApi
-                .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), tmdbLanguage, tmdbLanguage, cancellationToken)
                 .ConfigureAwait(false);
 
             if (movieResult == null)
@@ -1404,8 +1424,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private async Task<SearchCollection?> GetTmdbCollection(MovieInfo info, string tmdbId, CancellationToken cancellationToken)
         {
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
             var movieResult = await this.TmdbApi
-                            .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                            .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), tmdbLanguage, tmdbLanguage, cancellationToken)
                             .ConfigureAwait(false);
             if (movieResult != null)
             {
@@ -1417,8 +1438,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private async Task<string?> GetTmdbOfficialRating(ItemLookupInfo info, string tmdbId, CancellationToken cancellationToken)
         {
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
             var movieResult = await this.TmdbApi
-                            .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                            .GetMovieAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), tmdbLanguage, tmdbLanguage, cancellationToken)
                             .ConfigureAwait(false);
 
             return this.GetTmdbOfficialRatingByData(movieResult, info.MetadataCountryCode);

@@ -451,6 +451,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
         }
 
+        protected string ResolveTmdbMetadataLanguage(ItemLookupInfo info, string? language = null)
+        {
+            ArgumentNullException.ThrowIfNull(info);
+            return this.TmdbApi.ResolveMetadataLanguage(language ?? info.MetadataLanguage, info.MetadataCountryCode);
+        }
+
         protected DefaultScraperSemantic ResolveMetadataSemantic(ItemLookupInfo info)
         {
             ArgumentNullException.ThrowIfNull(info);
@@ -890,12 +896,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         {
             ArgumentNullException.ThrowIfNull(info);
             var fileName = GetOriginalFileName(info);
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
 
             this.Log("开始猜测 TMDb 元数据. name: {0} year: {1}", name, year);
             switch (info)
             {
                 case MovieInfo:
-                    var movieResults = await this.TmdbApi.SearchMovieAsync(name, year ?? 0, info.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+                    var movieResults = await this.TmdbApi.SearchMovieAsync(name, year ?? 0, tmdbLanguage, cancellationToken).ConfigureAwait(false);
 
                     // 结果可能多个，优先取名称完全相同的
                     var movieItem = FindFirst(movieResults, x => x.Title == name || x.OriginalTitle == name);
@@ -915,7 +922,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                     break;
                 case SeriesInfo:
-                    var seriesResults = await this.TmdbApi.SearchSeriesAsync(name, info.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+                    var seriesResults = await this.TmdbApi.SearchSeriesAsync(name, tmdbLanguage, cancellationToken).ConfigureAwait(false);
 
                     // 年份在豆瓣可能匹配到第三季，但tmdb年份都是第一季的，可能匹配不上（例如：脱口秀大会）
                     // 优先年份和名称同时匹配
@@ -965,7 +972,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // 通过imdb获取tmdbId
-            var findResult = await this.TmdbApi.FindByExternalIdAsync(imdb, TMDbLib.Objects.Find.FindExternalSource.Imdb, language, cancellationToken).ConfigureAwait(false);
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info, language);
+            var findResult = await this.TmdbApi.FindByExternalIdAsync(imdb, TMDbLib.Objects.Find.FindExternalSource.Imdb, tmdbLanguage, cancellationToken).ConfigureAwait(false);
 
             switch (info)
             {
