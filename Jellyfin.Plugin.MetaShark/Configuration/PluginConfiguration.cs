@@ -8,6 +8,7 @@ using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Reflection;
+using Jellyfin.Plugin.MetaShark.Core;
 using MediaBrowser.Model.Plugins;
 
 /// <summary>
@@ -31,6 +32,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public const string LlmReasoningEffortXHigh = "xhigh";
 
     private string? defaultScraperMode = DefaultScraperModeDefault;
+    private string? defaultChineseMetadataLocale = ChineseLocalePolicy.TmdbChineseLocaleZhCn;
     private int llmTimeoutSeconds = 15;
     private int llmMaxTokens = 512;
     private double llmConfidenceThreshold = 0.75;
@@ -89,6 +91,15 @@ public class PluginConfiguration : BasePluginConfiguration
     {
         get => NormalizeDefaultScraperMode(this.defaultScraperMode);
         set => this.defaultScraperMode = NormalizeDefaultScraperMode(value);
+    }
+
+    /// <summary>
+    /// Gets or sets the default TMDb Chinese metadata locale for ambiguous Chinese requests.
+    /// </summary>
+    public string DefaultChineseMetadataLocale
+    {
+        get => ChineseLocalePolicy.NormalizeDefaultChineseMetadataLocale(this.defaultChineseMetadataLocale);
+        set => this.defaultChineseMetadataLocale = ChineseLocalePolicy.NormalizeDefaultChineseMetadataLocale(value);
     }
 
     /// <summary>

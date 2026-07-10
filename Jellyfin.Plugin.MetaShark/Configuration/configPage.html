@@ -133,6 +133,17 @@
                             </label>
                             <div class="fieldDescription">勾选后，识别时会同时返回TheMovieDb搜索结果</div>
                         </div>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="DefaultChineseMetadataLocale">默认中文元数据地区：</label>
+                            <select is="emby-select" id="DefaultChineseMetadataLocale" name="DefaultChineseMetadataLocale"
+                                class="DefaultChineseMetadataLocale emby-select-withcolor emby-select">
+                                <option value="zh-CN">简体中文（中国大陆）</option>
+                                <option value="zh-SG">简体中文（新加坡）</option>
+                                <option value="zh-TW">繁体中文（台湾）</option>
+                                <option value="zh-HK">繁体中文（香港）</option>
+                            </select>
+                            <div class="fieldDescription">明确的 Jellyfin 中文地区语言优先；仅当语言为 zh 或无法确定地区时使用此默认值。只影响 TMDb 文本元数据，不改变 Douban 和图片语言。</div>
+                        </div>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label" for="EnableTmdbBackdrop">
                                 <input id="EnableTmdbBackdrop" name="EnableTmdbBackdrop" type="checkbox"
@@ -563,6 +574,7 @@
                         document.querySelector('#EnableTmdb').checked = config.EnableTmdb;
                          document.querySelector('#EnableTmdbSearch').checked = config.EnableTmdbSearch;
                          document.querySelector('#EnableTmdbMatch').checked = config.EnableTmdbMatch;
+                         document.querySelector('#DefaultChineseMetadataLocale').value = config.DefaultChineseMetadataLocale;
                          document.querySelector('#DefaultScraperMode').value = config.DefaultScraperMode;
                          document.querySelector('#EnableTmdbBackdrop').checked = config.EnableTmdbBackdrop;
                          document.querySelector('#EnableTmdbLogo').checked = config.EnableTmdbLogo;
@@ -635,6 +647,7 @@
                         config.EnableTmdb = document.querySelector('#EnableTmdb').checked;
                          config.EnableTmdbSearch = document.querySelector('#EnableTmdbSearch').checked;
                          config.EnableTmdbMatch = document.querySelector('#EnableTmdbMatch').checked;
+                         config.DefaultChineseMetadataLocale = document.querySelector('#DefaultChineseMetadataLocale').value;
                          config.DefaultScraperMode = document.querySelector('#DefaultScraperMode').value;
                          config.EnableTmdbBackdrop = document.querySelector('#EnableTmdbBackdrop').checked;
                          config.EnableTmdbLogo = document.querySelector('#EnableTmdbLogo').checked;
