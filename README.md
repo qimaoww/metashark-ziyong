@@ -35,6 +35,7 @@ https://github.com/qimaoww/metashark-ziyong/releases/download/manifest/manifest.
 - 默认刮削器模式：
   - `默认`：优先使用豆瓣刮削，缺失内容再由 TMDB 补充。
   - `仅 TMDB`：只使用 TMDB 刮削，忽略豆瓣。
+- `默认中文元数据地区`：用于 Jellyfin 只提供通用 `zh`、无法判断简繁地区时选择 TMDb 文本元数据。可选中国大陆、新加坡、台湾和香港；明确的 `zh-CN`、`zh-SG`、`zh-TW`、`zh-HK` 设置优先。此选项不影响 Douban，也不会把 TMDb 图片的通用 `zh` 语言强制改成地区代码。
 - `手动 TMDb 剧集组映射`：用于按 TMDb 剧集组修正或对齐剧集映射；手动填写优先级最高，会覆盖同 TMDb 剧集 ID 的 LLM 自动映射。
 - `TMDb 关键词标签写入`：开启后可将 TMDb 关键词写入条目标签。
 - `特别篇插入`：开启后可按 TVDB airs before/after 规则，将 Season 0 特别篇插入对应季内。
