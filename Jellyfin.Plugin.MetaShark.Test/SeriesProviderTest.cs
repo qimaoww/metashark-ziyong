@@ -17,6 +17,7 @@ using Moq;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -127,6 +128,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Id = tmdbId,
                     Name = name,
                     OriginalName = name,
+                    OriginalLanguage = "zh",
                     Overview = "TMDb seeded series overview",
                     FirstAirDate = new DateTime(2011, 10, 4),
                     VoteAverage = 8.8,
@@ -144,6 +146,45 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 $"series-{tmdbId}-{language}-{language}",
                 series,
                 TimeSpan.FromMinutes(5));
+        }
+
+        private static TvShow CreateTmdbSeries(int id, string name, string originalName, string originalLanguage)
+        {
+            return new TvShow
+            {
+                Id = id,
+                Name = name,
+                OriginalName = originalName,
+                OriginalLanguage = originalLanguage,
+                Overview = "TMDb series overview",
+                EpisodeRunTime = new List<int>(),
+                Genres = new List<TMDbLib.Objects.General.Genre>(),
+                ContentRatings = new ResultContainer<ContentRating>
+                {
+                    Results = new List<ContentRating>(),
+                },
+            };
+        }
+
+        private static void SeedSeriesRegionalTitle(TmdbApi tmdbApi, int tmdbId, string region, string? title)
+        {
+            GetTmdbMemoryCache(tmdbApi).Set(
+                $"series-alternative-title-{region}-{tmdbId.ToString(CultureInfo.InvariantCulture)}",
+                title,
+                TimeSpan.FromMinutes(5));
+        }
+
+        private SeriesProvider CreateSeriesProvider(TmdbApi tmdbApi)
+        {
+            return new SeriesProvider(
+                new DefaultHttpClientFactory(),
+                this.loggerFactory,
+                new Mock<ILibraryManager>().Object,
+                CreateManualMatchContextAccessor(),
+                new DoubanApi(this.loggerFactory),
+                tmdbApi,
+                new OmdbApi(this.loggerFactory),
+                new ImdbApi(this.loggerFactory));
         }
 
 
@@ -642,7 +683,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var httpContextAccessorStub = new Mock<IHttpContextAccessor>();
             var doubanApi = DoubanApiTestHelper.CreateBlockedDoubanApi(loggerFactory);
             var tmdbApi = new TmdbApi(loggerFactory);
-            SeedTmdbSeries(tmdbApi, 45247, "zh", "花牌情缘");
+            var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+            SeedTmdbSeries(tmdbApi, 45247, tmdbLanguage, "花牌情缘");
             var omdbApi = new OmdbApi(loggerFactory);
             var imdbApi = new ImdbApi(loggerFactory);
 
@@ -662,6 +704,84 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Assert.Inconclusive("TMDb rate limited (429)." + ex.Message);
                 }
             }).GetAwaiter().GetResult();
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByTmdb_Tv114410UsesCnFallbackForAmbiguousZh()
+        {
+            const int tmdbId = 114410;
+            ReplacePluginConfiguration(new PluginConfiguration { DefaultChineseMetadataLocale = "zh-CN" });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedTmdbSeries(tmdbApi, tmdbId, "zh-CN", CreateTmdbSeries(
+                tmdbId,
+                "チェンソーマン",
+                "チェンソーマン",
+                "ja"));
+            SeedSeriesRegionalTitle(tmdbApi, tmdbId, "CN", "电锯人");
+
+            var result = await this.CreateSeriesProvider(tmdbApi).GetMetadata(new SeriesInfo
+            {
+                Name = "チェンソーマン",
+                MetadataLanguage = "zh",
+                MetadataCountryCode = "AU",
+                ProviderIds = ProviderIdSet.ForTmdb(tmdbId),
+            }, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("电锯人", result.Item.Name);
+            Assert.AreEqual("チェンソーマン", result.Item.OriginalTitle);
+            Assert.AreEqual("zh-CN", result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByTmdb_Tv114410PreservesExplicitTwTitle()
+        {
+            const int tmdbId = 114410;
+            ReplacePluginConfiguration(new PluginConfiguration { DefaultChineseMetadataLocale = "zh-CN" });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedTmdbSeries(tmdbApi, tmdbId, "zh-TW", CreateTmdbSeries(
+                tmdbId,
+                "鏈鋸人",
+                "チェンソーマン",
+                "ja"));
+
+            var result = await this.CreateSeriesProvider(tmdbApi).GetMetadata(new SeriesInfo
+            {
+                Name = "鏈鋸人",
+                MetadataLanguage = "zh-TW",
+                MetadataCountryCode = "CN",
+                ProviderIds = ProviderIdSet.ForTmdb(tmdbId),
+            }, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("鏈鋸人", result.Item.Name);
+            Assert.AreEqual("チェンソーマン", result.Item.OriginalTitle);
+            Assert.AreEqual("zh-TW", result.ResultLanguage);
+        }
+
+        [TestMethod]
+        public async Task GetMetadataByTmdb_Tv114410UsesConfiguredTwForAmbiguousZh()
+        {
+            const int tmdbId = 114410;
+            ReplacePluginConfiguration(new PluginConfiguration { DefaultChineseMetadataLocale = "zh-TW" });
+            var tmdbApi = new TmdbApi(this.loggerFactory);
+            SeedTmdbSeries(tmdbApi, tmdbId, "zh-TW", CreateTmdbSeries(
+                tmdbId,
+                "鏈鋸人",
+                "チェンソーマン",
+                "ja"));
+
+            var result = await this.CreateSeriesProvider(tmdbApi).GetMetadata(new SeriesInfo
+            {
+                Name = "チェンソーマン",
+                MetadataLanguage = "zh",
+                MetadataCountryCode = "AU",
+                ProviderIds = ProviderIdSet.ForTmdb(tmdbId),
+            }, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNotNull(result.Item);
+            Assert.AreEqual("鏈鋸人", result.Item.Name);
+            Assert.AreEqual("zh-TW", result.ResultLanguage);
         }
 
         [TestMethod]
@@ -1107,7 +1227,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 };
                 var doubanApi = CreateThrowingDoubanApi(loggerFactory, "tmdb-only 自动剧集元数据链路不应再访问 Douban。");
                 var tmdbApi = new TmdbApi(loggerFactory);
-                SeedTmdbSeries(tmdbApi, 45247, "zh", "花牌情缘");
+                var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+                SeedTmdbSeries(tmdbApi, 45247, tmdbLanguage, "花牌情缘");
                 var omdbApi = new OmdbApi(loggerFactory);
                 var imdbApi = new ImdbApi(loggerFactory);
 
@@ -1167,7 +1288,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 };
                 var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, "tmdb-only 自动剧集元数据链路不应因文件名里的 douban hint 回落到 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
-                SeedTmdbSeries(tmdbApi, 45247, "zh", "花牌情缘");
+                var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+                SeedTmdbSeries(tmdbApi, 45247, tmdbLanguage, "花牌情缘");
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 
@@ -1232,7 +1354,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     : new HttpContextAccessor { HttpContext = null };
                 var doubanApi = CreateThrowingDoubanApi(this.loggerFactory, $"tmdb-only {routeName} 剧集元数据链路不应访问 Douban。");
                 var tmdbApi = new TmdbApi(this.loggerFactory);
-                SeedTmdbSeries(tmdbApi, 45247, "zh", "花牌情缘");
+                var tmdbLanguage = tmdbApi.ResolveMetadataLanguage(info.MetadataLanguage, info.MetadataCountryCode);
+                SeedTmdbSeries(tmdbApi, 45247, tmdbLanguage, "花牌情缘");
                 var omdbApi = new OmdbApi(this.loggerFactory);
                 var imdbApi = new ImdbApi(this.loggerFactory);
 

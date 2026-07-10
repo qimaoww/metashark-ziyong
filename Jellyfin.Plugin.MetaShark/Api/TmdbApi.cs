@@ -1526,6 +1526,17 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     countryCode,
                     MetaSharkPlugin.Instance?.Configuration.DefaultChineseMetadataLocale)
                 ?? language;
+            return NormalizeLanguageCountry(normalizedLanguage, countryCode);
+        }
+
+        private static string NormalizePersonCacheLanguage(string language, string? countryCode)
+        {
+            var normalizedLanguage = ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
+            return NormalizeLanguageCountry(normalizedLanguage, countryCode);
+        }
+
+        private static string NormalizeLanguageCountry(string normalizedLanguage, string? countryCode)
+        {
             if (string.IsNullOrEmpty(normalizedLanguage))
             {
                 return normalizedLanguage;
@@ -1564,7 +1575,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
         private static string GetPersonCacheKey(int personTmdbId, string language, string? countryCode)
         {
-            var normalizedLanguage = NormalizeLanguage(language, countryCode);
+            var normalizedLanguage = NormalizePersonCacheLanguage(language, countryCode);
             var languageKey = string.IsNullOrWhiteSpace(normalizedLanguage) ? "neutral" : normalizedLanguage;
             return $"person-{personTmdbId.ToString(CultureInfo.InvariantCulture)}-{languageKey}";
         }

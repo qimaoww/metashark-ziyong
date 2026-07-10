@@ -69,6 +69,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var result = new List<RemoteSearchResult>();
             var hasExactTmdbHit = false;
             var hasUsableTitle = !string.IsNullOrWhiteSpace(searchInfo.Name);
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(searchInfo);
 
             if (Config.EnableTmdb)
             {
@@ -89,7 +90,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 else
                 {
                     this.Log("尝试显式 TMDb ID 精确匹配. tmdbId: {0}", tmdbId);
-                    var tvShow = await this.TmdbApi.GetSeriesAsync(tmdbId, searchInfo.MetadataLanguage, searchInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+                    var tvShow = await this.TmdbApi.GetSeriesAsync(tmdbId, tmdbLanguage, tmdbLanguage, cancellationToken).ConfigureAwait(false);
                     if (tvShow != null)
                     {
                         result.Add(this.MapTmdbSeriesSearchResult(tvShow));
@@ -130,7 +131,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 }
                 else
                 {
-                    var tmdbList = await this.TmdbApi.SearchSeriesAsync(searchInfo.Name, searchInfo.MetadataLanguage, cancellationToken).ConfigureAwait(false);
+                    var tmdbList = await this.TmdbApi.SearchSeriesAsync(searchInfo.Name, tmdbLanguage, cancellationToken).ConfigureAwait(false);
                     result.AddRange(tmdbList.Take(Configuration.PluginConfiguration.MAXSEARCHRESULT).Select(x => this.MapTmdbSeriesSearchResult(x)));
                 }
             }
@@ -1214,8 +1215,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             this.Log("通过 TMDb 获取剧集元数据. tmdbId: \"{0}\"", tmdbId);
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
             var tvShow = await this.TmdbApi
-                .GetSeriesAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                .GetSeriesAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), tmdbLanguage, tmdbLanguage, cancellationToken)
                 .ConfigureAwait(false);
 
             if (tvShow == null)
@@ -1223,10 +1225,27 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return result;
             }
 
+            var resolvedTitle = tvShow.Name ?? tvShow.OriginalName;
+            if (TmdbTitleFallbackPolicy.ShouldTryRegionalAlternativeTitle(
+                    tmdbLanguage,
+                    tvShow.Name,
+                    tvShow.OriginalName,
+                    tvShow.OriginalLanguage))
+            {
+                var region = ChineseLocalePolicy.GetTmdbChineseRegionCode(tmdbLanguage);
+                var regionalTitle = await this.TmdbApi
+                    .GetSeriesRegionalAlternativeTitleAsync(tvShow.Id, region, cancellationToken)
+                    .ConfigureAwait(false);
+                resolvedTitle = TmdbTitleFallbackPolicy.ResolveTitle(
+                    tvShow.Name,
+                    tvShow.OriginalName,
+                    regionalTitle);
+            }
+
             result = new MetadataResult<Series>
             {
-                Item = this.MapTvShowToSeries(tvShow, info.MetadataCountryCode),
-                ResultLanguage = info.MetadataLanguage ?? tvShow.OriginalLanguage,
+                Item = this.MapTvShowToSeries(tvShow, info.MetadataCountryCode, resolvedTitle),
+                ResultLanguage = tmdbLanguage,
             };
 
             var acceptedPeopleCount = await this.AddTmdbPeopleAsync(tvShow, result, personNameScope, cancellationToken).ConfigureAwait(false);
@@ -1244,8 +1263,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return 0;
             }
 
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
             var tvShow = await this.TmdbApi
-                .GetSeriesAsync(tmdbNumericId, info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                .GetSeriesAsync(tmdbNumericId, tmdbLanguage, tmdbLanguage, cancellationToken)
                 .ConfigureAwait(false);
 
             if (tvShow == null)
@@ -1380,11 +1400,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return null;
         }
 
-        private Series MapTvShowToSeries(TvShow seriesResult, string preferredCountryCode)
+        private Series MapTvShowToSeries(TvShow seriesResult, string preferredCountryCode, string? resolvedTitle)
         {
             var series = new Series
             {
-                Name = seriesResult.Name,
+                Name = resolvedTitle,
                 OriginalTitle = seriesResult.OriginalName,
             };
 
@@ -1462,8 +1482,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private async Task<string?> GetTmdbOfficialRating(ItemLookupInfo info, string tmdbId, CancellationToken cancellationToken)
         {
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
             var tvShow = await this.TmdbApi
-                            .GetSeriesAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                            .GetSeriesAsync(Convert.ToInt32(tmdbId, CultureInfo.InvariantCulture), tmdbLanguage, tmdbLanguage, cancellationToken)
                             .ConfigureAwait(false);
             return this.GetTmdbOfficialRatingByData(tvShow, info.MetadataCountryCode);
         }
@@ -1475,8 +1496,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return;
             }
 
+            var tmdbLanguage = this.ResolveTmdbMetadataLanguage(info);
             var tvShow = await this.TmdbApi
-                .GetSeriesAsync(tmdbNumericId, info.MetadataLanguage, info.MetadataLanguage, cancellationToken)
+                .GetSeriesAsync(tmdbNumericId, tmdbLanguage, tmdbLanguage, cancellationToken)
                 .ConfigureAwait(false);
 
             var externalIds = tvShow?.ExternalIds;
