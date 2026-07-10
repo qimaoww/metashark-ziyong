@@ -133,6 +133,54 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
         }
 
+        public async Task<string?> GetMovieRegionalAlternativeTitleAsync(int tmdbId, string? region, CancellationToken cancellationToken)
+        {
+            var normalizedRegion = NormalizeSupportedChineseRegion(region);
+            if (!IsEnable() || normalizedRegion == null)
+            {
+                return null;
+            }
+
+            var key = $"movie-alternative-title-{normalizedRegion}-{tmdbId.ToString(CultureInfo.InvariantCulture)}";
+            if (this.memoryCache.TryGetValue(key, out string? title))
+            {
+                return title;
+            }
+
+            try
+            {
+                title = await this.FetchRegionalAlternativeTitleAsync(
+                        "movie",
+                        tmdbId,
+                        "titles",
+                        normalizedRegion,
+                        includeCountryFilter: true,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                this.memoryCache.Set(key, title, TimeSpan.FromHours(CacheDurationInHours));
+                return title;
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetMovieRegionalAlternativeTitleAsync), ex);
+                return null;
+            }
+            catch (HttpRequestException ex)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetMovieRegionalAlternativeTitleAsync), ex);
+                return null;
+            }
+            catch (GeneralHttpException ex)
+            {
+                this.logTmdbUnexpectedHttpError(this.logger, nameof(this.GetMovieRegionalAlternativeTitleAsync), ex);
+                return null;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+
         /// <summary>
         /// Gets a movie images from the TMDb API based on its TMDb id.
         /// </summary>
@@ -285,6 +333,54 @@ namespace Jellyfin.Plugin.MetaShark.Api
             catch (HttpRequestException ex)
             {
                 this.logTmdbError(this.logger, nameof(this.GetSeriesAsync), ex);
+                return null;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+
+        public async Task<string?> GetSeriesRegionalAlternativeTitleAsync(int tmdbId, string? region, CancellationToken cancellationToken)
+        {
+            var normalizedRegion = NormalizeSupportedChineseRegion(region);
+            if (!IsEnable() || normalizedRegion == null)
+            {
+                return null;
+            }
+
+            var key = $"series-alternative-title-{normalizedRegion}-{tmdbId.ToString(CultureInfo.InvariantCulture)}";
+            if (this.memoryCache.TryGetValue(key, out string? title))
+            {
+                return title;
+            }
+
+            try
+            {
+                title = await this.FetchRegionalAlternativeTitleAsync(
+                        "tv",
+                        tmdbId,
+                        "results",
+                        normalizedRegion,
+                        includeCountryFilter: false,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                this.memoryCache.Set(key, title, TimeSpan.FromHours(CacheDurationInHours));
+                return title;
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetSeriesRegionalAlternativeTitleAsync), ex);
+                return null;
+            }
+            catch (HttpRequestException ex)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetSeriesRegionalAlternativeTitleAsync), ex);
+                return null;
+            }
+            catch (GeneralHttpException ex)
+            {
+                this.logTmdbUnexpectedHttpError(this.logger, nameof(this.GetSeriesRegionalAlternativeTitleAsync), ex);
                 return null;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1575,6 +1671,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return ChineseLocalePolicy.CanonicalizeLanguage(language) ?? language;
         }
 
+        private static string? NormalizeSupportedChineseRegion(string? region)
+        {
+            var normalized = region?.Trim().ToUpperInvariant();
+            return normalized is "CN" or "SG" or "TW" or "HK" ? normalized : null;
+        }
+
         private static void AddLanguageIfMissing(List<string> languages, string language)
         {
             if (!languages.Contains(language, StringComparer.OrdinalIgnoreCase))
@@ -1640,6 +1742,80 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     ? value
                     : 0d;
             }
+        }
+
+        private async Task<string?> FetchRegionalAlternativeTitleAsync(
+            string mediaPath,
+            int tmdbId,
+            string resultsPropertyName,
+            string region,
+            bool includeCountryFilter,
+            CancellationToken cancellationToken)
+        {
+            var baseHost = this.apiHost.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? this.apiHost.TrimEnd('/')
+                : $"https://{this.apiHost.TrimEnd('/')}";
+            var url = new StringBuilder()
+                .Append(baseHost)
+                .Append("/3/")
+                .Append(mediaPath)
+                .Append('/')
+                .Append(tmdbId.ToString(CultureInfo.InvariantCulture))
+                .Append("/alternative_titles?api_key=")
+                .Append(Uri.EscapeDataString(this.apiKey));
+            if (includeCountryFilter)
+            {
+                url.Append("&country=").Append(Uri.EscapeDataString(region));
+            }
+
+            using var handler = new HttpClientHandler
+            {
+                CheckCertificateRevocationList = true,
+            };
+            if (this.configurationSnapshot.Proxy != null)
+            {
+                handler.Proxy = this.configurationSnapshot.Proxy;
+                handler.UseProxy = true;
+            }
+
+            using var httpClient = new HttpClient(handler, false)
+            {
+                Timeout = TimeSpan.FromSeconds(10),
+            };
+            using var response = await httpClient.GetAsync(new Uri(url.ToString(), UriKind.Absolute), cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (!document.RootElement.TryGetProperty(resultsPropertyName, out var results)
+                || results.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var result in results.EnumerateArray())
+            {
+                var candidateRegion = result.TryGetProperty("iso_3166_1", out var regionProperty)
+                    ? regionProperty.GetString()
+                    : null;
+                if (!string.Equals(candidateRegion, region, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var title = result.TryGetProperty("title", out var titleProperty)
+                    ? titleProperty.GetString()?.Trim()
+                    : null;
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    return title;
+                }
+            }
+
+            return null;
         }
 
         private Task EnsureClientConfigAsync()
