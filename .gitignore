@@ -8,5 +8,7 @@ metashark/
 *.json
 .vscode
 .sisyphus/
+.worktrees/
+docs/superpowers/
 TestResults/
 AGENTS.md
