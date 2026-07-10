@@ -1,5 +1,6 @@
 using Jellyfin.Plugin.MetaShark.Api;
 using Jellyfin.Plugin.MetaShark.Configuration;
+using Jellyfin.Plugin.MetaShark.Test.Logging;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Model.Serialization;
@@ -76,7 +77,27 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNull(await api.GetSeriesRegionalAlternativeTitleAsync(42, region, CancellationToken.None).ConfigureAwait(false));
         }
 
-        private TmdbApi CreateApi(string baseUrl)
+        [TestMethod]
+        public async Task RegionalAlternativeTitle_LogsNonSuccessHttpResponse()
+        {
+            using var server = new StaticJsonTcpServer("{}", HttpStatusCode.InternalServerError);
+            var logger = new Mock<ILogger<TmdbApi>>();
+            logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+            var loggerFactory = new Mock<ILoggerFactory>();
+            loggerFactory.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(logger.Object);
+            using var api = this.CreateApi(server.BaseUrl, loggerFactory.Object);
+
+            var title = await api.GetMovieRegionalAlternativeTitleAsync(42, "CN", CancellationToken.None).ConfigureAwait(false);
+
+            Assert.IsNull(title);
+            LogAssert.AssertLoggedOnce(
+                logger,
+                LogLevel.Error,
+                expectException: true,
+                messageContains: ["GetMovieRegionalAlternativeTitleAsync"]);
+        }
+
+        private TmdbApi CreateApi(string baseUrl, ILoggerFactory? loggerFactory = null)
         {
             ReplacePluginConfiguration(new PluginConfiguration
             {
@@ -84,7 +105,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 TmdbApiKey = "test-key",
                 TmdbHost = baseUrl,
             });
-            var api = new TmdbApi(this.loggerFactory);
+            var api = new TmdbApi(loggerFactory ?? this.loggerFactory);
             var clientField = typeof(TmdbApi).GetField("tmDbClient", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.IsNotNull(clientField);
             var client = clientField!.GetValue(api);
@@ -146,12 +167,14 @@ namespace Jellyfin.Plugin.MetaShark.Test
         private sealed class StaticJsonTcpServer : IDisposable
         {
             private readonly string body;
+            private readonly HttpStatusCode statusCode;
             private readonly TcpListener listener;
             private readonly Task serveTask;
 
-            public StaticJsonTcpServer(string body)
+            public StaticJsonTcpServer(string body, HttpStatusCode statusCode = HttpStatusCode.OK)
             {
                 this.body = body;
+                this.statusCode = statusCode;
                 this.listener = new TcpListener(IPAddress.Loopback, 0);
                 this.listener.Start();
                 this.BaseUrl = $"http://127.0.0.1:{((IPEndPoint)this.listener.LocalEndpoint).Port.ToString(CultureInfo.InvariantCulture)}";
@@ -192,8 +215,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
                 this.RequestTarget = requestLine?.Split(' ').ElementAtOrDefault(1);
                 var bodyBytes = Encoding.UTF8.GetBytes(this.body);
+                var reasonPhrase = this.statusCode == HttpStatusCode.OK ? "OK" : "Error";
                 var headerBytes = Encoding.ASCII.GetBytes(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                    "HTTP/1.1 "
+                    + ((int)this.statusCode).ToString(CultureInfo.InvariantCulture)
+                    + " "
+                    + reasonPhrase
+                    + "\r\nContent-Type: application/json\r\nContent-Length: "
                     + bodyBytes.Length.ToString(CultureInfo.InvariantCulture)
                     + "\r\nConnection: close\r\n\r\n");
                 await stream.WriteAsync(headerBytes).ConfigureAwait(false);

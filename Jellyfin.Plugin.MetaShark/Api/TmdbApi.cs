@@ -69,12 +69,13 @@ namespace Jellyfin.Plugin.MetaShark.Api
             this.tmDbClient.ThrowApiExceptions = false;
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Public API remains instance-based because providers receive TmdbApi through dependency injection.")]
         public string ResolveMetadataLanguage(string? language, string? countryCode = null)
         {
             return ChineseLocalePolicy.ResolveTmdbMetadataLanguage(
                     language,
                     countryCode,
-                    this.configurationSnapshot.DefaultChineseMetadataLocale)
+                    MetaSharkPlugin.Instance?.Configuration.DefaultChineseMetadataLocale)
                 ?? string.Empty;
         }
 
@@ -93,7 +94,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"movie-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"movie-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out Movie? movie))
             {
                 return movie;
@@ -105,7 +107,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
                 movie = await this.tmDbClient.GetMovieAsync(
                     tmdbId,
-                    NormalizeLanguage(language),
+                    normalizedLanguage,
                     GetImageLanguagesParam(imageLanguages),
                     MovieMethods.Credits | MovieMethods.Releases | MovieMethods.Images | MovieMethods.Keywords | MovieMethods.Videos,
                     cancellationToken).ConfigureAwait(false);
@@ -196,7 +198,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"movie-images-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"movie-images-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out ImagesWithId? images))
             {
                 return images;
@@ -208,7 +211,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
                 images = await this.tmDbClient.GetMovieImagesAsync(
                     tmdbId,
-                    NormalizeLanguage(language),
+                    normalizedLanguage,
                     GetImageLanguagesParam(imageLanguages),
                     cancellationToken).ConfigureAwait(false);
 
@@ -245,7 +248,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
         /// <returns>The TMDb collection or null if not found.</returns>
         public async Task<Collection?> GetCollectionAsync(int tmdbId, string language, string imageLanguages, CancellationToken cancellationToken)
         {
-            var key = $"collection-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"collection-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out Collection? collection))
             {
                 return collection;
@@ -255,7 +259,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
             collection = await this.tmDbClient.GetCollectionAsync(
                 tmdbId,
-                NormalizeLanguage(language),
+                normalizedLanguage,
                 GetImageLanguagesParam(imageLanguages),
                 CollectionMethods.Images,
                 cancellationToken).ConfigureAwait(false);
@@ -283,7 +287,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"series-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"series-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out TvShow? series))
             {
                 return series;
@@ -295,7 +300,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
                 series = await this.tmDbClient.GetTvShowAsync(
                     tmdbId,
-                    language: NormalizeLanguage(language),
+                    language: normalizedLanguage,
                     includeImageLanguage: GetImageLanguagesParam(imageLanguages),
                     extraMethods: TvShowMethods.Credits | TvShowMethods.Images | TvShowMethods.Keywords | TvShowMethods.ExternalIds | TvShowMethods.Videos | TvShowMethods.ContentRatings | TvShowMethods.EpisodeGroups,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -305,7 +310,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     try
                     {
                         series.AggregateCredits = await this.tmDbClient
-                            .GetAggregateCredits(tmdbId, NormalizeLanguage(language), cancellationToken)
+                            .GetAggregateCredits(tmdbId, normalizedLanguage, cancellationToken)
                             .ConfigureAwait(false);
                     }
                     catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
@@ -404,7 +409,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"series-images-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"series-images-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out ImagesWithId? images))
             {
                 return images;
@@ -416,7 +422,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
                 images = await this.tmDbClient.GetTvShowImagesAsync(
                     tmdbId,
-                    NormalizeLanguage(language),
+                    normalizedLanguage,
                     GetImageLanguagesParam(imageLanguages),
                     cancellationToken).ConfigureAwait(false);
 
@@ -465,7 +471,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"group-{tvShowId.ToString(CultureInfo.InvariantCulture)}-{displayOrder}-{language}";
+            var normalizedLanguage = NormalizeLanguage(language ?? string.Empty);
+            var key = $"group-{tvShowId.ToString(CultureInfo.InvariantCulture)}-{displayOrder}-{normalizedLanguage}";
             if (this.memoryCache.TryGetValue(key, out TvGroupCollection? group))
             {
                 return group;
@@ -475,7 +482,6 @@ namespace Jellyfin.Plugin.MetaShark.Api
             {
                 await this.EnsureClientConfigAsync().ConfigureAwait(false);
 
-                var normalizedLanguage = NormalizeLanguage(language ?? string.Empty);
                 var normalizedImageLanguages = imageLanguages ?? string.Empty;
 
                 var series = await this.GetSeriesAsync(tvShowId, normalizedLanguage, normalizedImageLanguages, cancellationToken)
@@ -522,7 +528,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"group-id-{groupId}-{language}";
+            var normalizedLanguage = NormalizeLanguage(language ?? string.Empty);
+            var key = $"group-id-{groupId}-{normalizedLanguage}";
             if (this.memoryCache.TryGetValue(key, out TvGroupCollection? group))
             {
                 return group;
@@ -531,8 +538,6 @@ namespace Jellyfin.Plugin.MetaShark.Api
             try
             {
                 await this.EnsureClientConfigAsync().ConfigureAwait(false);
-
-                var normalizedLanguage = NormalizeLanguage(language ?? string.Empty);
 
                 group = await this.tmDbClient.GetTvEpisodeGroupsAsync(
                     groupId,
@@ -578,7 +583,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"season-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"season-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out TvSeason? season))
             {
                 return season;
@@ -591,7 +597,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 season = await this.tmDbClient.GetTvSeasonAsync(
                     tvShowId,
                     seasonNumber,
-                    language: NormalizeLanguage(language),
+                    language: normalizedLanguage,
                     includeImageLanguage: GetImageLanguagesParam(imageLanguages),
                     extraMethods: TvSeasonMethods.Credits | TvSeasonMethods.Images | TvSeasonMethods.ExternalIds | TvSeasonMethods.Videos,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -636,7 +642,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"episode-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"episode-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out TvEpisode? episode))
             {
                 return await this.EnsureEpisodeStillImagesAsync(episode, tvShowId, seasonNumber, episodeNumber, language, imageLanguages, cancellationToken)
@@ -651,7 +658,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     tvShowId,
                     seasonNumber,
                     episodeNumber,
-                    language: NormalizeLanguage(language),
+                    language: normalizedLanguage,
                     includeImageLanguage: GetImageLanguagesParam(imageLanguages),
                     extraMethods: TvEpisodeMethods.Credits | TvEpisodeMethods.Images | TvEpisodeMethods.ExternalIds | TvEpisodeMethods.Videos,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -693,7 +700,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"episode-images-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{language}-{imageLanguages}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"episode-images-{tvShowId.ToString(CultureInfo.InvariantCulture)}-s{seasonNumber.ToString(CultureInfo.InvariantCulture)}e{episodeNumber.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}-{imageLanguages}";
             if (this.memoryCache.TryGetValue(key, out StillImages? images))
             {
                 return images;
@@ -701,7 +709,6 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
             try
             {
-                var normalizedLanguage = NormalizeLanguage(language);
                 var normalizedImageLanguages = GetEpisodeFallbackImageLanguagesParam(language, imageLanguages);
                 var canUseNativeClient = string.IsNullOrWhiteSpace(normalizedImageLanguages)
                     || string.Equals(normalizedImageLanguages, normalizedLanguage, StringComparison.OrdinalIgnoreCase);
@@ -1154,7 +1161,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
 
-            var key = $"find-{source.ToString()}-{externalId.ToString(CultureInfo.InvariantCulture)}-{language}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"find-{source.ToString()}-{externalId.ToString(CultureInfo.InvariantCulture)}-{normalizedLanguage}";
             if (this.memoryCache.TryGetValue(key, out FindContainer? result))
             {
                 return result;
@@ -1167,7 +1175,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 result = await this.tmDbClient.FindAsync(
                     source,
                     externalId,
-                    NormalizeLanguage(language),
+                    normalizedLanguage,
                     cancellationToken).ConfigureAwait(false);
 
                 if (result != null)
@@ -1207,7 +1215,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return new List<SearchTv>();
             }
 
-            var key = GetSeriesSearchCacheKey(name, language);
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = GetSeriesSearchCacheKey(name, normalizedLanguage);
             if (this.memoryCache.TryGetValue(key, out SearchContainer<SearchTv>? series) && series != null)
             {
                 return series.Results;
@@ -1219,7 +1228,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
                 var enableAdult = MetaSharkPlugin.Instance?.Configuration?.EnableTmdbAdult ?? false;
                 var searchResults = await this.tmDbClient
-                    .SearchTvShowAsync(name, NormalizeLanguage(language), includeAdult: enableAdult, cancellationToken: cancellationToken)
+                    .SearchTvShowAsync(name, normalizedLanguage, includeAdult: enableAdult, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
                 if (searchResults.Results.Count > 0)
@@ -1321,7 +1330,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return new List<SearchMovie>();
             }
 
-            var key = GetMovieSearchCacheKey(name, year, language);
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = GetMovieSearchCacheKey(name, year, normalizedLanguage);
             if (this.memoryCache.TryGetValue(key, out SearchContainer<SearchMovie>? movies) && movies != null)
             {
                 return movies.Results;
@@ -1333,7 +1343,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
                 var enableAdult = MetaSharkPlugin.Instance?.Configuration?.EnableTmdbAdult ?? false;
                 var searchResults = await this.tmDbClient
-                    .SearchMovieAsync(name, NormalizeLanguage(language), includeAdult: enableAdult, year: year, cancellationToken: cancellationToken)
+                    .SearchMovieAsync(name, normalizedLanguage, includeAdult: enableAdult, year: year, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
                 if (searchResults.Results.Count > 0)
@@ -1373,7 +1383,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return new List<SearchCollection>();
             }
 
-            var key = $"collectionsearch-{name}-{language}";
+            var normalizedLanguage = NormalizeLanguage(language);
+            var key = $"collectionsearch-{name}-{normalizedLanguage}";
             if (this.memoryCache.TryGetValue(key, out SearchContainer<SearchCollection>? collections) && collections != null)
             {
                 return collections.Results;
@@ -1384,7 +1395,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 await this.EnsureClientConfigAsync().ConfigureAwait(false);
 
                 var searchResults = await this.tmDbClient
-                    .SearchCollectionAsync(name, NormalizeLanguage(language), cancellationToken: cancellationToken)
+                    .SearchCollectionAsync(name, normalizedLanguage, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
                 if (searchResults.Results.Count > 0)
@@ -1796,7 +1807,10 @@ namespace Jellyfin.Plugin.MetaShark.Api
             using var response = await httpClient.GetAsync(new Uri(url.ToString(), UriKind.Absolute), cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                return null;
+                throw new HttpRequestException(
+                    $"TMDb returned HTTP {(int)response.StatusCode}.",
+                    null,
+                    response.StatusCode);
             }
 
             using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
@@ -1881,12 +1895,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
         private sealed class TmdbConfigurationSnapshot
         {
-            private TmdbConfigurationSnapshot(string apiKey, string apiHost, IWebProxy? proxy, string defaultChineseMetadataLocale)
+            private TmdbConfigurationSnapshot(string apiKey, string apiHost, IWebProxy? proxy)
             {
                 this.ApiKey = apiKey;
                 this.ApiHost = apiHost;
                 this.Proxy = proxy;
-                this.DefaultChineseMetadataLocale = defaultChineseMetadataLocale;
             }
 
             public string ApiKey { get; }
@@ -1895,14 +1908,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
             public IWebProxy? Proxy { get; }
 
-            public string DefaultChineseMetadataLocale { get; }
-
             public static TmdbConfigurationSnapshot Create(PluginConfiguration? config)
             {
                 var apiKey = string.IsNullOrEmpty(config?.TmdbApiKey) ? DefaultApiKey : config.TmdbApiKey;
                 var apiHost = string.IsNullOrEmpty(config?.TmdbHost) ? DefaultApiHost : config.TmdbHost;
-                var defaultChineseMetadataLocale = ChineseLocalePolicy.NormalizeDefaultChineseMetadataLocale(config?.DefaultChineseMetadataLocale);
-                return new TmdbConfigurationSnapshot(apiKey, apiHost, config?.GetTmdbWebProxy(), defaultChineseMetadataLocale);
+                return new TmdbConfigurationSnapshot(apiKey, apiHost, config?.GetTmdbWebProxy());
             }
         }
     }
