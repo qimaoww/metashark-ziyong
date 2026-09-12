@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.2 - 2026-09-12
 
 ### 新增：豆瓣相似项目提供商（Jellyfin 12）
 
