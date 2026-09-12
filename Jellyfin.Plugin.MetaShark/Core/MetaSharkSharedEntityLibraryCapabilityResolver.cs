@@ -14,6 +14,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
+    using MediaBrowser.Controller.Persistence;
     using MediaBrowser.Model.Entities;
 
     public sealed class MetaSharkSharedEntityLibraryCapabilityResolver
@@ -22,12 +23,14 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
         private readonly ILibraryManager libraryManager;
         private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemResolver;
+        private readonly ILinkedChildrenService? linkedChildrenService;
 
-        public MetaSharkSharedEntityLibraryCapabilityResolver(ILibraryManager libraryManager)
+        public MetaSharkSharedEntityLibraryCapabilityResolver(ILibraryManager libraryManager, ILinkedChildrenService? linkedChildrenService = null)
         {
             ArgumentNullException.ThrowIfNull(libraryManager);
             this.libraryManager = libraryManager;
             this.ordinaryItemResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
+            this.linkedChildrenService = linkedChildrenService;
         }
 
         public MetaSharkLibraryCapabilityDecision Resolve(BaseItem item, MetaSharkLibraryCapability capability)
@@ -123,6 +126,23 @@ namespace Jellyfin.Plugin.MetaShark.Core
         {
             ArgumentNullException.ThrowIfNull(boxSet);
 
+            // Jellyfin 12 起合集成员存于 LinkedChildren 关系表，服务接口是官方查询入口。
+            if (this.linkedChildrenService != null && boxSet.Id != Guid.Empty)
+            {
+                var serviceMovieIds = new HashSet<Guid>();
+                var serviceMovies = new List<BaseItem>();
+                foreach (var itemId in this.linkedChildrenService.GetLinkedChildrenIds(boxSet.Id))
+                {
+                    if (serviceMovieIds.Add(itemId) && this.libraryManager.GetItemById(itemId) is Movie serviceMovie)
+                    {
+                        serviceMovies.Add(serviceMovie);
+                    }
+                }
+
+                return serviceMovies;
+            }
+
+            // 兼容手工构造实例（测试或未注入服务时）的旧路径。
             var linkedChildrenProperty = boxSet.GetType().GetProperty("LinkedChildren", InstanceMemberBindingFlags);
             if (linkedChildrenProperty?.GetValue(boxSet) is not IEnumerable linkedChildren)
             {
@@ -163,6 +183,9 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 把“关联了该人物”的过滤下推到数据库，避免全库枚举后逐条 GetPeople。
+                PersonIds = person.Id == Guid.Empty ? Array.Empty<Guid>() : new[] { person.Id },
             };
 
             var items = this.libraryManager.GetItemList(query) ?? Enumerable.Empty<BaseItem>();

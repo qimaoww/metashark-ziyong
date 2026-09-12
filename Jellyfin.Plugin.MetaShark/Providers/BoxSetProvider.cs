@@ -17,6 +17,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Library;
+    using MediaBrowser.Controller.Persistence;
     using MediaBrowser.Controller.Providers;
     using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.Providers;
@@ -28,9 +29,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     /// </summary>
     public class BoxSetProvider : BaseProvider, IRemoteMetadataProvider<BoxSet, BoxSetInfo>
     {
-        public BoxSetProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi)
+        private readonly ILinkedChildrenService? linkedChildrenService;
+
+        public BoxSetProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILinkedChildrenService? linkedChildrenService = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<BoxSetProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
+            this.linkedChildrenService = linkedChildrenService;
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -136,7 +140,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var oldBoxSet = existingItems.OfType<BoxSet>().FirstOrDefault(x => x.Name == collection.Name);
                     if (oldBoxSet != null)
                     {
-                        item.LinkedChildren = oldBoxSet.LinkedChildren;
+                        item.LinkedChildren = this.CopyLinkedChildren(oldBoxSet);
                     }
 
                     item.SetProviderId(MetadataProvider.Tmdb, collection.Id.ToString(CultureInfo.InvariantCulture));
@@ -147,6 +151,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return result;
+        }
+
+        private LinkedChild[] CopyLinkedChildren(BoxSet oldBoxSet)
+        {
+            if (this.linkedChildrenService == null || oldBoxSet.Id == Guid.Empty)
+            {
+                return oldBoxSet.LinkedChildren;
+            }
+
+            // 12.0 起成员存于关系表，未加载的 LinkedChildren 空数组代表“未知”，不能直接沿用。
+            return this.linkedChildrenService
+                .GetLinkedChildrenIds(oldBoxSet.Id)
+                .Select(itemId => new LinkedChild { ItemId = itemId, Type = LinkedChildType.Manual })
+                .ToArray();
         }
     }
 }

@@ -436,9 +436,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
         }
 
-        private static MetadataResult<Movie> FinalizeMetadataResult(MetadataResult<Movie> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
+        private MetadataResult<Movie> FinalizeMetadataResult(MetadataResult<Movie> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
         {
-            TmdbProviderIdPreservationHelper.PreserveMovieTmdbId(originalTmdbId, result.Item, hasVerifiedCorrection);
+            TmdbProviderIdPreservationHelper.PreserveMovieTmdbId(originalTmdbId, result.Item, hasVerifiedCorrection, this.Logger);
             PreserveNonTmdbProviderIdsAfterCorrection(result.Item, originalPublicProviderIds, hasVerifiedCorrection, shouldUseTmdbMetadataAfterCorrection);
             return result;
         }

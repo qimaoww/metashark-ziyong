@@ -44,6 +44,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             private readonly TmdbApi tmdbApi;
             private readonly ILibraryManager libraryManager;
             private readonly Dictionary<int, string?> localizedNamesByTmdbId = new Dictionary<int, string?>();
+            private Dictionary<string, Person>? peopleByTmdbId;
 
             public Scope(TmdbApi tmdbApi, ILibraryManager libraryManager)
             {
@@ -195,6 +196,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             private Person? FindExistingLibraryPersonByTmdbId(int personTmdbId)
             {
                 var tmdbProviderId = personTmdbId.ToString(CultureInfo.InvariantCulture);
+                return this.EnsurePeopleByTmdbId().TryGetValue(tmdbProviderId, out var person) ? person : null;
+            }
+
+            /// <summary>
+            /// 全库 Person 查询只做一次：一次刷新会解析十几到几十位演员，逐人全库扫描代价过高。
+            /// </summary>
+            private Dictionary<string, Person> EnsurePeopleByTmdbId()
+            {
+                if (this.peopleByTmdbId != null)
+                {
+                    return this.peopleByTmdbId;
+                }
+
+                var map = new Dictionary<string, Person>(StringComparer.Ordinal);
                 var peopleQuery = new InternalItemsQuery
                 {
                     IncludeItemTypes = new[] { BaseItemKind.Person },
@@ -204,14 +219,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 };
 
                 var items = this.libraryManager.GetItemList(peopleQuery);
-                if (items == null)
+                if (items != null)
                 {
-                    return null;
+                    foreach (var person in items.OfType<Person>())
+                    {
+                        var tmdbId = person.GetProviderId(MetadataProvider.Tmdb);
+                        if (!string.IsNullOrWhiteSpace(tmdbId) && !map.ContainsKey(tmdbId))
+                        {
+                            map[tmdbId] = person;
+                        }
+                    }
                 }
 
-                return items
-                    .OfType<Person>()
-                    .FirstOrDefault(person => string.Equals(person.GetProviderId(MetadataProvider.Tmdb), tmdbProviderId, StringComparison.Ordinal));
+                this.peopleByTmdbId = map;
+                return map;
             }
         }
     }

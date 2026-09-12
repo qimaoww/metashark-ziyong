@@ -543,7 +543,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return Task.CompletedTask;
             }
 
-            var relatedItems = this.GetRelatedMovieSeriesItems(personTmdbId);
+            var relatedItems = this.GetRelatedMovieSeriesItems(person, personTmdbId);
             if (relatedItems.Count == 0)
             {
                 return Task.CompletedTask;
@@ -632,7 +632,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return enabledItems;
         }
 
-        private List<BaseItem> GetRelatedMovieSeriesItems(string personTmdbId)
+        private List<BaseItem> GetRelatedMovieSeriesItems(Person person, string personTmdbId)
         {
             var effectiveLibraryManager = this.libraryManager ?? BaseItem.LibraryManager;
             if (effectiveLibraryManager == null)
@@ -646,6 +646,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 人物补图事件可能成百上千次，把“关联了该人物”的过滤下推到数据库。
+                PersonIds = person.Id == Guid.Empty ? Array.Empty<Guid>() : new[] { person.Id },
             };
 
             var items = effectiveLibraryManager.GetItemList(query);

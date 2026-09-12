@@ -67,7 +67,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             LogAssert.AssertLoggedOnce(
                 loggerStub,
-                LogLevel.Information,
+                LogLevel.Debug,
                 expectException: false,
                 stateContains: new Dictionary<string, object?>
                 {

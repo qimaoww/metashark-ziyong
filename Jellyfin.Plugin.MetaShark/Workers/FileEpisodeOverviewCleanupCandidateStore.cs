@@ -15,6 +15,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "[MetaShark] 剧集简介清理候选加载失败，已重置状态. path={Path}.");
 
         private readonly object syncRoot = new object();
+        private DateTimeOffset nextSweepAtUtc;
         private readonly ILogger<FileEpisodeOverviewCleanupCandidateStore> logger;
         private readonly string stateFilePath;
         private readonly Dictionary<string, Guid> itemIdsByPath = new Dictionary<string, Guid>(GetPathComparer());
@@ -321,6 +322,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         private void RemoveExpiredEntries(DateTimeOffset nowUtc)
         {
+            // 每次 Peek/TryClaim 都全表扫描并落盘会带来持续的 CPU 与磁盘抖动，这里摊还到每分钟一次。
+            if (nowUtc < this.nextSweepAtUtc)
+            {
+                return;
+            }
+
+            this.nextSweepAtUtc = nowUtc.AddMinutes(1);
+
             var expiredCandidateIds = new List<Guid>();
             foreach (var candidate in this.candidatesByItemId!.Values)
             {
@@ -338,10 +347,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 }
             }
 
-            if (expiredCandidateIds.Count > 0)
-            {
-                this.Write();
-            }
+            // 读路径不落盘：过期项已从内存移除，会在下一次真实写入时一并持久化。
         }
 
         private void Upsert(EpisodeOverviewCleanupCandidate candidate)

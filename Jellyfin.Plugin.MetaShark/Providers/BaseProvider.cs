@@ -58,6 +58,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private static readonly Action<ILogger, string, Exception?> LogMetaSharkInfo =
             LoggerMessage.Define<string>(LogLevel.Information, new EventId(1, nameof(Log)), "[MetaShark] {Message}");
 
+        // Jellyfin 12 起 ProviderId 会做格式校验（TMDb 为正整数、IMDb 为 tt+7~8 位），非法值会被静默丢弃。
+        private static readonly Action<ILogger, string, string, Guid, Exception?> LogProviderIdRejected =
+            LoggerMessage.Define<string, string, Guid>(LogLevel.Warning, new EventId(901, nameof(SetProviderIdIfDifferent)), "[MetaShark] ProviderId 写入被拒绝. provider={Provider} value={Value} itemId={ItemId}");
+
         private static readonly Regex RegChineseSeasonName = new Regex(@"第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
 
         private static readonly Regex RegSeasonNumberPrefix = new Regex(@"\s第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
@@ -1162,18 +1166,23 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return true;
         }
 
-        private static bool SetProviderIdIfDifferent(BaseItem item, string providerIdKey, string providerIdValue)
+        private bool SetProviderIdIfDifferent(BaseItem item, string providerIdKey, string providerIdValue)
         {
             if (string.Equals(item.GetProviderId(providerIdKey), providerIdValue, StringComparison.Ordinal))
             {
                 return false;
             }
 
-            item.SetProviderId(providerIdKey, providerIdValue);
+            if (!item.TrySetProviderId(providerIdKey, providerIdValue))
+            {
+                LogProviderIdRejected(this.Logger, providerIdKey, providerIdValue, item.Id, null);
+                return false;
+            }
+
             return true;
         }
 
-        private static bool CopyProviderIdIfPresent(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey)
+        private bool CopyProviderIdIfPresent(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey)
         {
             var providerIdValue = authoritativeMetadataItem.GetProviderId(providerIdKey);
             if (string.IsNullOrWhiteSpace(providerIdValue))
@@ -1181,10 +1190,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return false;
             }
 
-            return SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
+            return this.SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
         }
 
-        private static bool SyncProviderIdFromAuthoritativeItem(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey, bool removeWhenMissing)
+        private bool SyncProviderIdFromAuthoritativeItem(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey, bool removeWhenMissing)
         {
             var providerIdValue = authoritativeMetadataItem.GetProviderId(providerIdKey);
             if (string.IsNullOrWhiteSpace(providerIdValue))
@@ -1192,7 +1201,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return removeWhenMissing && RemoveProviderIdIfPresent(item, providerIdKey);
             }
 
-            return SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
+            return this.SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
         }
 
         private static bool SetTextIfDifferent(string? currentValue, string? authoritativeValue, Action<string> assign)

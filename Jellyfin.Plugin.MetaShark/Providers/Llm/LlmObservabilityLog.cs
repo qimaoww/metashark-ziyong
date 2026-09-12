@@ -10,8 +10,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
     internal static class LlmObservabilityLog
     {
+        // 每个条目刷新都会评估一次触发条件，逐条 Information 会淹没日志；降为 Debug，接受/拒绝结果仍保留 Information。
         private static readonly Action<ILogger, string, bool, string, string, bool, Exception?> LogLlmAssistTriggerEvaluated =
-            LoggerMessage.Define<string, bool, string, string, bool>(LogLevel.Information, new EventId(101, "LlmAssistTrigger.Evaluated"), "[MetaShark] LLM 触发已评估. reason={ReasonCode} accepted={Accepted} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}");
+            LoggerMessage.Define<string, bool, string, string, bool>(LogLevel.Debug, new EventId(101, "LlmAssistTrigger.Evaluated"), "[MetaShark] LLM 触发已评估. reason={ReasonCode} accepted={Accepted} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}");
 
         private static readonly Action<ILogger, string, string, string, bool, Exception?> LogLlmAssistTriggerAccepted =
             LoggerMessage.Define<string, string, string, bool>(LogLevel.Information, new EventId(102, "LlmAssistTrigger.Accepted"), "[MetaShark] LLM 触发已接受. reason={ReasonCode} mediaType={MediaType} semantic={Semantic} imageProvider={IsImageProvider}");

@@ -65,8 +65,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 var bytes = Encoding.UTF8.GetBytes(json);
                 using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
+                    // 这里保存的是可重建的缓存状态，temp 文件 + 原子 Move 已足够；
+                    // 每次状态变更都 fsync 会在全库刮削时造成明显的写放大。
                     stream.Write(bytes, 0, bytes.Length);
-                    stream.Flush(flushToDisk: true);
+                    stream.Flush();
                 }
 
                 File.Move(tempPath, path, overwrite: true);

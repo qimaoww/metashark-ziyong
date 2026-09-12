@@ -18,5 +18,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         public TmdbAuthoritativePeopleSnapshot? AuthoritativePeopleSnapshot { get; set; }
 
         public bool OverwriteQueued { get; set; }
+
+        public DateTimeOffset QueuedAtUtc { get; set; }
+
+        public DateTimeOffset ExpiresAtUtc { get; set; }
     }
 }
