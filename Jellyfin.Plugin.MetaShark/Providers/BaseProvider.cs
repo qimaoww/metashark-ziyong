@@ -62,6 +62,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private static readonly Action<ILogger, string, string, Guid, Exception?> LogProviderIdRejected =
             LoggerMessage.Define<string, string, Guid>(LogLevel.Warning, new EventId(901, nameof(SetProviderIdIfDifferent)), "[MetaShark] ProviderId 写入被拒绝. provider={Provider} value={Value} itemId={ItemId}");
 
+        private static readonly AsyncLocal<Dictionary<string, BaseItem?>?> PathLookupCache = new AsyncLocal<Dictionary<string, BaseItem?>?>();
+
         private static readonly Regex RegChineseSeasonName = new Regex(@"第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
 
         private static readonly Regex RegSeasonNumberPrefix = new Regex(@"\s第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
@@ -1076,6 +1078,50 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return this.GetProxyImageUrl(new Uri(url, UriKind.Absolute)).ToString();
         }
 
+        /// <summary>
+        /// 在一次元数据刷新内复用按路径查询的结果：同一次刷新会多次查询相同的季/剧目录。
+        /// </summary>
+        protected IDisposable BeginPathLookupScope()
+        {
+            var previous = PathLookupCache.Value;
+            PathLookupCache.Value = new Dictionary<string, BaseItem?>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+            return new PathLookupScopeRestorer(previous);
+        }
+
+        protected BaseItem? FindByPathCached(string path, bool isFolder)
+        {
+            var cache = PathLookupCache.Value;
+            if (cache == null)
+            {
+                return this.LibraryManager.FindByPath(path, isFolder);
+            }
+
+            var key = string.Concat(isFolder ? "D:" : "F:", path);
+            if (cache.TryGetValue(key, out var cached))
+            {
+                return cached;
+            }
+
+            var item = this.LibraryManager.FindByPath(path, isFolder);
+            cache[key] = item;
+            return item;
+        }
+
+        private sealed class PathLookupScopeRestorer : IDisposable
+        {
+            private readonly Dictionary<string, BaseItem?>? previous;
+
+            public PathLookupScopeRestorer(Dictionary<string, BaseItem?>? previous)
+            {
+                this.previous = previous;
+            }
+
+            public void Dispose()
+            {
+                PathLookupCache.Value = this.previous;
+            }
+        }
+
         protected string? GetOriginalSeasonPath(EpisodeInfo info)
         {
             ArgumentNullException.ThrowIfNull(info);
@@ -1090,7 +1136,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return null;
             }
 
-            var item = this.LibraryManager.FindByPath(seasonPath, true);
+            var item = this.FindByPathCached(seasonPath, true);
 
             // 没有季文件夹
             if (item is Series)
@@ -1115,7 +1161,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return false;
             }
 
-            var parent = this.LibraryManager.FindByPath(seasonPath, true);
+            var parent = this.FindByPathCached(seasonPath, true);
 
             // 没有季文件夹
             if (parent is Series)
@@ -1129,7 +1175,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return false;
             }
 
-            var series = this.LibraryManager.FindByPath(seriesPath, true);
+            var series = this.FindByPathCached(seriesPath, true);
 
             // 季文件夹不规范，没法识别
             if (series is Series && parent is not Season)

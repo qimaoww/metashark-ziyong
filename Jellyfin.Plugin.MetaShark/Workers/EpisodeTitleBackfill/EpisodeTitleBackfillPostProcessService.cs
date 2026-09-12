@@ -84,6 +84,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
                 return;
             }
 
+            // Jellyfin 12 的剧集多版本：次版本沿用主版本元数据，不单独回填标题。
+            if (episode.PrimaryVersionId.HasValue)
+            {
+                return;
+            }
+
             this.logger.LogDebug(
                 "[MetaShark] 收到剧集标题回填后处理事件. trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
                 triggerName,

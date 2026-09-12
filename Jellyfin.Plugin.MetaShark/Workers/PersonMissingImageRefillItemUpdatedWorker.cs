@@ -20,6 +20,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private static readonly Action<ILogger, string, Guid, ItemUpdateType, Exception?> LogItemUpdated =
             LoggerMessage.Define<string, Guid, ItemUpdateType>(LogLevel.Debug, new EventId(2, nameof(OnItemUpdated)), "[MetaShark] 收到人物缺图回填条目更新事件. name={Name} itemId={Id} updateReason={UpdateReason}.");
 
+        private static readonly Action<ILogger, Guid, ItemUpdateType, Exception?> LogPostProcessFailed =
+            LoggerMessage.Define<Guid, ItemUpdateType>(LogLevel.Error, new EventId(3, nameof(OnItemUpdated)), "[MetaShark] 人物缺图回填条目更新处理失败. itemId={Id} updateReason={UpdateReason}.");
+
         private readonly ILibraryManager libraryManager;
         private readonly IPersonMissingImageRefillService refillService;
         private readonly ILogger<PersonMissingImageRefillItemUpdatedWorker> logger;
@@ -56,7 +59,15 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         {
             var item = e.Item;
             LogItemUpdated(this.logger, item?.Name ?? string.Empty, item?.Id ?? Guid.Empty, e.UpdateReason, null);
-            this.DispatchItemUpdated(e);
+
+            try
+            {
+                this.DispatchItemUpdated(e);
+            }
+            catch (Exception ex)
+            {
+                LogPostProcessFailed(this.logger, item?.Id ?? Guid.Empty, e.UpdateReason, ex);
+            }
         }
     }
 }

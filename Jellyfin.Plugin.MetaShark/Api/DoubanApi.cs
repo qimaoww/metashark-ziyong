@@ -31,6 +31,15 @@ namespace Jellyfin.Plugin.MetaShark.Api
         public const string HTTPUSERAGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.63 Safari/537.36 Edg/93.0.961.44";
         public const string HTTPREFERER = "https://www.douban.com/";
 
+        // 禁止自动重定向的客户端只用于探测旧版人物 ID，复用以免每次请求重建连接池。
+        private static readonly HttpClient NoRedirectHttpClient = new HttpClient(
+            new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                CheckCertificateRevocationList = true,
+            },
+            disposeHandler: true);
+
         private static readonly Action<ILogger, string, Exception?> LogCookieAddFailed =
             LoggerMessage.Define<string>(LogLevel.Debug, new EventId(1, nameof(LoadLoadDoubanCookie)), "[MetaShark] 添加 Douban Cookie 失败. 错误信息={ErrorMessage}");
 
@@ -649,22 +658,14 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
 
             var url = $"https://movie.douban.com/celebrity/{id}/";
-            using var handler = new HttpClientHandler()
+            using var resp = await NoRedirectHttpClient.GetAsync(new Uri(url), cancellationToken).ConfigureAwait(false);
+            if (resp.Headers.TryGetValues("Location", out var values))
             {
-                AllowAutoRedirect = false,
-                CheckCertificateRevocationList = true,
-            };
-            using (var noRedirectClient = new HttpClient(handler, disposeHandler: true))
-            {
-                var resp = await noRedirectClient.GetAsync(new Uri(url), cancellationToken).ConfigureAwait(false);
-                if (resp.Headers.TryGetValues("Location", out var values))
+                var location = values.First();
+                var newId = location.GetMatchGroup(this.regId);
+                if (!string.IsNullOrEmpty(newId))
                 {
-                    var location = values.First();
-                    var newId = location.GetMatchGroup(this.regId);
-                    if (!string.IsNullOrEmpty(newId))
-                    {
-                        return newId;
-                    }
+                    return newId;
                 }
             }
 
@@ -1121,6 +1122,14 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 }
 
                 this.cookieContainer = container;
+
+                // 配置里的 Cookie 是唯一来源：重载时先清掉上一份配置留下的条目，
+                // 否则用户在配置里删除的 Cookie 仍会继续随请求发送。
+                foreach (Cookie existingCookie in container.GetCookies(new Uri("https://www.douban.com")))
+                {
+                    existingCookie.Expired = true;
+                }
+
                 if (!string.IsNullOrEmpty(configCookie))
                 {
                     var cookieList = configCookie.Split(';');

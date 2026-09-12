@@ -32,6 +32,14 @@
 - 日志：LLM 触发评估日志降为 Debug，避免整库刷新时逐条 Information 噪音。
 - 依赖：`Jellyfin.Controller` / `Jellyfin.Model` 引用排除 runtime 资产，插件输出目录不再携带宿主 dll。
 
+### 第三轮：事件与外部来源健壮性
+
+- 六个 ItemUpdated 事件处理器不再把插件异常抛回 Jellyfin 的事件调用栈，统一记录 Error 日志，避免中断宿主扫描/刷新流程。
+- Jellyfin 12 剧集多版本：`PrimaryVersionId` 指向主版本的次版本不再单独做标题回填与简介清理。
+- 豆瓣 Cookie 配置重载时以配置为唯一来源，删除的 Cookie 不再继续发送；TVDB API Key/PIN 改为实时读取，并按 Key 失效 token 缓存。
+- 单次元数据刷新内缓存 `FindByPath` 结果，减少同一季/剧目录的重复查询；豆瓣禁止重定向的客户端改为复用。
+- 移除未使用的 `LoggingHandler`。
+
 ## 5.2.2 - 2026-02-10
 
 - Fix special placement ordering for TMDb extras.

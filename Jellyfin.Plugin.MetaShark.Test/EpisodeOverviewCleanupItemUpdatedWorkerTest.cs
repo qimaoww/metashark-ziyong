@@ -63,7 +63,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task StartAsync_LogsAndRethrows_WhenPostProcessThrows()
+        public async Task StartAsync_LogsAndSwallows_WhenPostProcessThrows()
         {
             var libraryManagerStub = new Mock<ILibraryManager>();
             var postProcessServiceStub = new Mock<IEpisodeOverviewCleanupPostProcessService>();
@@ -80,16 +80,16 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             await worker.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
-            var actualException = Assert.ThrowsException<InvalidOperationException>(() => libraryManagerStub.Raise(
+            // 插件异常只记录，不再抛回 Jellyfin 的事件调用栈。
+            libraryManagerStub.Raise(
                 x => x.ItemUpdated += null,
                 libraryManagerStub.Object,
                 new ItemChangeEventArgs
                 {
                     Item = episode,
                     UpdateReason = ItemUpdateType.MetadataDownload,
-                }));
+                });
 
-            Assert.AreSame(expectedException, actualException);
             LogAssert.AssertLoggedOnce(
                 loggerStub,
                 LogLevel.Error,

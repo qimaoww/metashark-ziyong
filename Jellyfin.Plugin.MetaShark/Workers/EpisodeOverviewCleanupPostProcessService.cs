@@ -75,6 +75,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
+            // Jellyfin 12 的剧集多版本：次版本沿用主版本元数据，不单独做清理。
+            if (episode.PrimaryVersionId.HasValue)
+            {
+                return;
+            }
+
             if (!IsAcceptedUpdateReason(e.UpdateReason))
             {
                 return;

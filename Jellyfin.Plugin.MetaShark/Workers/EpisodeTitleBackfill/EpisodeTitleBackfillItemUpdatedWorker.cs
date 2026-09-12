@@ -67,8 +67,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             }
             catch (Exception ex)
             {
+                // 插件异常不应沿 Jellyfin 的 ItemUpdated 事件栈向上传播，避免中断宿主扫描/刷新流程。
                 LogPostProcessFailed(this.logger, item?.Id ?? Guid.Empty, itemPath, e.UpdateReason, ex);
-                throw;
             }
         }
     }

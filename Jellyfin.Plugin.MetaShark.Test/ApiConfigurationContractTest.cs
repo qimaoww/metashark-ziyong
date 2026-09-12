@@ -122,7 +122,7 @@ public class ApiConfigurationContractTest
 
     [TestMethod]
     [TestCategory("Stable")]
-    public void DoubanApi_ReloadAddsConfiguredCookiesWithoutClearingStaleCookies()
+    public void DoubanApi_ReloadReplacesConfiguredCookies()
     {
         ReplacePluginConfiguration(new PluginConfiguration
         {
@@ -136,8 +136,9 @@ public class ApiConfigurationContractTest
 
         var cookies = cookieContainer.GetCookies(new Uri("https://www.douban.com/"));
 
+        // 配置是 Cookie 的唯一来源：旧配置里已删除的 bid 不应继续发送。
         Assert.AreEqual("second", cookies["ck"]?.Value);
-        Assert.AreEqual("initial", cookies["bid"]?.Value);
+        Assert.IsNull(cookies["bid"]);
         Assert.AreEqual("next", cookies["dbcl2"]?.Value);
     }
 

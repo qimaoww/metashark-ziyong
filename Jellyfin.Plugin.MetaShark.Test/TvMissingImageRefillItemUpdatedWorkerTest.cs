@@ -58,11 +58,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task StartAsync_Rethrows_WhenRefillServiceThrows()
+        public async Task StartAsync_LogsAndSwallows_WhenRefillServiceThrows()
         {
             var libraryManagerStub = new Mock<ILibraryManager>();
             var refillServiceStub = new Mock<ITvMissingImageRefillService>();
             var loggerStub = new Mock<ILogger<TvMissingImageRefillItemUpdatedWorker>>();
+            loggerStub.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
             var expectedException = new InvalidOperationException("refill boom");
             refillServiceStub
                 .Setup(x => x.QueueMissingImagesForUpdatedItem(It.IsAny<ItemChangeEventArgs>(), CancellationToken.None))
@@ -73,16 +74,27 @@ namespace Jellyfin.Plugin.MetaShark.Test
             await worker.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
             var series = new Series { Id = Guid.NewGuid(), Name = "Series B" };
-            var actualException = Assert.ThrowsException<InvalidOperationException>(() => libraryManagerStub.Raise(
+            // 插件异常只记录，不再抛回 Jellyfin 的事件调用栈。
+            libraryManagerStub.Raise(
                 x => x.ItemUpdated += null,
                 libraryManagerStub.Object,
                 new ItemChangeEventArgs
                 {
                     Item = series,
                     UpdateReason = ItemUpdateType.MetadataDownload,
-                }));
+                });
 
-            Assert.AreSame(expectedException, actualException);
+            LogAssert.AssertLoggedOnce(
+                loggerStub,
+                LogLevel.Error,
+                expectException: true,
+                stateContains: new Dictionary<string, object?>
+                {
+                    ["Id"] = series.Id,
+                    ["UpdateReason"] = ItemUpdateType.MetadataDownload,
+                },
+                originalFormatContains: "[MetaShark] 电视缺图回填条目更新处理失败",
+                messageContains: ["[MetaShark] 电视缺图回填条目更新处理失败", $"itemId={series.Id}"]);
             refillServiceStub.Verify(
                 x => x.QueueMissingImagesForUpdatedItem(
                     It.Is<ItemChangeEventArgs>(e => e.Item == series && e.UpdateReason == ItemUpdateType.MetadataDownload),

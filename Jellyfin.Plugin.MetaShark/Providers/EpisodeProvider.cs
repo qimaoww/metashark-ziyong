@@ -114,6 +114,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 识别：info的Name、IndexNumber和ParentIndexNumber是从文件名解析出来的，provinceIds有指定选择项的ProvinceId
             // 覆盖所有元数据：info的Name、IndexNumber和ParentIndexNumber是从文件名解析出来的，provinceIds保留所有旧值
             // 搜索缺少的元数据：info的Name、IndexNumber和ParentIndexNumber是从当前的元数据获取，provinceIds保留所有旧值
+            using var pathLookupScope = this.BeginPathLookupScope();
             var fileName = Path.GetFileName(info.Path);
             this.Log("开始获取单集元数据. name: {0} fileName: {1} episodeNumber: {2} seasonNumber: {3} isMissingEpisode: {4} enableTmdb: {5} displayOrder: {6}", info.Name, fileName, info.IndexNumber, info.ParentIndexNumber, info.IsMissingEpisode, Config.EnableTmdb, info.SeriesDisplayOrder);
             var result = new MetadataResult<Episode>();
@@ -225,12 +226,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var seriesPath = this.GetOriginalSeriesPath(info);
             if (seriesItem == null && !string.IsNullOrWhiteSpace(seriesPath))
             {
-                seriesItem = this.LibraryManager.FindByPath(seriesPath, true) as Series;
+                seriesItem = this.FindByPathCached(seriesPath, true) as Series;
             }
 
             var seriesOverview = seriesItem?.Overview;
             var seasonPath = this.GetOriginalSeasonPath(info);
-            var seasonItem = !string.IsNullOrWhiteSpace(seasonPath) ? this.LibraryManager.FindByPath(seasonPath, true) as Season : null;
+            var seasonItem = !string.IsNullOrWhiteSpace(seasonPath) ? this.FindByPathCached(seasonPath, true) as Season : null;
             var seasonOverview = seasonItem?.Overview;
             var titleResolution = await this.ResolveEffectiveEpisodeProviderTitleAsync(
                     seriesTmdbId.ToInt(),
@@ -1328,7 +1329,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return null;
             }
 
-            var item = this.LibraryManager.FindByPath(seasonPath, true);
+            var item = this.FindByPathCached(seasonPath, true);
 
             if (item is Series)
             {
@@ -1341,7 +1342,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return null;
             }
 
-            return this.LibraryManager.FindByPath(seriesPath, true) is Series ? seriesPath : null;
+            return this.FindByPathCached(seriesPath, true) is Series ? seriesPath : null;
         }
 
         private async Task<TvdbSpecialPlacement?> TryBuildTvdbSpecialPlacementAsync(
