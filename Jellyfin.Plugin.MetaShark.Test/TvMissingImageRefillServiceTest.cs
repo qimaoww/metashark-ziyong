@@ -123,6 +123,46 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
+        public void QueueMissingImages_FullScan_WhenSeriesHasTmdbId_SkipsMetadataPipeline()
+        {
+            var series = new Series { Id = Guid.NewGuid(), Name = "Series With Tmdb", Path = "/library/tv/series-tmdb" };
+            series.SetProviderId(MetadataProvider.Tmdb, "1001");
+
+            var libraryManagerStub = new Mock<ILibraryManager>();
+            libraryManagerStub
+                .Setup(x => x.GetItemList(It.IsAny<InternalItemsQuery>()))
+                .Returns(new List<BaseItem> { series });
+
+            var providerManagerStub = new Mock<IProviderManager>();
+
+            var baseItemManagerStub = new Mock<IBaseItemManager>();
+            baseItemManagerStub
+                .Setup(x => x.IsImageFetcherEnabled(series, It.IsAny<TypeOptions>(), MetaSharkPlugin.PluginName))
+                .Returns(true);
+
+            var service = CreateServiceWithLogger(
+                libraryManagerStub.Object,
+                providerManagerStub.Object,
+                baseItemManagerStub.Object,
+                CreateResolver((series, true)),
+                out _);
+
+            service.QueueMissingImagesForFullLibraryScan(CancellationToken.None);
+
+            providerManagerStub.Verify(
+                x => x.QueueRefresh(
+                    series.Id,
+                    It.Is<MetadataRefreshOptions>(opt =>
+                        // 系列已有 TMDb id：纯补图，不再重跑元数据管线。
+                        opt.MetadataRefreshMode == MetadataRefreshMode.None &&
+                        opt.ImageRefreshMode == MetadataRefreshMode.FullRefresh &&
+                        !opt.ReplaceAllImages &&
+                        !opt.ReplaceAllMetadata),
+                    RefreshPriority.Normal),
+                Times.Once);
+        }
+
+        [TestMethod]
         public void QueueMissingImages_FullScan_DoesNotQueueWhenSeriesAlreadyHasAllSupportedImages()
         {
             var series = new Series { Id = Guid.NewGuid(), Name = "Series A", Path = "/library/tv/series-a" };

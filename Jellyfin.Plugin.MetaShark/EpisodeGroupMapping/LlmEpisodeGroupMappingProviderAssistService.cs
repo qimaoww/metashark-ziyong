@@ -30,6 +30,9 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private static readonly Action<ILogger, int, Exception?> LogQueuedRefresh =
             LoggerMessage.Define<int>(LogLevel.Information, new EventId(1, nameof(LlmEpisodeGroupMappingProviderAssistService)), "[MetaShark] LLM 剧集组映射变更已排队刷新. Count={Count}.");
 
+        private static readonly Action<ILogger, string, Exception?> LogAssistFailed =
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(3, "EpisodeGroupMappingAssist.Failed"), "[MetaShark] LLM 剧集组映射辅助异常，已降级为失败结果. seriesTmdbId={SeriesTmdbId}.");
+
         private static readonly Action<ILogger, string, string, string, string, int, bool, Exception?> LogAssistCompleted =
             LoggerMessage.Define<string, string, string, string, int, bool>(LogLevel.Information, new EventId(2, "EpisodeGroupMappingAssist.Completed"), "[MetaShark] LLM 剧集组映射辅助完成. status={Status} reason={ReasonCode} seriesTmdbId={SeriesTmdbId} selectedGroupId={SelectedGroupId} candidateCount={CandidateCount} wroteMapping={WroteMapping}.");
 
@@ -43,6 +46,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private readonly LlmAssistTriggerPolicy triggerPolicy;
         private readonly EpisodeGroupRefreshCoordinator episodeGroupRefreshCoordinator;
         private readonly ILogger<LlmEpisodeGroupMappingProviderAssistService> logger;
+        private readonly EpisodeGroupMappingConfigurationRefreshService? configurationRefreshService;
 
         public LlmEpisodeGroupMappingProviderAssistService(
             ILlmEpisodeGroupMappingAssistService assistService,
@@ -102,7 +106,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             EpisodeGroupRefreshCoordinator episodeGroupRefreshCoordinator,
             IEpisodeGroupMappingFacade episodeGroupMappingFacade,
             LlmAssistTriggerPolicy triggerPolicy,
-            ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
+            ILogger<LlmEpisodeGroupMappingProviderAssistService> logger,
+            EpisodeGroupMappingConfigurationRefreshService? configurationRefreshService = null)
         {
             this.assistService = assistService ?? throw new ArgumentNullException(nameof(assistService));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
@@ -110,6 +115,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? throw new ArgumentNullException(nameof(episodeGroupMappingFacade));
             this.triggerPolicy = triggerPolicy ?? throw new ArgumentNullException(nameof(triggerPolicy));
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            this.configurationRefreshService = configurationRefreshService;
         }
 
         public async Task<LlmEpisodeGroupMappingAssistResult> SuggestWriteAndRefreshAsync(LlmEpisodeGroupMappingProviderAssistRequest request, CancellationToken cancellationToken)
@@ -182,10 +188,20 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 
                 return result;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+#pragma warning disable CA1031 // LLM 剧集组映射辅助是可选增强，任何失败都不能让整条元数据抓取失败。
+            catch (Exception ex)
+            {
+                LogAssistFailed(this.logger, seriesTmdbIdText, ex);
+                return LlmEpisodeGroupMappingAssistResult.Failed("EpisodeGroupMappingAssistException", currentMapping);
+            }
+#pragma warning restore CA1031
             finally
             {
                 seriesLock.Release();
-                ReleaseSeriesLock(seriesTmdbIdText, seriesLock);
             }
         }
 
@@ -231,19 +247,15 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 queuedHandler: MarkRefreshQueued);
 
             LogQueuedRefresh(this.logger, outcome.QueuedCount, null);
+
+            // LLM 写入后这里已经刷新过受影响剧集，同步基线可避免下一次配置保存
+            // 把同一批变更再刷新一遍。
+            this.configurationRefreshService?.SynchronizeEffectiveMappingBaseline(newMapping);
         }
 
         private static SemaphoreSlim GetSeriesLock(string seriesTmdbId)
         {
             return SeriesLocks.GetOrAdd(seriesTmdbId ?? string.Empty, _ => new SemaphoreSlim(1, 1));
-        }
-
-        private static void ReleaseSeriesLock(string seriesTmdbId, SemaphoreSlim seriesLock)
-        {
-            if (seriesLock.CurrentCount == 1)
-            {
-                SeriesLocks.TryRemove(new KeyValuePair<string, SemaphoreSlim>(seriesTmdbId ?? string.Empty, seriesLock));
-            }
         }
 
         private static bool IsBridgedExplicitSearchMissingRefresh(LlmEpisodeGroupMappingProviderAssistRequest request, LlmAssistTriggerDecision triggerDecision)
@@ -291,7 +303,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 return false;
             }
 
-            SuppressedRefreshSeriesIds.TryRemove(seriesTmdbId, out _);
+            // 命中后保留到过期：整季刷新会让多个分集依次走到这里，
+            // 消费即删会导致同一批里只有第一个分集被抑制，其余各自再走一次 LLM。
             return true;
         }
 

@@ -40,14 +40,18 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
             catch (IOException ex)
             {
-                return Reset<TState>(path, logLoadFailed, ex);
+                // IO/权限问题通常是瞬时故障，原文件可能仍然完好，不能直接覆盖为空状态。
+                logLoadFailed(path, ex);
+                return new Dictionary<Guid, TState>();
             }
             catch (UnauthorizedAccessException ex)
             {
-                return Reset<TState>(path, logLoadFailed, ex);
+                logLoadFailed(path, ex);
+                return new Dictionary<Guid, TState>();
             }
             catch (JsonException ex)
             {
+                // 确认文件内容已损坏时才重写为空状态。
                 return Reset<TState>(path, logLoadFailed, ex);
             }
         }
@@ -61,8 +65,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 var bytes = Encoding.UTF8.GetBytes(json);
                 using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
+                    // 这里保存的是可重建的缓存状态，temp 文件 + 原子 Move 已足够；
+                    // 每次状态变更都 fsync 会在全库刮削时造成明显的写放大。
                     stream.Write(bytes, 0, bytes.Length);
-                    stream.Flush(flushToDisk: true);
+                    stream.Flush();
                 }
 
                 File.Move(tempPath, path, overwrite: true);

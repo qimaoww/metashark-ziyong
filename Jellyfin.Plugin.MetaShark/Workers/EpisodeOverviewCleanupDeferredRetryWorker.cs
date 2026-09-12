@@ -146,8 +146,6 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            this.pendingResolver.MarkDeferredAttempt(candidate, nowUtc);
-
             try
             {
                 await this.postProcessService.TryApplyAsync(
@@ -163,8 +161,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             catch (Exception ex)
             {
                 LogRetryFailed(this.logger, episode.Id, candidate.ItemPath, ex);
+                this.pendingResolver.MarkDeferredAttempt(candidate, nowUtc);
+                return;
             }
 #pragma warning restore CA1031
+
+            // 成功应用后候选会被移除；仍存在说明本次未完成（例如被门控），需要退避重试。
+            if (this.pendingResolver.IsPending(candidate))
+            {
+                this.pendingResolver.MarkDeferredAttempt(candidate, nowUtc);
+            }
         }
     }
 }

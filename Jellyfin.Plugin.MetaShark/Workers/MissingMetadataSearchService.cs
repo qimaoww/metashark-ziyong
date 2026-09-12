@@ -6,11 +6,13 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Providers;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
@@ -72,8 +74,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             ILibraryManager libraryManager,
             IProviderManager providerManager,
             IFileSystem fileSystem,
-            IPeopleRefreshStateStore peopleRefreshStateStore)
-            : this(logger, libraryManager, providerManager, fileSystem, peopleRefreshStateStore, (delay, cancellationToken) => Task.Delay(delay, cancellationToken))
+            IPeopleRefreshStateStore peopleRefreshStateStore,
+            IBaseItemManager? baseItemManager = null)
+            : this(logger, libraryManager, providerManager, fileSystem, peopleRefreshStateStore, (delay, cancellationToken) => Task.Delay(delay, cancellationToken), baseItemManager)
         {
         }
 
@@ -83,7 +86,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             IProviderManager providerManager,
             IFileSystem fileSystem,
             IPeopleRefreshStateStore peopleRefreshStateStore,
-            Func<TimeSpan, CancellationToken, Task> delayAsync)
+            Func<TimeSpan, CancellationToken, Task> delayAsync,
+            IBaseItemManager? baseItemManager = null)
         {
             ArgumentNullException.ThrowIfNull(logger);
             ArgumentNullException.ThrowIfNull(libraryManager);
@@ -97,8 +101,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.peopleRefreshStateStore = peopleRefreshStateStore;
             this.providerManager = providerManager;
             this.fileSystem = fileSystem;
-            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
-            this.sharedEntityLibraryCapabilityResolver = new MetaSharkSharedEntityLibraryCapabilityResolver(libraryManager);
+            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager, baseItemManager);
+            this.sharedEntityLibraryCapabilityResolver = new MetaSharkSharedEntityLibraryCapabilityResolver(libraryManager, linkedChildrenService: null, baseItemManager: baseItemManager);
             this.delayAsync = delayAsync;
         }
 
@@ -208,6 +212,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 判定只依赖列与导航字段（Id/Name/Overview/ProviderIds/Images/父链），
+                // 跳过 Data JSON 反序列化可省掉整库扫描最贵的一环。
+                SkipDeserialization = true,
             };
         }
 
@@ -226,9 +234,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private List<BaseItem> GetMissingMetadataCandidates()
         {
             var items = this.libraryManager.GetItemList(CreateFullLibraryQuery());
-            return items.FindAll(item =>
+            return items.Where(item =>
                 IsMissingMetadataSearchCandidate(item, this.peopleRefreshStateStore.GetState(item.Id))
-                && this.IsMetadataAllowed(item));
+                && this.IsMetadataAllowed(item)).ToList();
         }
 
         private bool IsMetadataAllowed(BaseItem item)

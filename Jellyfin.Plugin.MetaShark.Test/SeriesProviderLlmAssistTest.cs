@@ -1397,7 +1397,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "manual-correction-series-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_manual-correction-series-douban",
                 [MetadataProvider.Tmdb.ToString()] = "111",
-                [MetadataProvider.Imdb.ToString()] = "ttold",
+                [MetadataProvider.Imdb.ToString()] = "tt0100001",
                 [MetadataProvider.Tvdb.ToString()] = "tvdbold",
             };
 
@@ -1413,7 +1413,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
             Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
-            Assert.AreEqual("ttold", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100001", result.Item.GetProviderId(MetadataProvider.Imdb));
             Assert.AreEqual("tvdbold", result.Item.GetProviderId(MetadataProvider.Tvdb));
             Assert.AreEqual("111", externalIdService.CorrectionRequests[0].OldTmdbId);
             Assert.AreEqual(DefaultScraperSemantic.UserRefresh, externalIdService.CorrectionRequests[0].Semantic);
@@ -1514,7 +1514,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     [BaseProvider.DoubanProviderId] = "replacement-series-douban",
                     [MetaSharkPlugin.ProviderId] = "Douban_replacement-series-douban",
                     [MetadataProvider.Tmdb.ToString()] = "111",
-                    [MetadataProvider.Imdb.ToString()] = "ttold",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100001",
                     [MetadataProvider.Tvdb.ToString()] = "tvdbold",
                 },
             };
@@ -1535,7 +1535,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "replacement-series-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_replacement-series-douban",
                 [MetadataProvider.Tmdb.ToString()] = "111",
-                [MetadataProvider.Imdb.ToString()] = "ttold",
+                [MetadataProvider.Imdb.ToString()] = "tt0100001",
                 [MetadataProvider.Tvdb.ToString()] = "tvdbold",
             };
 
@@ -1550,7 +1550,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("222", result.Item.GetProviderId(MetadataProvider.Tmdb));
             Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
-            Assert.AreEqual("ttold", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100001", result.Item.GetProviderId(MetadataProvider.Imdb));
             Assert.AreEqual("tvdbold", result.Item.GetProviderId(MetadataProvider.Tvdb));
             Assert.IsFalse(currentSeries.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", currentSeries.GetProviderId(MetaSharkPlugin.ProviderId));
@@ -1937,7 +1937,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var doubanSubject = CreateDoubanSubject("semantic-conflict-series-douban", "主线剧集", 2024);
             SeedDoubanSubject(doubanApi, doubanSubject);
             var tmdbApi = new TmdbApi(loggerFactory);
-            SeedTmdbSeries(tmdbApi, 222, "zh-CN", CreateTmdbSeries(222, "主线剧集", "修正后简介", "ttmain222", "tvdb-main-222"));
+            SeedTmdbSeries(tmdbApi, 222, "zh-CN", CreateTmdbSeries(222, "主线剧集", "修正后简介", "tt0100009", "tvdb-main-222"));
             var externalIdService = new RecordingLlmExternalIdResolutionService();
             externalIdService.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
             externalIdService.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test semantic conflict replacement"));
@@ -1954,7 +1954,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "semantic-conflict-series-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_semantic-conflict-series-douban",
                 [MetadataProvider.Tmdb.ToString()] = "111",
-                [MetadataProvider.Imdb.ToString()] = "ttspinoff111",
+                [MetadataProvider.Imdb.ToString()] = "tt0100008",
                 [MetadataProvider.Tvdb.ToString()] = "tvdb-spinoff-111",
             };
 
@@ -1970,7 +1970,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
             Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
-            Assert.AreEqual("ttspinoff111", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100008", result.Item.GetProviderId(MetadataProvider.Imdb));
             Assert.AreEqual("tvdb-spinoff-111", result.Item.GetProviderId(MetadataProvider.Tvdb));
             Assert.AreEqual("111", externalIdService.CorrectionRequests[0].OldTmdbId);
             Assert.AreEqual(DefaultScraperSemantic.UserRefresh, externalIdService.CorrectionRequests[0].Semantic);
@@ -1986,7 +1986,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var doubanSubject = CreateDoubanSubject("whitelisted-stale-series-douban", "主线剧集", 2024);
             SeedDoubanSubject(doubanApi, doubanSubject);
             var tmdbApi = new TmdbApi(loggerFactory);
-            SeedTmdbSeries(tmdbApi, 222, "zh-CN", CreateTmdbSeries(222, "主线剧集", "修正后简介", "ttmain222", "tvdb-main-222"));
+            SeedTmdbSeries(tmdbApi, 222, "zh-CN", CreateTmdbSeries(222, "主线剧集", "修正后简介", "tt0100009", "tvdb-main-222"));
             var externalIdService = new RecordingLlmExternalIdResolutionService();
             externalIdService.EnqueueExistingProviderDecision(LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict"));
             externalIdService.EnqueueCorrectionResult(LlmTmdbIdCorrectionResult.Verified("222", "test whitelisted stale replacement"));
@@ -2014,7 +2014,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "whitelisted-stale-series-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_whitelisted-stale-series-douban",
                 [MetadataProvider.Tmdb.ToString()] = "111",
-                [MetadataProvider.Imdb.ToString()] = "ttspinoff111",
+                [MetadataProvider.Imdb.ToString()] = "tt0100008",
                 [MetadataProvider.Tvdb.ToString()] = "tvdb-spinoff-111",
             };
 
@@ -2033,7 +2033,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
             Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
-            Assert.AreEqual("ttspinoff111", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100008", result.Item.GetProviderId(MetadataProvider.Imdb));
             Assert.AreEqual("tvdb-spinoff-111", result.Item.GetProviderId(MetadataProvider.Tvdb));
             Assert.IsTrue(refreshIntentStore.HasPending(refreshItemId, info.Path), "桥接 search-missing intent 需要保留到短 TTL 窗口，供 Jellyfin 同轮后续 queryless provider 调用复用。 ");
         }

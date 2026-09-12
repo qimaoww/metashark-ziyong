@@ -420,8 +420,8 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
         private static bool IsSeasonQueryForAncestor(InternalItemsQuery query, Guid ancestorId)
         {
             return HasSingleIncludeItemType(query, BaseItemKind.Season)
-                && query.IsVirtualItem == null
-                && query.IsMissing == null
+                && query.IsVirtualItem == false
+                && query.IsMissing == false
                 && query.ParentId == Guid.Empty
                 && query.AncestorIds.Length == 1
                 && query.AncestorIds[0] == ancestorId;

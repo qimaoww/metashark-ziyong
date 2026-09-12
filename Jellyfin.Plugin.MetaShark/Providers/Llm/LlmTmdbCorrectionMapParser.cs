@@ -14,10 +14,38 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
         private const string DoubanProviderKey = "douban";
         private const string TmdbProviderKey = "tmdb";
         private readonly StringComparer entryComparer = StringComparer.OrdinalIgnoreCase;
+        private readonly object cacheLock = new object();
+        private string? cachedMapping;
+        private LlmTmdbCorrectionMapSnapshot? cachedSnapshot;
 
         public static LlmTmdbCorrectionMapParser Shared { get; } = new LlmTmdbCorrectionMapParser();
 
+        /// <summary>
+        /// 单槽缓存：映射配置变更频率极低，但每个季/集图片请求与每次 GetMetadata 都要查表。
+        /// </summary>
         public LlmTmdbCorrectionMapSnapshot ParseSnapshot(string? mapping)
+        {
+            var normalizedMapping = mapping ?? string.Empty;
+            lock (this.cacheLock)
+            {
+                if (this.cachedSnapshot != null
+                    && string.Equals(this.cachedMapping, normalizedMapping, StringComparison.Ordinal))
+                {
+                    return this.cachedSnapshot;
+                }
+            }
+
+            var snapshot = this.ParseSnapshotCore(normalizedMapping);
+            lock (this.cacheLock)
+            {
+                this.cachedMapping = normalizedMapping;
+                this.cachedSnapshot = snapshot;
+            }
+
+            return snapshot;
+        }
+
+        private LlmTmdbCorrectionMapSnapshot ParseSnapshotCore(string? mapping)
         {
             var entriesByKey = new Dictionary<string, LlmTmdbCorrectionMapEntry>(this.entryComparer);
             if (!string.IsNullOrWhiteSpace(mapping))

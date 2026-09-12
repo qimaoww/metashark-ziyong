@@ -1269,7 +1269,6 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             public void Dispose()
             {
-                this.Provider.Dispose();
             }
         }
 

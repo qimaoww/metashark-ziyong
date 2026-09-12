@@ -10,6 +10,8 @@ using Jellyfin.Plugin.MetaShark.Core;
 
 public class DoubanSuggest
 {
+    private static readonly Regex SidRegex = new Regex(@"subject\/(\d+?)\/", RegexOptions.Compiled);
+
     [JsonPropertyName("title")]
     public string Title { get; set; } = string.Empty;
 
@@ -26,8 +28,7 @@ public class DoubanSuggest
     {
         get
         {
-            var regSid = new Regex(@"subject\/(\d+?)\/", RegexOptions.Compiled);
-            return (this.Url?.ToString() ?? string.Empty).GetMatchGroup(regSid);
+            return (this.Url?.ToString() ?? string.Empty).GetMatchGroup(SidRegex);
         }
     }
 }

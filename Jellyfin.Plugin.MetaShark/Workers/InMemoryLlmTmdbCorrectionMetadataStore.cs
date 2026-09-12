@@ -81,6 +81,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                     return null;
                 }
 
+                if (!string.IsNullOrWhiteSpace(snapshot.ClaimToken))
+                {
+                    // 已被其它事件抢占：等待其完成或快照过期，避免并发重复写库。
+                    return null;
+                }
+
+                snapshot.ClaimToken = claimToken;
+
                 if (snapshot.ItemId != currentItemId || !PathMatches(snapshot.ItemPath, currentItemPath))
                 {
                     this.RemoveInternal(snapshot.ItemId, snapshot.ItemPath);
@@ -100,8 +108,21 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         public void ReleaseClaim(Guid itemId, string itemPath, string claimToken)
         {
-            _ = claimToken;
-            this.Remove(itemId, itemPath);
+            ArgumentException.ThrowIfNullOrWhiteSpace(claimToken);
+
+            lock (this.syncRoot)
+            {
+                this.RemoveExpiredEntries(DateTimeOffset.UtcNow);
+
+                var snapshot = this.FindSnapshot(itemId, itemPath);
+                if (snapshot == null || !string.Equals(snapshot.ClaimToken, claimToken, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                // 只释放抢占，保留待应用的纠错，等待下一次条目更新或超时过期。
+                snapshot.ClaimToken = string.Empty;
+            }
         }
 
         public void Remove(Guid itemId, string itemPath)
@@ -142,6 +163,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 PremiereDate = snapshot.PremiereDate,
                 QueuedAtUtc = snapshot.QueuedAtUtc,
                 ExpiresAtUtc = snapshot.ExpiresAtUtc,
+                ClaimToken = snapshot.ClaimToken,
             };
 
             foreach (var providerId in snapshot.ProviderIds)

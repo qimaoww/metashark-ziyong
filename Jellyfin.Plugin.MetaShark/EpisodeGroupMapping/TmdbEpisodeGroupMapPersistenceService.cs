@@ -5,8 +5,6 @@
 namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
 {
     using System;
-    using System.Linq;
-    using System.Reflection;
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Plugin.MetaShark.Configuration;
@@ -41,41 +39,61 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var currentConfiguration = plugin.Configuration;
-                var currentSnapshot = this.parser.ParseSnapshot(this.saveLlmMapping ? currentConfiguration.LlmTmdbEpisodeGroupMap : currentConfiguration.TmdbEpisodeGroupMap);
-                var expectedSnapshot = this.parser.ParseSnapshot(expectedOldMapping);
-                var newSnapshot = this.parser.ParseSnapshot(newMapping);
+                // CAS 与落盘必须在插件配置保存锁内基于同一份「最新配置」完成，
+                // 否则并发保存（配置页整体替换配置对象）会被本服务的旧快照覆盖。
+                TmdbEpisodeGroupMapPersistenceResult? earlyResult = null;
+                var currentCanonicalText = string.Empty;
+                var newCanonicalText = NormalizeMapping(newMapping);
 
-                if (!string.Equals(currentSnapshot.CanonicalText, expectedSnapshot.CanonicalText, StringComparison.Ordinal))
+                var saved = plugin.TryUpdateConfigurationSafely(
+                    currentConfiguration =>
+                    {
+                        var currentSnapshot = this.parser.ParseSnapshot(this.saveLlmMapping ? currentConfiguration.LlmTmdbEpisodeGroupMap : currentConfiguration.TmdbEpisodeGroupMap);
+                        var expectedSnapshot = this.parser.ParseSnapshot(expectedOldMapping);
+                        var newSnapshot = this.parser.ParseSnapshot(newMapping);
+                        currentCanonicalText = currentSnapshot.CanonicalText;
+                        newCanonicalText = newSnapshot.CanonicalText;
+
+                        if (!string.Equals(currentSnapshot.CanonicalText, expectedSnapshot.CanonicalText, StringComparison.Ordinal))
+                        {
+                            earlyResult = TmdbEpisodeGroupMapPersistenceResult.Conflict(expectedSnapshot.CanonicalText, currentSnapshot.CanonicalText);
+                            return null;
+                        }
+
+                        if (string.Equals(currentSnapshot.CanonicalText, newSnapshot.CanonicalText, StringComparison.Ordinal))
+                        {
+                            earlyResult = TmdbEpisodeGroupMapPersistenceResult.NoChange(currentSnapshot.CanonicalText);
+                            return null;
+                        }
+
+                        var updatedConfiguration = MetaSharkPlugin.CloneConfiguration(currentConfiguration);
+                        if (this.saveLlmMapping)
+                        {
+                            updatedConfiguration.LlmTmdbEpisodeGroupMap = newSnapshot.CanonicalText;
+                        }
+                        else
+                        {
+                            updatedConfiguration.TmdbEpisodeGroupMap = newSnapshot.CanonicalText;
+                        }
+
+                        return updatedConfiguration;
+                    },
+                    out var saveException);
+
+                if (earlyResult != null)
                 {
-                    return Task.FromResult(TmdbEpisodeGroupMapPersistenceResult.Conflict(expectedSnapshot.CanonicalText, currentSnapshot.CanonicalText));
+                    return Task.FromResult(earlyResult);
                 }
 
-                if (string.Equals(currentSnapshot.CanonicalText, newSnapshot.CanonicalText, StringComparison.Ordinal))
+                if (saved)
                 {
-                    return Task.FromResult(TmdbEpisodeGroupMapPersistenceResult.NoChange(currentSnapshot.CanonicalText));
-                }
-
-                var previousConfiguration = CloneConfiguration(currentConfiguration);
-                var updatedConfiguration = CloneConfiguration(currentConfiguration);
-                if (this.saveLlmMapping)
-                {
-                    updatedConfiguration.LlmTmdbEpisodeGroupMap = newSnapshot.CanonicalText;
-                }
-                else
-                {
-                    updatedConfiguration.TmdbEpisodeGroupMap = newSnapshot.CanonicalText;
-                }
-
-                if (plugin.TrySaveConfigurationSafely(updatedConfiguration, previousConfiguration, out var saveException))
-                {
-                    return Task.FromResult(TmdbEpisodeGroupMapPersistenceResult.SavedResult(currentSnapshot.CanonicalText, newSnapshot.CanonicalText));
+                    return Task.FromResult(TmdbEpisodeGroupMapPersistenceResult.SavedResult(currentCanonicalText, newCanonicalText));
                 }
 
                 return Task.FromResult(TmdbEpisodeGroupMapPersistenceResult.Failed(
                     "SaveConfigurationFailed",
-                    currentSnapshot.CanonicalText,
-                    currentSnapshot.CanonicalText,
+                    currentCanonicalText,
+                    currentCanonicalText,
                     saveException));
             }
         }
@@ -83,21 +101,6 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private static string NormalizeMapping(string? mapping)
         {
             return string.IsNullOrWhiteSpace(mapping) ? string.Empty : mapping.Trim();
-        }
-
-        private static PluginConfiguration CloneConfiguration(PluginConfiguration source)
-        {
-            ArgumentNullException.ThrowIfNull(source);
-
-            var clone = new PluginConfiguration();
-            foreach (var property in typeof(PluginConfiguration)
-                         .GetProperties(BindingFlags.Instance | BindingFlags.Public)
-                         .Where(static property => property.CanRead && property.CanWrite && property.GetIndexParameters().Length == 0))
-            {
-                property.SetValue(clone, property.GetValue(source));
-            }
-
-            return clone;
         }
     }
 }

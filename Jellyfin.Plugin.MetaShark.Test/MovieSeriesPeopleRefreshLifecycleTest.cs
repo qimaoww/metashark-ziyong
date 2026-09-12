@@ -786,6 +786,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         Item = this.Item,
                         UpdateReason = ItemUpdateType.MetadataDownload,
                     });
+
+                // ItemUpdated 现在由后台队列串行处理，断言前必须等队列排空。
+                await this.worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
             }
 
             public void Dispose()

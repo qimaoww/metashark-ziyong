@@ -16,6 +16,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         void MarkDeferredAttempt(EpisodeOverviewCleanupCandidate candidate, DateTimeOffset nowUtc);
 
+        /// <summary>
+        /// 候选是否仍在待处理集合中（用于区分“已应用完成”和“本次未完成”）。
+        /// </summary>
+        bool IsPending(EpisodeOverviewCleanupCandidate candidate);
+
         void ReleaseClaim(EpisodeOverviewCleanupCandidate candidate, string claimToken);
 
         void Complete(EpisodeOverviewCleanupCandidate candidate);

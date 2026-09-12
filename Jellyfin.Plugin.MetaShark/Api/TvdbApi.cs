@@ -24,6 +24,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
     {
         private const string DefaultApiHost = "https://api4.thetvdb.com/v4/";
         private const string TokenCacheKey = "tvdb_token";
+        private const string TokenApiKeyCacheKey = "tvdb_token_apikey";
         private const int MaxPageCount = 20;
 
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
@@ -154,6 +155,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 }
                 catch (HttpRequestException ex)
                 {
+                    this.logTvdbError(this.logger, nameof(this.GetSeriesEpisodesAsync), ex);
+                    return episodes;
+                }
+                catch (JsonException ex)
+                {
+                    // TVDB 网关异常时可能返回 HTML/空响应，反序列化失败按“无数据”处理。
                     this.logTvdbError(this.logger, nameof(this.GetSeriesEpisodesAsync), ex);
                     return episodes;
                 }
@@ -295,13 +302,20 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
         private async Task<string?> EnsureTokenAsync(CancellationToken cancellationToken)
         {
-            if (this.memoryCache.TryGetValue<string>(TokenCacheKey, out var token) && !string.IsNullOrWhiteSpace(token))
+            // 配置可能在启动后才填写或更换，这里实时读取，避免构造期快照导致永远拿不到 token。
+            var apiKey = MetaSharkPlugin.Instance?.Configuration?.TvdbApiKey?.Trim() ?? string.Empty;
+            var pin = MetaSharkPlugin.Instance?.Configuration?.TvdbPin?.Trim() ?? string.Empty;
+
+            if (this.memoryCache.TryGetValue<string>(TokenCacheKey, out var token)
+                && !string.IsNullOrWhiteSpace(token)
+                && this.memoryCache.TryGetValue<string>(TokenApiKeyCacheKey, out var cachedApiKey)
+                && string.Equals(cachedApiKey, apiKey, StringComparison.Ordinal))
             {
                 LogTvdbTokenCacheHit(this.logger, null);
                 return token;
             }
 
-            if (string.IsNullOrWhiteSpace(this.apiKey))
+            if (string.IsNullOrWhiteSpace(apiKey))
             {
                 LogTvdbApiKeyMissing(this.logger, null);
                 return null;
@@ -311,11 +325,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
             {
                 var payload = new Dictionary<string, string>
                 {
-                    ["apikey"] = this.apiKey,
+                    ["apikey"] = apiKey,
                 };
-                if (!string.IsNullOrWhiteSpace(this.pin))
+                if (!string.IsNullOrWhiteSpace(pin))
                 {
-                    payload["pin"] = this.pin;
+                    payload["pin"] = pin;
                 }
 
                 using var request = new HttpRequestMessage(HttpMethod.Post, "login")
@@ -342,6 +356,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
 
                 var options = new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(20) };
                 this.memoryCache.Set(TokenCacheKey, token, options);
+                this.memoryCache.Set(TokenApiKeyCacheKey, apiKey, options);
                 LogTvdbTokenStored(this.logger, null);
                 return token;
             }
@@ -351,6 +366,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
             catch (HttpRequestException ex)
+            {
+                this.logTvdbError(this.logger, nameof(this.EnsureTokenAsync), ex);
+                return null;
+            }
+            catch (JsonException ex)
             {
                 this.logTvdbError(this.logger, nameof(this.EnsureTokenAsync), ex);
                 return null;

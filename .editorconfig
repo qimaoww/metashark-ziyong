@@ -2,3 +2,11 @@ root = true
 
 [*.cs]
 dotnet_diagnostic.SA0001.severity = none
+
+# 成员顺序类规则：本项目按可读性组织成员（例如把解析实现紧跟在公开入口之后），
+# 不强制 StyleCop 的 public/internal/private、静态/实例、常量/字段排序约定。
+dotnet_diagnostic.SA1201.severity = suggestion
+dotnet_diagnostic.SA1202.severity = suggestion
+dotnet_diagnostic.SA1203.severity = suggestion
+dotnet_diagnostic.SA1204.severity = suggestion
+dotnet_diagnostic.SA1214.severity = suggestion

@@ -58,6 +58,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private static readonly Action<ILogger, string, Exception?> LogMetaSharkInfo =
             LoggerMessage.Define<string>(LogLevel.Information, new EventId(1, nameof(Log)), "[MetaShark] {Message}");
 
+        // Jellyfin 12 起 ProviderId 会做格式校验（TMDb 为正整数、IMDb 为 tt+7~8 位），非法值会被静默丢弃。
+        private static readonly Action<ILogger, string, string, Guid, Exception?> LogProviderIdRejected =
+            LoggerMessage.Define<string, string, Guid>(LogLevel.Warning, new EventId(901, nameof(SetProviderIdIfDifferent)), "[MetaShark] ProviderId 写入被拒绝. provider={Provider} value={Value} itemId={ItemId}");
+
+        private static readonly AsyncLocal<Dictionary<string, BaseItem?>?> PathLookupCache = new AsyncLocal<Dictionary<string, BaseItem?>?>();
+
+        private static readonly Regex RegChineseSeasonName = new Regex(@"第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
+
+        private static readonly Regex RegSeasonNumberPrefix = new Regex(@"\s第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
+
+        private static readonly Regex RegSeasonSxx = new Regex(@"(?<![a-z])S(\d\d?)(?![0-9a-z])", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private readonly ILogger logger;
         private readonly IHttpClientFactory httpClientFactory;
         private readonly DoubanApi doubanApi;
@@ -71,8 +83,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private readonly Regex regMetaSourcePrefix = new Regex(@"^\[.+\]", RegexOptions.Compiled);
         private readonly Regex regSeasonNameSuffix = new Regex(@"\s第[0-9一二三四五六七八九十]+?季$|\sSeason\s\d+?$|(?<![0-9a-zA-Z])\d$", RegexOptions.Compiled);
-        private readonly Regex regDoubanIdAttribute = new Regex(@"\[(?:douban|doubanid)-(\d+?)\]", RegexOptions.Compiled);
-        private readonly Regex regTmdbIdAttribute = new Regex(@"\[(?:tmdb|tmdbid)-(\d+?)\]", RegexOptions.Compiled);
+        private readonly Regex regDoubanIdAttribute = new Regex(@"[\[{(](?:douban|doubanid)-(\d+?)[\]})]", RegexOptions.Compiled);
+        private readonly Regex regTmdbIdAttribute = new Regex(@"[\[{(](?:tmdb|tmdbid)-(\d+?)[\]})]", RegexOptions.Compiled);
 
         protected BaseProvider(IHttpClientFactory httpClientFactory, ILogger logger, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILlmTmdbCorrectionMapFacade? llmTmdbCorrectionMapFacade = null, IEpisodeGroupMappingFacade? episodeGroupMappingFacade = null)
         {
@@ -269,8 +281,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // 中文季名
-            var regSeason = new Regex(@"第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
-            var match = regSeason.Match(fileName);
+            var match = RegChineseSeasonName.Match(fileName);
             if (match.Success && match.Groups.Count > 1)
             {
                 var seasonNumber = match.Groups[1].Value.ToInt();
@@ -287,8 +298,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // SXX 季名
-            regSeason = new Regex(@"(?<![a-z])S(\d\d?)(?![0-9a-z])", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-            match = regSeason.Match(fileName);
+            match = RegSeasonSxx.Match(fileName);
             if (match.Success && match.Groups.Count > 1)
             {
                 var seasonNumber = match.Groups[1].Value.ToInt();
@@ -553,11 +563,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var removedDouban = RemoveProviderIdIfPresent(item, DoubanProviderId);
             var changed = removedDouban;
-            changed |= SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), tmdbId.Trim());
-            changed |= SetProviderIdIfDifferent(item, MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{tmdbId.Trim()}");
-            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString());
-            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString());
-            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString());
+            changed |= this.SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), tmdbId.Trim());
+            changed |= this.SetProviderIdIfDifferent(item, MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{tmdbId.Trim()}");
+            changed |= this.CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString());
+            changed |= this.CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString());
+            changed |= this.CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString());
             changed |= metadataChanged;
             if (!changed)
             {
@@ -615,12 +625,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var replacesDifferentTmdbId = !string.IsNullOrWhiteSpace(originalItemTmdbId)
                 && !string.Equals(originalItemTmdbId.Trim(), normalizedTmdbId, StringComparison.Ordinal);
             var changed = false;
-            changed |= SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), normalizedTmdbId);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, DoubanProviderId, removeWhenMissing: false);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetaSharkPlugin.ProviderId, removeWhenMissing: false);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString(), replacesDifferentTmdbId);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString(), replacesDifferentTmdbId);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString(), replacesDifferentTmdbId);
+            changed |= this.SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), normalizedTmdbId);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, DoubanProviderId, removeWhenMissing: false);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetaSharkPlugin.ProviderId, removeWhenMissing: false);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString(), replacesDifferentTmdbId);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString(), replacesDifferentTmdbId);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString(), replacesDifferentTmdbId);
             if (!changed)
             {
                 return;
@@ -795,7 +805,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(info);
             var fileName = GetOriginalFileName(info);
 
-            // 从文件名属性格式获取，如[douban-12345]或[doubanid-12345]
+            // 从文件名属性格式获取，如 [douban-12345]、{douban-12345}、(doubanid-12345)
             var doubanId = this.RegDoubanIdAttribute.FirstMatchGroup(fileName);
             if (!string.IsNullOrWhiteSpace(doubanId))
             {
@@ -877,7 +887,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(info);
             var fileName = GetOriginalFileName(info);
 
-            // 从文件名属性格式获取，如[tmdb-12345]或{tmdb-12345}
+            // 从文件名属性格式获取，如 [tmdb-12345]、{tmdb-12345}、(tmdbid-12345)
             var tmdbId = this.RegTmdbIdAttribute.FirstMatchGroup(fileName);
             if (!string.IsNullOrWhiteSpace(tmdbId))
             {
@@ -1068,6 +1078,50 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return this.GetProxyImageUrl(new Uri(url, UriKind.Absolute)).ToString();
         }
 
+        /// <summary>
+        /// 在一次元数据刷新内复用按路径查询的结果：同一次刷新会多次查询相同的季/剧目录。
+        /// </summary>
+        protected static IDisposable BeginPathLookupScope()
+        {
+            var previous = PathLookupCache.Value;
+            PathLookupCache.Value = new Dictionary<string, BaseItem?>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+            return new PathLookupScopeRestorer(previous);
+        }
+
+        protected BaseItem? FindByPathCached(string path, bool isFolder)
+        {
+            var cache = PathLookupCache.Value;
+            if (cache == null)
+            {
+                return this.LibraryManager.FindByPath(path, isFolder);
+            }
+
+            var key = string.Concat(isFolder ? "D:" : "F:", path);
+            if (cache.TryGetValue(key, out var cached))
+            {
+                return cached;
+            }
+
+            var item = this.LibraryManager.FindByPath(path, isFolder);
+            cache[key] = item;
+            return item;
+        }
+
+        private sealed class PathLookupScopeRestorer : IDisposable
+        {
+            private readonly Dictionary<string, BaseItem?>? previous;
+
+            public PathLookupScopeRestorer(Dictionary<string, BaseItem?>? previous)
+            {
+                this.previous = previous;
+            }
+
+            public void Dispose()
+            {
+                PathLookupCache.Value = this.previous;
+            }
+        }
+
         protected string? GetOriginalSeasonPath(EpisodeInfo info)
         {
             ArgumentNullException.ThrowIfNull(info);
@@ -1082,7 +1136,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return null;
             }
 
-            var item = this.LibraryManager.FindByPath(seasonPath, true);
+            var item = this.FindByPathCached(seasonPath, true);
 
             // 没有季文件夹
             if (item is Series)
@@ -1107,7 +1161,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return false;
             }
 
-            var parent = this.LibraryManager.FindByPath(seasonPath, true);
+            var parent = this.FindByPathCached(seasonPath, true);
 
             // 没有季文件夹
             if (parent is Series)
@@ -1121,7 +1175,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return false;
             }
 
-            var series = this.LibraryManager.FindByPath(seriesPath, true);
+            var series = this.FindByPathCached(seriesPath, true);
 
             // 季文件夹不规范，没法识别
             if (series is Series && parent is not Season)
@@ -1158,18 +1212,23 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return true;
         }
 
-        private static bool SetProviderIdIfDifferent(BaseItem item, string providerIdKey, string providerIdValue)
+        private bool SetProviderIdIfDifferent(BaseItem item, string providerIdKey, string providerIdValue)
         {
             if (string.Equals(item.GetProviderId(providerIdKey), providerIdValue, StringComparison.Ordinal))
             {
                 return false;
             }
 
-            item.SetProviderId(providerIdKey, providerIdValue);
+            if (!item.TrySetProviderId(providerIdKey, providerIdValue))
+            {
+                LogProviderIdRejected(this.Logger, providerIdKey, providerIdValue, item.Id, null);
+                return false;
+            }
+
             return true;
         }
 
-        private static bool CopyProviderIdIfPresent(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey)
+        private bool CopyProviderIdIfPresent(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey)
         {
             var providerIdValue = authoritativeMetadataItem.GetProviderId(providerIdKey);
             if (string.IsNullOrWhiteSpace(providerIdValue))
@@ -1177,10 +1236,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return false;
             }
 
-            return SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
+            return this.SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
         }
 
-        private static bool SyncProviderIdFromAuthoritativeItem(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey, bool removeWhenMissing)
+        private bool SyncProviderIdFromAuthoritativeItem(BaseItem item, BaseItem authoritativeMetadataItem, string providerIdKey, bool removeWhenMissing)
         {
             var providerIdValue = authoritativeMetadataItem.GetProviderId(providerIdKey);
             if (string.IsNullOrWhiteSpace(providerIdValue))
@@ -1188,7 +1247,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return removeWhenMissing && RemoveProviderIdIfPresent(item, providerIdKey);
             }
 
-            return SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
+            return this.SetProviderIdIfDifferent(item, providerIdKey, providerIdValue);
         }
 
         private static bool SetTextIfDifferent(string? currentValue, string? authoritativeValue, Action<string> assign)
@@ -1270,8 +1329,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private static int? ParseChineseSeasonNumberByName(string name)
         {
-            var regSeason = new Regex(@"\s第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
-            var match = regSeason.Match(name);
+            var match = RegSeasonNumberPrefix.Match(name);
             if (match.Success && match.Groups.Count > 1)
             {
                 var seasonNumber = match.Groups[1].Value.ToInt();

@@ -28,6 +28,18 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return LlmPromptContextBuilder.BuildMetadataAssistPromptJson(info, mediaType, libraryRoots, parsedName, allowRelativePathContext);
         }
 
+        /// <summary>
+        /// 一次解析同时产出上下文与提示词，避免 Anitomy 对同一文件名解析两遍。
+        /// </summary>
+        public (LlmPromptContext Context, string PromptJson) BuildWithPromptJson(ItemLookupInfo info, string mediaType, IEnumerable<string?> libraryRoots, bool allowRelativePathContext = true)
+        {
+            ArgumentNullException.ThrowIfNull(info);
+            var parsedName = ParseName(info, mediaType, allowRelativePathContext);
+            return (
+                LlmPromptContextBuilder.Build(info, mediaType, libraryRoots, parsedName, allowRelativePathContext),
+                LlmPromptContextBuilder.BuildMetadataAssistPromptJson(info, mediaType, libraryRoots, parsedName, allowRelativePathContext));
+        }
+
         private static ParseNameResult ParseName(ItemLookupInfo info, string mediaType, bool allowRelativePathContext)
         {
             var sourceName = allowRelativePathContext && !string.IsNullOrWhiteSpace(info.Path) ? System.IO.Path.GetFileNameWithoutExtension(info.Path) : info.Name;

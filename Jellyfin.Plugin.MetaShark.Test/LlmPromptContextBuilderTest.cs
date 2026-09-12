@@ -53,7 +53,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     { BaseProvider.DoubanProviderId, "DoubanID-具体值-123" },
                     { MetadataProvider.Tmdb.ToString(), "Tmdb-具体值-456" },
-                    { MetadataProvider.Imdb.ToString(), "tt-secret" },
+                    { MetadataProvider.Imdb.ToString(), "tt0100006" },
                 },
                 SeriesProviderIds = new Dictionary<string, string>
                 {

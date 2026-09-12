@@ -82,12 +82,15 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            this.logger.LogDebug(
-                "[MetaShark] 收到影视人物刷新状态后处理事件. trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
-                triggerName,
-                item.Id,
-                item.Path ?? string.Empty,
-                e.UpdateReason);
+            if (this.logger.IsEnabled(LogLevel.Debug))
+            {
+                this.logger.LogDebug(
+                    "[MetaShark] 收到影视人物刷新状态后处理事件. trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                    triggerName,
+                    item.Id,
+                    item.Path ?? string.Empty,
+                    e.UpdateReason);
+            }
 
             if (item is Person person)
             {
@@ -134,7 +137,13 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             var legacyResidueRemoved = !itemLocked && RemoveLegacyPeopleRefreshStateProviderId(item);
 
-            if (authoritativePeopleSnapshot == null && PeopleRefreshState.HasCurrentState(item, currentState))
+            // 同一条目事件最多只取一次当前人物快照，后续状态判定与结算共用，
+            // 避免对同一条目重复查询人物（人物图片事件可能成百上千条）。
+            var currentPeopleSnapshot = TmdbAuthoritativePeopleSnapshot.TryCreateFromCurrentItem(item, out var resolvedPeopleSnapshot)
+                ? resolvedPeopleSnapshot
+                : null;
+
+            if (authoritativePeopleSnapshot == null && PeopleRefreshState.HasCurrentState(item, currentState, currentPeopleSnapshot))
             {
                 await this.PersistLegacyResidueCleanupAsync(item, triggerName, e.UpdateReason, legacyResidueRemoved, cancellationToken).ConfigureAwait(false);
                 var legacyNfoResidueRemoved = !itemLocked && this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
@@ -150,16 +159,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             if (authoritativePeopleSnapshot == null
                 && currentState?.AuthoritativePeopleSnapshot != null
-                && PeopleRefreshState.GetCurrentAuthoritativePeopleStatus(item, currentState) == CurrentItemAuthoritativePeopleStatus.NonAuthoritative)
+                && PeopleRefreshState.GetCurrentAuthoritativePeopleStatus(item, currentState, currentPeopleSnapshot) == CurrentItemAuthoritativePeopleStatus.NonAuthoritative)
             {
                 this.LogSkip("CurrentItemNotAuthoritative", triggerName, item, e.UpdateReason, PeopleRefreshState.CurrentVersion);
                 return;
             }
 
-            var settlementAuthoritativePeopleSnapshot = authoritativePeopleSnapshot;
-            if (settlementAuthoritativePeopleSnapshot == null
-                && (!TmdbAuthoritativePeopleSnapshot.TryCreateFromCurrentItem(item, out settlementAuthoritativePeopleSnapshot)
-                    || settlementAuthoritativePeopleSnapshot == null))
+            var settlementAuthoritativePeopleSnapshot = authoritativePeopleSnapshot ?? currentPeopleSnapshot;
+            if (settlementAuthoritativePeopleSnapshot == null)
             {
                 this.LogSkip("StateSnapshotRejected", triggerName, item, e.UpdateReason, null);
                 return;
@@ -194,13 +201,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
             }
 
-            this.logger.LogInformation(
-                "[MetaShark] 已结清影视人物刷新状态. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} stateVersion={StateVersion}.",
-                item.Id,
-                triggerName,
-                item.Path ?? string.Empty,
-                e.UpdateReason,
-                PeopleRefreshState.CurrentVersion);
+            if (this.logger.IsEnabled(LogLevel.Information))
+            {
+                this.logger.LogInformation(
+                    "[MetaShark] 已结清影视人物刷新状态. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} stateVersion={StateVersion}.",
+                    item.Id,
+                    triggerName,
+                    item.Path ?? string.Empty,
+                    e.UpdateReason,
+                    PeopleRefreshState.CurrentVersion);
+            }
         }
 #pragma warning restore CA1848
 
@@ -397,7 +407,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             try
             {
                 var repositoryUpdateReason = item.OnMetadataChanged();
-                if (repositoryUpdateReason == 0)
+                if (repositoryUpdateReason == ItemUpdateType.None)
                 {
                     repositoryUpdateReason = ItemUpdateType.MetadataEdit;
                 }
@@ -417,13 +427,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 throw;
             }
 
-            this.logger.LogInformation(
-                "[MetaShark] 已清理影视人物刷新 legacy provider id 残留. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} providerId={ProviderId}.",
-                item.Id,
-                triggerName,
-                item.Path ?? string.Empty,
-                updateReason,
-                LegacyPeopleRefreshStateProviderId);
+            if (this.logger.IsEnabled(LogLevel.Information))
+            {
+                this.logger.LogInformation(
+                    "[MetaShark] 已清理影视人物刷新 legacy provider id 残留. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} providerId={ProviderId}.",
+                    item.Id,
+                    triggerName,
+                    item.Path ?? string.Empty,
+                    updateReason,
+                    LegacyPeopleRefreshStateProviderId);
+            }
         }
 
         private bool CleanupLegacyPeopleRefreshStateNfoResidue(BaseItem item, string triggerName, ItemUpdateType updateReason)
@@ -453,13 +466,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 }
 
                 cleaned = true;
-                this.logger.LogInformation(
-                    "[MetaShark] 已清理影视人物刷新 legacy NFO 残留. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} nfoPath={NfoPath}.",
-                    item.Id,
-                    triggerName,
-                    item.Path ?? string.Empty,
-                    updateReason,
-                    nfoPath);
+                if (this.logger.IsEnabled(LogLevel.Information))
+                {
+                    this.logger.LogInformation(
+                        "[MetaShark] 已清理影视人物刷新 legacy NFO 残留. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} nfoPath={NfoPath}.",
+                        item.Id,
+                        triggerName,
+                        item.Path ?? string.Empty,
+                        updateReason,
+                        nfoPath);
+                }
             }
 
             return cleaned;
@@ -543,7 +559,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return Task.CompletedTask;
             }
 
-            var relatedItems = this.GetRelatedMovieSeriesItems(personTmdbId);
+            var relatedItems = this.GetRelatedMovieSeriesItems(person, personTmdbId);
             if (relatedItems.Count == 0)
             {
                 return Task.CompletedTask;
@@ -632,7 +648,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return enabledItems;
         }
 
-        private List<BaseItem> GetRelatedMovieSeriesItems(string personTmdbId)
+        private List<BaseItem> GetRelatedMovieSeriesItems(Person person, string personTmdbId)
         {
             var effectiveLibraryManager = this.libraryManager ?? BaseItem.LibraryManager;
             if (effectiveLibraryManager == null)
@@ -646,13 +662,59 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 人物补图事件可能成百上千次，把“关联了该人物”的过滤下推到数据库。
+                PersonIds = person.Id == Guid.Empty ? Array.Empty<Guid>() : new[] { person.Id },
             };
 
             var items = effectiveLibraryManager.GetItemList(query);
-            return items
-                .Where(item => item is Movie or Series)
-                .Where(item => this.CurrentItemContainsTmdbPersonId(item, personTmdbId))
-                .ToList();
+            var candidates = items.Where(item => item is Movie or Series).ToList();
+            if (candidates.Count == 0)
+            {
+                return candidates;
+            }
+
+            // 批量取人物，避免逐条 GetPeople 的 N+1。
+            var peopleByItem = effectiveLibraryManager.GetPeopleByItems(candidates.Select(item => item.Id).ToList());
+            var result = new List<BaseItem>(candidates.Count);
+            foreach (var item in candidates)
+            {
+                if (peopleByItem != null)
+                {
+                    if (peopleByItem.TryGetValue(item.Id, out var batchedPeople)
+                        && this.ContainsTmdbPersonId(batchedPeople, personTmdbId))
+                    {
+                        result.Add(item);
+                    }
+
+                    continue;
+                }
+
+                if (this.CurrentItemContainsTmdbPersonId(item, personTmdbId))
+                {
+                    result.Add(item);
+                }
+            }
+
+            return result;
+        }
+
+        private bool ContainsTmdbPersonId(IReadOnlyList<PersonInfo> people, string personTmdbId)
+        {
+            var effectiveLibraryManager = this.libraryManager ?? BaseItem.LibraryManager;
+            foreach (var person in people)
+            {
+                // 批量接口不返回 ProviderIds，需解析为 Person 实体后再判定 TMDb id。
+                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(person, effectiveLibraryManager);
+                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(resolvedPerson, out var fingerprint)
+                    && fingerprint != null
+                    && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool CurrentItemContainsTmdbPersonId(BaseItem item, string personTmdbId)
@@ -670,7 +732,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             foreach (var currentPerson in people)
             {
-                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(currentPerson, out var fingerprint)
+                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(currentPerson, effectiveLibraryManager);
+                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(resolvedPerson, out var fingerprint)
                     && fingerprint != null
                     && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
                 {
@@ -686,26 +749,33 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         {
             if (string.IsNullOrWhiteSpace(detail))
             {
+                if (this.logger.IsEnabled(level))
+                {
+                    this.logger.Log(
+                        level,
+                        "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                        reason,
+                        triggerName,
+                        item.Id,
+                        item.Path ?? string.Empty,
+                        updateReason);
+                }
+
+                return;
+            }
+
+            if (this.logger.IsEnabled(level))
+            {
                 this.logger.Log(
                     level,
-                    "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                    "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
                     reason,
                     triggerName,
                     item.Id,
                     item.Path ?? string.Empty,
-                    updateReason);
-                return;
+                    updateReason,
+                    detail);
             }
-
-            this.logger.Log(
-                level,
-                "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
-                reason,
-                triggerName,
-                item.Id,
-                item.Path ?? string.Empty,
-                updateReason,
-                detail);
         }
 #pragma warning restore CA1848
     }

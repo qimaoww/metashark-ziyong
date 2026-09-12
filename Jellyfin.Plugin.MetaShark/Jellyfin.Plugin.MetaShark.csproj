@@ -1,6 +1,6 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Jellyfin.Plugin.MetaShark</RootNamespace>
     <Version>3.1.0</Version>
     <AssemblyVersion>3.1.0.0</AssemblyVersion>
@@ -10,7 +10,6 @@
     <Nullable>enable</Nullable>
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <UseLocalJellyfinReferences>false</UseLocalJellyfinReferences>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
     <TreatWarningsAsErrors>False</TreatWarningsAsErrors>
@@ -24,7 +23,7 @@
     <None Remove="Vendor\TMDbLib\**" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="AngleSharp" Version="1.0.1" />
+    <PackageReference Include="AngleSharp" Version="1.8.1" />
     <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.32">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -33,14 +32,14 @@
     <PackageReference Include="TMDbLib" Version="2.2.0" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(UseLocalJellyfinReferences)' == 'true' AND Exists('..\vendor\jellyfin-build-10.10\MediaBrowser.Controller\MediaBrowser.Controller.csproj')">
-    <ProjectReference Include="../vendor/jellyfin-build-10.10/MediaBrowser.Controller/MediaBrowser.Controller.csproj" />
-    <ProjectReference Include="../vendor/jellyfin-build-10.10/MediaBrowser.Model/MediaBrowser.Model.csproj" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(UseLocalJellyfinReferences)' != 'true' OR !Exists('..\vendor\jellyfin-build-10.10\MediaBrowser.Controller\MediaBrowser.Controller.csproj')">
-    <PackageReference Include="Jellyfin.Controller" Version="10.10.7" />
-    <PackageReference Include="Jellyfin.Model" Version="10.10.7" />
+  <ItemGroup>
+    <!-- 宿主已提供这些程序集，排除 runtime 资产避免把 Jellyfin 自身 dll 复制进插件输出目录。 -->
+    <PackageReference Include="Jellyfin.Controller" Version="12.0.0">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Jellyfin.Model" Version="12.0.0">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="SerilogAnalyzer" Version="0.15.0" PrivateAssets="All" />

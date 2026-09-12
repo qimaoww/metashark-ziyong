@@ -149,7 +149,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var unidentifiedStage = await this.TryRunUnidentifiedMovieMatchStageAsync(info, fileName, semantic, doubanAllowed, sid, tmdbId, effectiveSid, metaSource, cancellationToken).ConfigureAwait(false);
                 if (unidentifiedStage.ExtraResult != null)
                 {
-                    return FinalizeMetadataResult(unidentifiedStage.ExtraResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                    return this.FinalizeMetadataResult(unidentifiedStage.ExtraResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                 }
 
                 llmAssistResult = unidentifiedStage.AssistResult;
@@ -194,14 +194,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var tmdbResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
                 ApplyLlmExternalProviderIdWrites(tmdbResult, externalIdResolutionResult);
                 this.ApplyLlmTextCompletion(tmdbResult, llmAssistResult);
-                var finalizedResult = FinalizeMetadataResult(tmdbResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                var finalizedResult = this.FinalizeMetadataResult(tmdbResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                 this.TryQueueVerifiedTmdbCorrectionMetadataSnapshot(info, tmdbId, shouldUseTmdbMetadataAfterCorrection, finalizedResult.Item);
                 await this.TryPersistVerifiedTmdbCorrectionMetadataAsync(info, tmdbId, shouldUseTmdbMetadataAfterCorrection, finalizedResult.Item, cancellationToken).ConfigureAwait(false);
                 return finalizedResult;
             }
 
             this.Log("电影匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
-            return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+            return this.FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
         }
 
         private (string? Sid, string? TmdbId, string? EffectiveSid, MetaSource MetaSource, bool TmdbSourceIsPrimary, bool HasTmdbMeta, bool HasDoubanMeta, bool HasPersistedDoubanTmdbCorrection, bool HasPersistedDoubanTmdbCompletion) ApplyInitialMovieProviderIdStage(MovieInfo info, string? sid, string? tmdbId, DefaultScraperSemantic semantic, bool doubanAllowed)
@@ -339,10 +339,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
                     ApplyLlmExternalProviderIdWrites(tmdbFallbackResult, externalIdResolutionResult);
                     this.ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
-                    return FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                    return this.FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                 }
 
-                return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                return this.FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
             }
 
             var correctionResult = await this.TryCorrectDoubanMismatchWithLlmAsync(subject, info, semantic, llmAssistResult, cancellationToken).ConfigureAwait(false);
@@ -433,12 +433,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 await this.TryPersistLlmTmdbCompletionProviderIdsAsync(info, tmdbId, result.Item, cancellationToken).ConfigureAwait(false);
             }
 
-            return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+            return this.FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
         }
 
-        private static MetadataResult<Movie> FinalizeMetadataResult(MetadataResult<Movie> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
+        private MetadataResult<Movie> FinalizeMetadataResult(MetadataResult<Movie> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
         {
-            TmdbProviderIdPreservationHelper.PreserveMovieTmdbId(originalTmdbId, result.Item, hasVerifiedCorrection);
+            TmdbProviderIdPreservationHelper.PreserveMovieTmdbId(originalTmdbId, result.Item, hasVerifiedCorrection, this.Logger);
             PreserveNonTmdbProviderIdsAfterCorrection(result.Item, originalPublicProviderIds, hasVerifiedCorrection, shouldUseTmdbMetadataAfterCorrection);
             return result;
         }

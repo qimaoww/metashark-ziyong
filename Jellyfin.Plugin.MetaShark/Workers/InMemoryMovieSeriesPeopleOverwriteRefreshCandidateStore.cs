@@ -6,12 +6,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
 
     public sealed class InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore : IMovieSeriesPeopleOverwriteRefreshCandidateStore
     {
+        private static readonly TimeSpan CandidateLifetime = TimeSpan.FromMinutes(30);
+
         private readonly object syncRoot = new object();
         private readonly Dictionary<Guid, MovieSeriesPeopleOverwriteRefreshCandidate> candidatesByItemId = new Dictionary<Guid, MovieSeriesPeopleOverwriteRefreshCandidate>();
         private readonly Dictionary<string, Guid> itemIdsByPath = new Dictionary<string, Guid>(GetPathComparer());
+        private DateTimeOffset nextSweepAtUtc;
 
         public static InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore Shared { get; } = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
 
@@ -26,6 +30,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             lock (this.syncRoot)
             {
+                this.RemoveExpiredEntries(DateTimeOffset.UtcNow);
+                candidate.QueuedAtUtc = candidate.QueuedAtUtc == default ? DateTimeOffset.UtcNow : candidate.QueuedAtUtc;
+                candidate.ExpiresAtUtc = candidate.ExpiresAtUtc == default ? candidate.QueuedAtUtc.Add(CandidateLifetime) : candidate.ExpiresAtUtc;
                 this.Upsert(Clone(candidate));
             }
         }
@@ -39,6 +46,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             lock (this.syncRoot)
             {
+                this.RemoveExpiredEntries(DateTimeOffset.UtcNow);
                 return this.candidatesByItemId.TryGetValue(itemId, out var candidate)
                     ? Clone(candidate)
                     : null;
@@ -51,6 +59,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             lock (this.syncRoot)
             {
+                this.RemoveExpiredEntries(DateTimeOffset.UtcNow);
                 if (itemId != Guid.Empty && this.candidatesByItemId.TryGetValue(itemId, out var candidateById))
                 {
                     this.RemoveInternal(candidateById.ItemId, candidateById.ItemPath);
@@ -78,6 +87,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 ExpectedPeopleCount = candidate.ExpectedPeopleCount,
                 AuthoritativePeopleSnapshot = candidate.AuthoritativePeopleSnapshot?.Clone(),
                 OverwriteQueued = candidate.OverwriteQueued,
+                QueuedAtUtc = candidate.QueuedAtUtc,
+                ExpiresAtUtc = candidate.ExpiresAtUtc,
             };
         }
 
@@ -96,9 +107,36 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return string.Equals(left ?? string.Empty, right ?? string.Empty, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         }
 
+        private void RemoveExpiredEntries(DateTimeOffset nowUtc)
+        {
+            if (nowUtc < this.nextSweepAtUtc)
+            {
+                return;
+            }
+
+            this.nextSweepAtUtc = nowUtc.AddMinutes(1);
+
+            if (this.candidatesByItemId.Count == 0)
+            {
+                return;
+            }
+
+            var expired = this.candidatesByItemId.Values
+                .Where(candidate => candidate.ExpiresAtUtc != default && candidate.ExpiresAtUtc <= nowUtc)
+                .Select(candidate => (candidate.ItemId, candidate.ItemPath))
+                .ToList();
+            foreach (var (itemId, itemPath) in expired)
+            {
+                this.RemoveInternal(itemId, itemPath);
+            }
+        }
+
         private void RemoveInternal(Guid itemId, string itemPath)
         {
-            this.candidatesByItemId.Remove(itemId);
+            if (itemId != Guid.Empty)
+            {
+                this.candidatesByItemId.Remove(itemId);
+            }
 
             var normalizedItemPath = NormalizePath(itemPath);
             if (!string.IsNullOrEmpty(normalizedItemPath))

@@ -13,10 +13,39 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     public sealed class EpisodeGroupMapParser
     {
         private readonly StringComparer seriesIdComparer = StringComparer.OrdinalIgnoreCase;
+        private readonly object cacheLock = new object();
+        private string? cachedMapping;
+        private EpisodeGroupMapSnapshot? cachedSnapshot;
 
         public static EpisodeGroupMapParser Shared { get; } = new EpisodeGroupMapParser();
 
+        /// <summary>
+        /// 解析映射文本为快照；同一段文本只解析一次。
+        /// 查表在刷新热路径上（每集元数据、每张图片都会调用），逐次重新解析会白造成百上千次字典/排序/拼接。
+        /// </summary>
         public EpisodeGroupMapSnapshot ParseSnapshot(string? mapping)
+        {
+            var normalizedMapping = mapping ?? string.Empty;
+            lock (this.cacheLock)
+            {
+                if (this.cachedSnapshot != null
+                    && string.Equals(this.cachedMapping, normalizedMapping, StringComparison.Ordinal))
+                {
+                    return this.cachedSnapshot;
+                }
+            }
+
+            var snapshot = this.ParseSnapshotCore(normalizedMapping);
+            lock (this.cacheLock)
+            {
+                this.cachedMapping = normalizedMapping;
+                this.cachedSnapshot = snapshot;
+            }
+
+            return snapshot;
+        }
+
+        private EpisodeGroupMapSnapshot ParseSnapshotCore(string mapping)
         {
             var groupIdsBySeriesId = new Dictionary<string, string>(this.seriesIdComparer);
             var invalidWarnings = new List<string>();

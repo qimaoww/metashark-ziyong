@@ -111,21 +111,18 @@ public class ApiConfigurationContractTest
 
     [TestMethod]
     [TestCategory("Stable")]
-    public void HttpClientHandlerExtended_CurrentTlsValidationIsPermissive()
+    public void HttpClientHandlerExtended_ShouldUseDefaultTlsValidation()
     {
         using var handler = new HttpClientHandlerExtended();
 
-        Assert.IsNotNull(handler.ServerCertificateCustomValidationCallback);
-        Assert.IsTrue(handler.ServerCertificateCustomValidationCallback!(
-            new HttpRequestMessage(HttpMethod.Get, "https://example.invalid/"),
-            null,
-            null,
-            SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateChainErrors));
+        // 迁移到 Jellyfin 12 时移除了“无条件放行证书”的回调，恢复 .NET 默认校验。
+        Assert.IsNull(handler.ServerCertificateCustomValidationCallback);
+        Assert.IsTrue(handler.CheckCertificateRevocationList);
     }
 
     [TestMethod]
     [TestCategory("Stable")]
-    public void DoubanApi_ReloadAddsConfiguredCookiesWithoutClearingStaleCookies()
+    public void DoubanApi_ReloadReplacesConfiguredCookies()
     {
         ReplacePluginConfiguration(new PluginConfiguration
         {
@@ -139,8 +136,9 @@ public class ApiConfigurationContractTest
 
         var cookies = cookieContainer.GetCookies(new Uri("https://www.douban.com/"));
 
+        // 配置是 Cookie 的唯一来源：旧配置里已删除的 bid 不应继续发送。
         Assert.AreEqual("second", cookies["ck"]?.Value);
-        Assert.AreEqual("initial", cookies["bid"]?.Value);
+        Assert.IsNull(cookies["bid"]);
         Assert.AreEqual("next", cookies["dbcl2"]?.Value);
     }
 
@@ -184,11 +182,7 @@ public class ApiConfigurationContractTest
         Assert.AreEqual(TimeSpan.FromSeconds(20), httpClient.Timeout);
         Assert.IsTrue(httpClientHandler.CheckCertificateRevocationList);
         Assert.IsTrue(httpClientHandler.UseCookies);
-        Assert.IsTrue(httpClientHandler.ServerCertificateCustomValidationCallback!(
-            new HttpRequestMessage(HttpMethod.Get, "https://example.invalid/"),
-            null,
-            null,
-            SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateChainErrors));
+        Assert.IsNull(httpClientHandler.ServerCertificateCustomValidationCallback);
         Assert.IsTrue(httpClient.DefaultRequestHeaders.UserAgent.ToString().Contains(DoubanApi.HTTPUSERAGENT));
         Assert.AreEqual("https://movie.douban.com", httpClient.DefaultRequestHeaders.GetValues("Origin").Single());
         Assert.AreEqual("https://movie.douban.com/", httpClient.DefaultRequestHeaders.Referrer?.ToString());

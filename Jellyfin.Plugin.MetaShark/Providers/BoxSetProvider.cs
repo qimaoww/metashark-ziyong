@@ -13,9 +13,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Core;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Library;
+    using MediaBrowser.Controller.Persistence;
     using MediaBrowser.Controller.Providers;
     using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.Providers;
@@ -27,9 +29,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     /// </summary>
     public class BoxSetProvider : BaseProvider, IRemoteMetadataProvider<BoxSet, BoxSetInfo>
     {
-        public BoxSetProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi)
+        private readonly ILinkedChildrenService? linkedChildrenService;
+
+        public BoxSetProvider(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILinkedChildrenService? linkedChildrenService = null)
             : base(httpClientFactory, loggerFactory.CreateLogger<BoxSetProvider>(), libraryManager, httpContextAccessor, doubanApi, tmdbApi, omdbApi, imdbApi)
         {
+            this.linkedChildrenService = linkedChildrenService;
         }
 
         public string Name => MetaSharkPlugin.PluginName;
@@ -38,7 +43,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteSearchResult>> GetSearchResults(BoxSetInfo searchInfo, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(searchInfo);
-            var tmdbId = Convert.ToInt32(searchInfo.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
+            var tmdbId = searchInfo.GetProviderId(MetadataProvider.Tmdb)?.ToInt() ?? 0;
             var language = searchInfo.MetadataLanguage;
 
             if (tmdbId > 0)
@@ -90,7 +95,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<MetadataResult<BoxSet>> GetMetadata(BoxSetInfo info, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(info);
-            var tmdbId = Convert.ToInt32(info.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
+            var tmdbId = info.GetProviderId(MetadataProvider.Tmdb)?.ToInt() ?? 0;
             var language = info.MetadataLanguage;
             this.Log("开始获取合集元数据. name: {0} tmdbId: {1} enableTmdb: {2}", info.Name, tmdbId, Config.EnableTmdb);
 
@@ -131,11 +136,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         IncludeItemTypes = new[] { BaseItemKind.BoxSet },
                         CollapseBoxSetItems = false,
                         Recursive = true,
+
+                        // 12.0 支持按名称下推过滤，避免把所有合集都拉进内存。
+                        Name = collection.Name,
                     }) ?? Enumerable.Empty<BaseItem>();
                     var oldBoxSet = existingItems.OfType<BoxSet>().FirstOrDefault(x => x.Name == collection.Name);
                     if (oldBoxSet != null)
                     {
-                        item.LinkedChildren = oldBoxSet.LinkedChildren;
+                        item.LinkedChildren = this.CopyLinkedChildren(oldBoxSet);
                     }
 
                     item.SetProviderId(MetadataProvider.Tmdb, collection.Id.ToString(CultureInfo.InvariantCulture));
@@ -146,6 +154,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             return result;
+        }
+
+        private LinkedChild[] CopyLinkedChildren(BoxSet oldBoxSet)
+        {
+            if (this.linkedChildrenService == null || oldBoxSet.Id == Guid.Empty)
+            {
+                return oldBoxSet.LinkedChildren;
+            }
+
+            // 12.0 起成员存于关系表，未加载的 LinkedChildren 空数组代表“未知”，不能直接沿用。
+            return this.linkedChildrenService
+                .GetLinkedChildrenIds(oldBoxSet.Id)
+                .Select(itemId => new LinkedChild { ItemId = itemId, Type = LinkedChildType.Manual })
+                .ToArray();
         }
     }
 }

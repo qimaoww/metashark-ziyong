@@ -88,10 +88,31 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             this.requestLimiter = requestLimiter ?? new LlmRequestLimiter();
         }
 
-        public async Task<LlmEpisodeGroupMappingAssistResult> SuggestAndWriteAsync(LlmEpisodeGroupMappingAssistRequest request, CancellationToken cancellationToken)
+        public Task<LlmEpisodeGroupMappingAssistResult> SuggestAndWriteAsync(LlmEpisodeGroupMappingAssistRequest request, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(request);
+            return this.SuggestAndWriteSafelyAsync(request, request.Configuration?.LlmTmdbEpisodeGroupMap ?? string.Empty, cancellationToken);
+        }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "LLM 剧集组映射辅助是可选增强，任何异常都必须降级为失败结果，不能冒泡到 provider 的元数据抓取。")]
+        private async Task<LlmEpisodeGroupMappingAssistResult> SuggestAndWriteSafelyAsync(LlmEpisodeGroupMappingAssistRequest request, string currentMapping, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await this.SuggestAndWriteCoreAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return LlmEpisodeGroupMappingAssistResult.Failed($"EpisodeGroupMappingAssistException:{ex.GetType().Name}", currentMapping);
+            }
+        }
+
+        private async Task<LlmEpisodeGroupMappingAssistResult> SuggestAndWriteCoreAsync(LlmEpisodeGroupMappingAssistRequest request, CancellationToken cancellationToken)
+        {
             var configuration = request.Configuration;
             var currentMapping = configuration?.LlmTmdbEpisodeGroupMap ?? string.Empty;
             if (configuration == null || !configuration.EnableLlmAssist || !configuration.EnableLlmEpisodeGroupMappingAssist)

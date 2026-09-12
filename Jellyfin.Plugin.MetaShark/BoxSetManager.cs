@@ -11,7 +11,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
+using MediaBrowser.Controller.BaseItemManager;
 using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -49,8 +51,8 @@ public sealed class BoxSetManager : IHostedService, IDisposable
     private bool isStopped;
     private int drainRunning;
 
-    public BoxSetManager(ILibraryManager libraryManager, ICollectionManager collectionManager, ILoggerFactory loggerFactory)
-        : this(libraryManager, collectionManager, loggerFactory, DefaultDebounceDelay, new TimerBoxSetDebounceScheduler())
+    public BoxSetManager(ILibraryManager libraryManager, ICollectionManager collectionManager, ILoggerFactory loggerFactory, IBaseItemManager? baseItemManager = null)
+        : this(libraryManager, collectionManager, loggerFactory, DefaultDebounceDelay, new TimerBoxSetDebounceScheduler(), baseItemManager)
     {
     }
 
@@ -59,11 +61,12 @@ public sealed class BoxSetManager : IHostedService, IDisposable
         ICollectionManager collectionManager,
         ILoggerFactory loggerFactory,
         TimeSpan debounceDelay,
-        IBoxSetDebounceScheduler scheduler)
+        IBoxSetDebounceScheduler scheduler,
+        IBaseItemManager? baseItemManager = null)
     {
         this.libraryManager = libraryManager;
         this.collectionManager = collectionManager;
-        this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
+        this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager, baseItemManager);
         this.logger = loggerFactory.CreateLogger<BoxSetManager>();
         this.debounceDelay = debounceDelay;
         this.scheduler = scheduler;
@@ -133,7 +136,7 @@ public sealed class BoxSetManager : IHostedService, IDisposable
 
     public IDictionary<string, IList<Movie>> GetMoviesFromLibrary()
     {
-        var collectionMoviesMap = new Dictionary<string, IList<Movie>>();
+        var collectionMoviesMap = new Dictionary<string, IList<Movie>>(StringComparer.Ordinal);
 
         foreach (var library in this.libraryManager.RootFolder.Children)
         {
@@ -146,10 +149,14 @@ public sealed class BoxSetManager : IHostedService, IDisposable
                 {
                     IncludeItemTypes = new[] { BaseItemKind.Movie },
                     IsVirtualItem = false,
+                    Recursive = true,
                     OrderBy = new[] { (ItemSortBy.SortName, SortOrder.Ascending) },
                     Parent = library,
                     StartIndex = startIndex,
                     Limit = pagesize,
+
+                    // 合集成员一定带 TMDb id，把它下推到数据库可以减少扫描量。
+                    HasTmdbId = true,
                 }).OfType<Movie>().ToList();
 
                 foreach (var movie in movies)
@@ -159,8 +166,9 @@ public sealed class BoxSetManager : IHostedService, IDisposable
                         continue;
                     }
 
-                    // 从tmdb获取合集信息
-                    movie.ProviderIds.TryGetValue("TmdbCollection", out var collectionName);
+                    // 合集名来自 TMDb，由 MovieProvider 写入 Movie.CollectionName（JSON 字段），
+                    // 并非 provider id；必须读同一来源，否则合集成员永远为空。
+                    var collectionName = movie.CollectionName;
                     if (string.IsNullOrEmpty(collectionName))
                     {
                         continue;
@@ -343,7 +351,12 @@ public sealed class BoxSetManager : IHostedService, IDisposable
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A single collection drain failure must requeue that collection and continue the state machine.")]
     private async Task DrainQueuedCollectionsCoreAsync(string[] tmdbCollectionNames)
     {
-        var failedRetry = new HashSet<string>();
+        if (tmdbCollectionNames.Length == 0)
+        {
+            return;
+        }
+
+        var failedRetry = new HashSet<string>(StringComparer.Ordinal);
         List<BoxSet> boxSets;
         IDictionary<string, IList<Movie>> movies;
         try

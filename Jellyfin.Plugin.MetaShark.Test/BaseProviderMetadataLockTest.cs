@@ -42,7 +42,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     [BaseProvider.DoubanProviderId] = "locked-douban",
                     [MetaSharkPlugin.ProviderId] = "Douban_locked-douban",
                     [MetadataProvider.Tmdb.ToString()] = "111",
-                    [MetadataProvider.Imdb.ToString()] = "ttold",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100001",
                 },
             };
             var authoritativeMovie = new Movie
@@ -54,7 +54,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 PremiereDate = new DateTime(2024, 2, 3),
                 ProviderIds = new Dictionary<string, string>
                 {
-                    [MetadataProvider.Imdb.ToString()] = "ttnew",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100002",
                     [MetadataProvider.Tvdb.ToString()] = "tvdbnew",
                 },
             };
@@ -75,7 +75,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("locked-douban", currentMovie.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Douban_locked-douban", currentMovie.GetProviderId(MetaSharkPlugin.ProviderId));
             Assert.AreEqual("111", currentMovie.GetProviderId(MetadataProvider.Tmdb));
-            Assert.AreEqual("ttold", currentMovie.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100001", currentMovie.GetProviderId(MetadataProvider.Imdb));
             Assert.IsNull(currentMovie.GetProviderId(MetadataProvider.Tvdb));
             Assert.AreEqual(0, currentMovie.MetadataChangedCallCount);
             Assert.AreEqual(0, currentMovie.UpdateToRepositoryCallCount);
@@ -112,7 +112,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 PremiereDate = new DateTime(2024, 2, 3),
                 ProviderIds = new Dictionary<string, string>
                 {
-                    [MetadataProvider.Imdb.ToString()] = "ttnew",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100002",
                     [MetadataProvider.Tvdb.ToString()] = "tvdbnew",
                 },
             };
@@ -133,7 +133,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(currentMovie.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", currentMovie.GetProviderId(MetaSharkPlugin.ProviderId));
             Assert.AreEqual("222", currentMovie.GetProviderId(MetadataProvider.Tmdb));
-            Assert.AreEqual("ttnew", currentMovie.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100002", currentMovie.GetProviderId(MetadataProvider.Imdb));
             Assert.AreEqual("tvdbnew", currentMovie.GetProviderId(MetadataProvider.Tvdb));
             Assert.AreEqual(1, currentMovie.MetadataChangedCallCount);
             Assert.AreEqual(1, currentMovie.UpdateToRepositoryCallCount);
@@ -155,7 +155,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     [BaseProvider.DoubanProviderId] = "locked-series-douban",
                     [MetaSharkPlugin.ProviderId] = "Douban_locked-series-douban",
                     [MetadataProvider.Tmdb.ToString()] = "111",
-                    [MetadataProvider.Imdb.ToString()] = "ttold",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100001",
                     [MetadataProvider.Tvdb.ToString()] = "old-tvdb",
                 },
             };
@@ -165,7 +165,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     [BaseProvider.DoubanProviderId] = "locked-series-douban",
                     [MetaSharkPlugin.ProviderId] = "Tmdb_222",
-                    [MetadataProvider.Imdb.ToString()] = "ttnew",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100002",
                     [MetadataProvider.Tvdb.ToString()] = "new-tvdb",
                 },
             };
@@ -180,7 +180,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("locked-series-douban", currentSeries.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Douban_locked-series-douban", currentSeries.GetProviderId(MetaSharkPlugin.ProviderId));
             Assert.AreEqual("111", currentSeries.GetProviderId(MetadataProvider.Tmdb));
-            Assert.AreEqual("ttold", currentSeries.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100001", currentSeries.GetProviderId(MetadataProvider.Imdb));
             Assert.AreEqual("old-tvdb", currentSeries.GetProviderId(MetadataProvider.Tvdb));
             Assert.AreEqual(0, currentSeries.MetadataChangedCallCount);
             Assert.AreEqual(0, currentSeries.UpdateToRepositoryCallCount);

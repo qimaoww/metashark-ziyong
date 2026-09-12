@@ -33,7 +33,7 @@ def generate_version(filepath, version, changelog, repo, server):
     return {
         'version': f"{version}.0",
         'changelog': changelog,
-        'targetAbi': '10.10.0.0',
+        'targetAbi': '12.0.0.0',
         'sourceUrl': f'{server}/{repo}/releases/download/v{version}/metashark_{version}.0.zip',
         'checksum': md5sum(filepath),
         'timestamp': datetime.now().strftime('%Y-%m-%dT%H:%M:%S')

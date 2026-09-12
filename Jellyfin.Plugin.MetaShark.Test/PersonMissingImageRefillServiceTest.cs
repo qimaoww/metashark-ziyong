@@ -75,7 +75,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 x => x.QueueRefresh(
                     missingPerson.Id,
                     It.Is<MetadataRefreshOptions>(opt =>
-                        opt.MetadataRefreshMode == MetadataRefreshMode.FullRefresh
+                        // 人物已有 TMDb id：纯补图，不再重跑元数据管线。
+                        opt.MetadataRefreshMode == MetadataRefreshMode.None
                         && opt.ImageRefreshMode == MetadataRefreshMode.FullRefresh
                         && !opt.ReplaceAllMetadata
                         && !opt.ReplaceAllImages),

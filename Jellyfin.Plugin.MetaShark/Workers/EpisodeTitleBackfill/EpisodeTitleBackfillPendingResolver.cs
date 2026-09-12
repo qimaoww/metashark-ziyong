@@ -59,6 +59,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             this.candidateStore.UpdateDeferredRetry(candidate);
         }
 
+        public bool IsPending(EpisodeTitleBackfillCandidate candidate)
+        {
+            ArgumentNullException.ThrowIfNull(candidate);
+
+            return this.candidateStore.Peek(candidate.ItemId) != null
+                || (!string.IsNullOrWhiteSpace(candidate.ItemPath) && this.candidateStore.PeekByPath(candidate.ItemPath) != null);
+        }
+
         public void ReleaseClaim(EpisodeTitleBackfillCandidate candidate, string claimToken)
         {
             ArgumentNullException.ThrowIfNull(candidate);

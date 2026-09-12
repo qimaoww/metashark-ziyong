@@ -447,7 +447,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 episodeId,
                 disabledEpisode.Path!,
                 disabledEpisode.Name!,
-                "皇后回宫",
+
+                // 门控拒绝发生在抢占候选之前，因此此时没有候选标题可报告。
+                string.Empty,
                 ItemUpdateType.MetadataImport,
                 detail: MetaSharkLibraryCapabilityGateReason.CapabilityDisabledForResolvedLibrary.ToString());
 
@@ -1012,6 +1014,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
             candidate.AttemptCount += 1;
             candidate.NextAttemptAtUtc = nowUtc.AddSeconds(10);
             this.candidateStore.UpdateDeferredRetry(candidate);
+        }
+
+        public bool IsPending(EpisodeTitleBackfillCandidate candidate)
+        {
+            return this.candidateStore.Peek(candidate.ItemId) != null
+                || (!string.IsNullOrWhiteSpace(candidate.ItemPath) && this.candidateStore.PeekByPath(candidate.ItemPath) != null);
         }
 
         public void ReleaseClaim(EpisodeTitleBackfillCandidate candidate, string claimToken)

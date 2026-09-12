@@ -7,6 +7,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
     using System;
     using System.Collections.Generic;
     using System.Linq;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
@@ -16,11 +17,13 @@ namespace Jellyfin.Plugin.MetaShark.Core
     public sealed class MetaSharkOrdinaryItemLibraryCapabilityResolver
     {
         private readonly ILibraryManager libraryManager;
+        private readonly IBaseItemManager? baseItemManager;
 
-        public MetaSharkOrdinaryItemLibraryCapabilityResolver(ILibraryManager libraryManager)
+        public MetaSharkOrdinaryItemLibraryCapabilityResolver(ILibraryManager libraryManager, IBaseItemManager? baseItemManager = null)
         {
             ArgumentNullException.ThrowIfNull(libraryManager);
             this.libraryManager = libraryManager;
+            this.baseItemManager = baseItemManager;
         }
 
         public MetaSharkLibraryCapabilityDecision Resolve(BaseItem item, MetaSharkLibraryCapability capability)
@@ -35,10 +38,27 @@ namespace Jellyfin.Plugin.MetaShark.Core
             var typeOptions = ResolveTypeOptions(this.libraryManager.GetLibraryOptions(item), itemType);
             if (typeOptions == null)
             {
-                return CreateNoResolvedLibraryDecision(capability);
+                // 与 Jellyfin 原生语义对齐：库没有该类型的选项时回退到全局 fetcher 配置（默认启用）。
+                return this.baseItemManager != null
+                    ? ResolveFromBaseItemManager(item, itemType, capability, this.baseItemManager)
+                    : CreateNoResolvedLibraryDecision(capability);
             }
 
             var evidence = CreateResolvedLibraryEvidence(item, itemType, typeOptions);
+            return MetaSharkLibraryCapabilityGate.Evaluate(
+                MetaSharkLibraryCapabilityGateInput.ForOrdinaryItem(capability, evidence));
+        }
+
+        private static MetaSharkLibraryCapabilityDecision ResolveFromBaseItemManager(BaseItem item, string itemType, MetaSharkLibraryCapability capability, IBaseItemManager baseItemManager)
+        {
+            var library = item.GetTopParent() ?? item;
+            var evidence = new MetaSharkResolvedLibraryCapabilityEvidence(
+                library.Id,
+                library.Name ?? string.Empty,
+                library.Path ?? string.Empty,
+                itemType,
+                baseItemManager.IsMetadataFetcherEnabled(item, null, MetaSharkPlugin.PluginName),
+                baseItemManager.IsImageFetcherEnabled(item, null, MetaSharkPlugin.PluginName));
             return MetaSharkLibraryCapabilityGate.Evaluate(
                 MetaSharkLibraryCapabilityGateInput.ForOrdinaryItem(capability, evidence));
         }

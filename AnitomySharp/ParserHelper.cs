@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2014-2017, Eren Okka
  * Copyright (c) 2016-2017, Paul Miller
  * Copyright (c) 2017-2018, Tyler Bratton
@@ -26,6 +26,11 @@ namespace AnitomySharp
         /// 破折号
         /// </summary>
         private const string Dashes = "-\u2010\u2011\u2012\u2013\u2014\u2015";
+
+        /// <summary>
+        /// 分辨率分隔符（x/X/×），复用静态数组避免每次调用分配。
+        /// </summary>
+        private static readonly char[] ResolutionSeparators = { 'x', 'X', '\u00D7' };
         /// <summary>
         /// 带空格的破折号
         /// </summary>
@@ -104,7 +109,7 @@ namespace AnitomySharp
         /// <returns></returns>
         public static bool IsDashCharacter(char c)
         {
-            return Dashes.Contains(c.ToString());
+            return Dashes.Contains(c);
         }
 
         /// <summary>
@@ -178,7 +183,7 @@ namespace AnitomySharp
 
             if (str.Length >= minWidthSize + 1 + minHeightSize)
             {
-                var pos = str.IndexOfAny("xX\u00D7".ToCharArray());
+                var pos = str.IndexOfAny(ResolutionSeparators);
                 if (pos == -1 || pos < minWidthSize || pos > str.Length - (minHeightSize + 1)) return false;
                 return !str.Where((t, i) => i != pos && !char.IsDigit(t)).Any();
             }

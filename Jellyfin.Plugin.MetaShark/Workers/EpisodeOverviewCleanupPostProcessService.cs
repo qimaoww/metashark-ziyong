@@ -75,8 +75,32 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
+            // Jellyfin 12 的剧集多版本：次版本沿用主版本元数据，不单独做清理。
+            if (episode.PrimaryVersionId.HasValue)
+            {
+                return;
+            }
+
             if (!IsAcceptedUpdateReason(e.UpdateReason))
             {
+                return;
+            }
+
+            if (!this.IsMetadataAllowed(episode, out var gateDecision))
+            {
+                // 门控拒绝是高频路径：先判断再抢占候选，避免每次拒绝都产生 claim + release 两次落盘。
+                if (this.logger.IsEnabled(LogLevel.Information))
+                {
+                    this.logger.LogInformation(
+                        "[MetaShark] 跳过剧集简介清理. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
+                        "MetadataGateDenied",
+                        triggerName,
+                        episode.Id,
+                        episode.Path ?? string.Empty,
+                        e.UpdateReason,
+                        gateDecision?.Reason.ToString() ?? string.Empty);
+                }
+
                 return;
             }
 
@@ -89,20 +113,6 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             var originalOverviewSnapshot = (candidate.OriginalOverviewSnapshot ?? string.Empty).Trim();
             var currentOverview = (episode.Overview ?? string.Empty).Trim();
-
-            if (!this.IsMetadataAllowed(episode, out var gateDecision))
-            {
-                this.pendingResolver.ReleaseClaim(candidate, claimToken);
-                this.logger.LogInformation(
-                    "[MetaShark] 跳过剧集简介清理. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
-                    "MetadataGateDenied",
-                    triggerName,
-                    episode.Id,
-                    episode.Path ?? string.Empty,
-                    e.UpdateReason,
-                    gateDecision?.Reason.ToString() ?? string.Empty);
-                return;
-            }
 
             if (!MetadataLockGuard.CanWriteField(episode, MetadataField.Overview))
             {
@@ -144,13 +154,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
 
             this.pendingResolver.Complete(candidate);
-            this.logger.LogDebug(
-                "[MetaShark] 已应用剧集简介清理. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} currentOverviewLength={CurrentOverviewLength} updateReason={UpdateReason}.",
-                episode.Id,
-                triggerName,
-                episode.Path ?? string.Empty,
-                currentOverview.Length,
-                e.UpdateReason);
+            if (this.logger.IsEnabled(LogLevel.Debug))
+            {
+                this.logger.LogDebug(
+                    "[MetaShark] 已应用剧集简介清理. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} currentOverviewLength={CurrentOverviewLength} updateReason={UpdateReason}.",
+                    episode.Id,
+                    triggerName,
+                    episode.Path ?? string.Empty,
+                    currentOverview.Length,
+                    e.UpdateReason);
+            }
         }
 #pragma warning restore CA1848
 

@@ -14,6 +14,7 @@ namespace Jellyfin.Plugin.MetaShark
     using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
     using MediaBrowser.Controller;
     using MediaBrowser.Controller.Library;
+    using MediaBrowser.Controller.Persistence;
     using MediaBrowser.Controller.Plugins;
     using MediaBrowser.Controller.Providers;
     using MediaBrowser.Model.IO;
@@ -45,7 +46,8 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddHostedService<EpisodeOverviewCleanupItemUpdatedWorker>();
             serviceCollection.AddHostedService<EpisodeOverviewCleanupDeferredRetryWorker>();
             serviceCollection.AddHostedService<LlmTmdbCorrectionMetadataItemUpdatedWorker>();
-            serviceCollection.AddHostedService<EpisodeGroupMappingConfigurationRefreshService>();
+            serviceCollection.AddSingleton<EpisodeGroupMappingConfigurationRefreshService>();
+            serviceCollection.AddHostedService((ctx) => ctx.GetRequiredService<EpisodeGroupMappingConfigurationRefreshService>());
             serviceCollection.AddSingleton<ITvImageRefillStateStore>((ctx) =>
             {
                 return new FileTvImageRefillStateStore(
@@ -192,10 +194,13 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<IEpisodeGroupMappingFacade>((_) => new EpisodeGroupMappingFacade());
             serviceCollection.AddSingleton<EpisodeGroupRefreshCoordinator>((ctx) =>
             {
+                // 事件/扫描路径都允许在没有该服务时退化为不含多版本分集，
+                // 因此这里是可选解析，插件不强依赖宿主一定注册它。
                 return new EpisodeGroupRefreshCoordinator(
                     ctx.GetRequiredService<ILibraryManager>(),
                     ctx.GetRequiredService<IProviderManager>(),
-                    ctx.GetRequiredService<IFileSystem>());
+                    ctx.GetRequiredService<IFileSystem>(),
+                    linkedChildrenService: ctx.GetService<ILinkedChildrenService>());
             });
             serviceCollection.AddSingleton<ITmdbEpisodeGroupMapPersistenceService>((_) => new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared, saveLlmMapping: true));
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
@@ -217,7 +222,8 @@ namespace Jellyfin.Plugin.MetaShark
                     ctx.GetRequiredService<EpisodeGroupRefreshCoordinator>(),
                     ctx.GetRequiredService<IEpisodeGroupMappingFacade>(),
                     ctx.GetRequiredService<LlmAssistTriggerPolicy>(),
-                    ctx.GetRequiredService<ILogger<LlmEpisodeGroupMappingProviderAssistService>>());
+                    ctx.GetRequiredService<ILogger<LlmEpisodeGroupMappingProviderAssistService>>(),
+                    ctx.GetRequiredService<EpisodeGroupMappingConfigurationRefreshService>());
             });
             serviceCollection.AddSingleton<ILlmEpisodeGroupMappingProviderAssistService>((ctx) => ctx.GetRequiredService<LlmEpisodeGroupMappingProviderAssistService>());
         }

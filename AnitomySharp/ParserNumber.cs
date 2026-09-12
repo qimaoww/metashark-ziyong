@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2014-2017, Eren Okka
  * Copyright (c) 2016-2017, Paul Miller
  * Copyright (c) 2017-2018, Tyler Bratton
@@ -10,6 +10,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -76,13 +77,15 @@ namespace AnitomySharp
         private static bool IsValidEpisodeNumber(string number)
         {
             // Eliminate non numeric portion of number, then parse as double.
-            var temp = "";
-            for (var i = 0; i < number.Length && char.IsDigit(number[i]); i++)
+            var length = 0;
+            while (length < number.Length && char.IsDigit(number[length]))
             {
-                temp += number[i];
+                length++;
             }
 
-            return !string.IsNullOrEmpty(temp) && double.Parse(temp) <= EpisodeNumberMax;
+            return length > 0
+                && double.TryParse(number.AsSpan(0, length), NumberStyles.None, CultureInfo.InvariantCulture, out var value)
+                && value <= EpisodeNumberMax;
         }
 
         /// <summary>
@@ -829,7 +832,7 @@ namespace AnitomySharp
                 if (it > 1 && _parser.Tokens[it].Enclosed && _parser.ParseHelper.IsTokenIsolated(it))
                 {
                     string[] episodes = _parser.Tokens[it].Content.Split(new string[] { "(", ")" }, StringSplitOptions.RemoveEmptyEntries);
-                    if (StringHelper.IsNumericString(episodes[0]) && StringHelper.IsNumericString(episodes[1]))
+                    if (episodes.Length >= 2 && StringHelper.IsNumericString(episodes[0]) && StringHelper.IsNumericString(episodes[1]))
                     {
                         SetEpisodeNumber(episodes[0], _parser.Tokens[it], false);
                         SetAlternativeEpisodeNumber(episodes[1], _parser.Tokens[it]);

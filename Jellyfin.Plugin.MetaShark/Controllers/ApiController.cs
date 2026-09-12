@@ -5,6 +5,7 @@
 namespace Jellyfin.Plugin.MetaShark.Controllers
 {
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using System.Linq;
     using System.Net.Http;
@@ -21,10 +22,22 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     using Microsoft.Extensions.Logging;
 
     [ApiController]
-    [AllowAnonymous]
     [Route("/plugin/metashark")]
     public class ApiController : ControllerBase
     {
+        // 图片代理只用于豆瓣图片 CDN，限制域名可避免接口被当作任意内网/外网请求的代理。
+        private static readonly string[] AllowedImageHostSuffixes = { "douban.com", "doubanio.com" };
+
+        private static readonly HashSet<string> ExcludedProxyResponseHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Set-Cookie",
+            "Set-Cookie2",
+            "Transfer-Encoding",
+            "Connection",
+            "Proxy-Authenticate",
+            "Proxy-Authorization",
+        };
+
         private static readonly Action<ILogger, string?, Exception?> LogSkipRefreshEmptyId =
             LoggerMessage.Define<string?>(LogLevel.Warning, new EventId(1, nameof(RefreshSeriesByEpisodeGroupMap)), "[MetaShark] 跳过剧集组映射刷新. reason=EmptyId name={Name}.");
 
@@ -59,6 +72,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         /// 代理访问图片.
         /// </summary>
         /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
+        [AllowAnonymous]
         [Route("proxy/image")]
         [HttpGet]
         public async Task<Stream> ProxyImage(string url)
@@ -68,7 +82,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
                 throw new ResourceNotFoundException();
             }
 
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || !IsAllowedProxyImageHost(uri))
             {
                 throw new ResourceNotFoundException();
             }
@@ -82,6 +96,12 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
         public async Task<Stream> ProxyImage(Uri url)
         {
+            ArgumentNullException.ThrowIfNull(url);
+            if (!IsAllowedProxyImageHost(url))
+            {
+                throw new ResourceNotFoundException();
+            }
+
             HttpResponseMessage response;
             var httpClient = this.GetHttpClient();
             using (var requestMessage = new HttpRequestMessage(HttpMethod.Get, url))
@@ -91,6 +111,9 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
 
                 response = await httpClient.SendAsync(requestMessage).ConfigureAwait(false);
             }
+
+            // 响应流会返回给框架继续读取，这里只把 HttpResponseMessage 交给请求生命周期释放。
+            this.Response.RegisterForDispose(response);
 
             var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
 
@@ -104,16 +127,43 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
 
             foreach (var header in response.Headers)
             {
+                if (ExcludedProxyResponseHeaders.Contains(header.Key))
+                {
+                    continue;
+                }
+
                 this.Response.Headers[header.Key] = header.Value.ToArray();
             }
 
             return stream;
         }
 
+        private static bool IsAllowedProxyImageHost(Uri uri)
+        {
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var host = uri.Host;
+            foreach (var suffix in AllowedImageHostSuffixes)
+            {
+                if (host.Equals(suffix, StringComparison.OrdinalIgnoreCase)
+                    || host.EndsWith("." + suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>
         /// 检查豆瓣cookie是否失效.
         /// </summary>
         /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
+        [AllowAnonymous]
         [Route("douban/checklogin")]
         [HttpGet]
         public async Task<ApiResult> CheckDoubanLogin()
@@ -125,6 +175,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         /// <summary>
         /// Refresh series metadata for mapped TMDB episode groups.
         /// </summary>
+        [Authorize]
         [Route("tmdb/refresh-series")]
         [HttpPost]
         public ApiResult RefreshSeriesByEpisodeGroupMap([FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] TmdbEpisodeGroupRefreshRequest? request = null)

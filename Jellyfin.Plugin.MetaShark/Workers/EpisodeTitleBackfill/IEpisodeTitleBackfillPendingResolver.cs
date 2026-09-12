@@ -16,6 +16,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
 
         void MarkDeferredAttempt(EpisodeTitleBackfillCandidate candidate, DateTimeOffset nowUtc);
 
+        /// <summary>
+        /// 候选是否仍在待处理集合中（用于区分“已应用完成”和“本次未完成”）。
+        /// </summary>
+        bool IsPending(EpisodeTitleBackfillCandidate candidate);
+
         void ReleaseClaim(EpisodeTitleBackfillCandidate candidate, string claimToken);
 
         void Complete(EpisodeTitleBackfillCandidate candidate);

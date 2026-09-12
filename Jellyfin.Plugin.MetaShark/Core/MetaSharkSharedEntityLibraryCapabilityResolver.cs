@@ -10,10 +10,12 @@ namespace Jellyfin.Plugin.MetaShark.Core
     using System.Linq;
     using System.Reflection;
     using Jellyfin.Data.Enums;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
     using MediaBrowser.Controller.Library;
+    using MediaBrowser.Controller.Persistence;
     using MediaBrowser.Model.Entities;
 
     public sealed class MetaSharkSharedEntityLibraryCapabilityResolver
@@ -22,12 +24,14 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
         private readonly ILibraryManager libraryManager;
         private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemResolver;
+        private readonly ILinkedChildrenService? linkedChildrenService;
 
-        public MetaSharkSharedEntityLibraryCapabilityResolver(ILibraryManager libraryManager)
+        public MetaSharkSharedEntityLibraryCapabilityResolver(ILibraryManager libraryManager, ILinkedChildrenService? linkedChildrenService = null, IBaseItemManager? baseItemManager = null)
         {
             ArgumentNullException.ThrowIfNull(libraryManager);
             this.libraryManager = libraryManager;
-            this.ordinaryItemResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
+            this.ordinaryItemResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager, baseItemManager);
+            this.linkedChildrenService = linkedChildrenService;
         }
 
         public MetaSharkLibraryCapabilityDecision Resolve(BaseItem item, MetaSharkLibraryCapability capability)
@@ -123,6 +127,23 @@ namespace Jellyfin.Plugin.MetaShark.Core
         {
             ArgumentNullException.ThrowIfNull(boxSet);
 
+            // Jellyfin 12 起合集成员存于 LinkedChildren 关系表，服务接口是官方查询入口。
+            if (this.linkedChildrenService != null && boxSet.Id != Guid.Empty)
+            {
+                var serviceMovieIds = new HashSet<Guid>();
+                var serviceMovies = new List<BaseItem>();
+                foreach (var itemId in this.linkedChildrenService.GetLinkedChildrenIds(boxSet.Id))
+                {
+                    if (serviceMovieIds.Add(itemId) && this.libraryManager.GetItemById(itemId) is Movie serviceMovie)
+                    {
+                        serviceMovies.Add(serviceMovie);
+                    }
+                }
+
+                return serviceMovies;
+            }
+
+            // 兼容手工构造实例（测试或未注入服务时）的旧路径。
             var linkedChildrenProperty = boxSet.GetType().GetProperty("LinkedChildren", InstanceMemberBindingFlags);
             if (linkedChildrenProperty?.GetValue(boxSet) is not IEnumerable linkedChildren)
             {
@@ -163,13 +184,58 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 把“关联了该人物”的过滤下推到数据库，避免全库枚举后逐条 GetPeople。
+                PersonIds = person.Id == Guid.Empty ? Array.Empty<Guid>() : new[] { person.Id },
             };
 
             var items = this.libraryManager.GetItemList(query) ?? Enumerable.Empty<BaseItem>();
-            return items
-                .Where(item => item is Movie or Series)
-                .Where(item => this.CurrentItemContainsTmdbPersonId(item, personTmdbId))
-                .ToList();
+            var candidates = items.Where(item => item is Movie or Series).ToList();
+            if (candidates.Count == 0)
+            {
+                return candidates;
+            }
+
+            // 一个演员可能关联数百个条目，批量取人物避免逐条 GetPeople 的 N+1。
+            var peopleByItem = this.libraryManager.GetPeopleByItems(candidates.Select(item => item.Id).ToList());
+            var result = new List<BaseItem>(candidates.Count);
+            foreach (var item in candidates)
+            {
+                if (peopleByItem != null)
+                {
+                    if (peopleByItem.TryGetValue(item.Id, out var batchedPeople)
+                        && this.ContainsTmdbPersonId(batchedPeople, personTmdbId))
+                    {
+                        result.Add(item);
+                    }
+
+                    continue;
+                }
+
+                if (this.CurrentItemContainsTmdbPersonId(item, personTmdbId))
+                {
+                    result.Add(item);
+                }
+            }
+
+            return result;
+        }
+
+        private bool ContainsTmdbPersonId(IReadOnlyList<PersonInfo> people, string personTmdbId)
+        {
+            foreach (var person in people)
+            {
+                // 批量接口不返回 ProviderIds，需解析为 Person 实体后再判定 TMDb id。
+                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(person, this.libraryManager);
+                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(resolvedPerson, out var fingerprint)
+                    && fingerprint != null
+                    && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool CurrentItemContainsTmdbPersonId(BaseItem item, string personTmdbId)
@@ -181,7 +247,8 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
             foreach (var currentPerson in people)
             {
-                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(currentPerson, out var fingerprint)
+                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(currentPerson, this.libraryManager);
+                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(resolvedPerson, out var fingerprint)
                     && fingerprint != null
                     && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
                 {

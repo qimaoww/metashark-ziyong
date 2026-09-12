@@ -13,6 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Providers;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Library;
@@ -36,6 +37,9 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         private static readonly Action<ILogger, int, Exception?> LogItemsFound =
             LoggerMessage.Define<int>(LogLevel.Information, new EventId(3, nameof(ExecuteAsync)), "[MetaShark] 找到 {Count} 个待重新刮削条目.");
 
+        private static readonly Action<ILogger, Exception?> LogScanRunning =
+            LoggerMessage.Define(LogLevel.Information, new EventId(9, nameof(ExecuteAsync)), "[MetaShark] 媒体库扫描进行中，跳过重新刮削. reason=LibraryScanRunning.");
+
         private static readonly Action<ILogger, string, Guid, Exception?> LogQueueRefresh =
             LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(4, nameof(ExecuteAsync)), "[MetaShark] 已排队刷新条目. name={Name} itemId={Id}.");
 
@@ -56,13 +60,14 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
             ILogger<RefreshMetadataTask> logger,
             ILibraryManager libraryManager,
             IProviderManager providerManager,
-            IFileSystem fileSystem)
+            IFileSystem fileSystem,
+            IBaseItemManager? baseItemManager = null)
         {
             this.logger = logger;
             this.libraryManager = libraryManager;
             this.providerManager = providerManager;
             this.fileSystem = fileSystem;
-            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
+            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager, baseItemManager);
         }
 
         /// <inheritdoc />
@@ -88,6 +93,15 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(progress);
+
+            // 与 Jellyfin 自带任务一致：扫描期间跳过，避免和扫描争用数据库与刷新队列。
+            if (this.libraryManager.IsScanRunning)
+            {
+                LogScanRunning(this.logger, null);
+                progress.Report(100);
+                return;
+            }
+
             LogTaskStart(this.logger, null);
 
             var itemsToRefresh = this.GetItemsNeedingMetadataRefresh();
@@ -122,9 +136,6 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
 
                 processedCount++;
                 progress.Report(processedCount * 100.0 / totalItems);
-
-                // 等待5秒，避免短时间内请求过多
-                await Task.Delay(5000, cancellationToken).ConfigureAwait(false);
             }
 
             LogFinished(this.logger, totalItems, null);
@@ -138,14 +149,19 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 候选判定只用 ProviderIds/Overview/图片/路径等列与导航字段，
+                // 跳过整库 Data JSON 反序列化。
+                SkipDeserialization = true,
             };
 
             var items = this.libraryManager.GetItemList(query);
 
+            // Series 的 Path 是目录，只判断 File.Exists 会让"有豆瓣 ID 但缺主图"的剧集永远进不来。
             return items
                 .Where(item =>
                     (((!item.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId) && !item.HasImage(ImageType.Primary))
-                    || (File.Exists(item.Path) && !item.HasImage(ImageType.Primary)))
+                    || ((File.Exists(item.Path) || Directory.Exists(item.Path)) && !item.HasImage(ImageType.Primary)))
                     && this.IsMetadataAllowed(item)))
                 .ToList();
         }

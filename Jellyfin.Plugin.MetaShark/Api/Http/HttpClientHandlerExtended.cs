@@ -13,8 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.Api.Http
     {
         public HttpClientHandlerExtended()
         {
-            // Ignore SSL certificate errors.
-            this.ServerCertificateCustomValidationCallback = (message, certificate2, arg3, arg4) => true;
+            // 使用 .NET 默认的 TLS 证书校验；此前无条件放行任意证书会允许中间人篡改豆瓣流量。
             this.CheckCertificateRevocationList = true;
             this.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
             this.CookieContainer = new CookieContainer();

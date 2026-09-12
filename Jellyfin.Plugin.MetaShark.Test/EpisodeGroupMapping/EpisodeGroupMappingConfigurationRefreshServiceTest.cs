@@ -122,6 +122,35 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
         }
 
         [TestMethod]
+        public async Task SynchronizeEffectiveMappingBaseline_ThenUpdateConfiguration_DoesNotQueueRefreshAgain()
+        {
+            var series = CreateSeries(Guid.NewGuid(), "Series 65942", "65942");
+            var episode = CreateEpisode(Guid.NewGuid(), "Episode 10", series.Id);
+            var harness = CreateHarness(
+                new[] { series },
+                episodesBySeriesId: new Dictionary<Guid, IReadOnlyList<BaseItem>>
+                {
+                    [series.Id] = new BaseItem[] { episode },
+                });
+            await harness.Service.StartAsync(CancellationToken.None).ConfigureAwait(false);
+
+            // 模拟 LLM 写入映射：它已经自行刷新过，并把基线同步到新映射。
+            harness.Service.SynchronizeEffectiveMappingBaseline("65942=llm-group");
+            ReplacePluginConfiguration(new PluginConfiguration
+            {
+                LlmTmdbEpisodeGroupMap = "65942=llm-group",
+            });
+
+            MetaSharkPlugin.Instance!.UpdateConfiguration(new PluginConfiguration
+            {
+                LlmTmdbEpisodeGroupMap = "65942=llm-group",
+            });
+
+            await harness.Service.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            Assert.AreEqual(0, harness.QueueCalls.Count, "基线已同步的映射变更不应再次整队刷新。");
+        }
+
+        [TestMethod]
         public async Task UpdateConfiguration_WhenRefreshQueueFails_RetainsPreviousMappingForRetry()
         {
             ReplacePluginConfiguration(new PluginConfiguration());
@@ -140,6 +169,9 @@ namespace Jellyfin.Plugin.MetaShark.Test.EpisodeGroupMapping
             {
                 TmdbEpisodeGroupMap = "65942=manual-group",
             });
+
+            // 等第一次（注定失败）的刷新处理完，再验证失败后基线未被推进。
+            await harness.Service.WaitForPendingRefreshAsync().ConfigureAwait(false);
             Assert.AreEqual(0, harness.QueueCalls.Count);
 
             MetaSharkPlugin.Instance.UpdateConfiguration(new PluginConfiguration

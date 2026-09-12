@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2014-2017, Eren Okka
  * Copyright (c) 2016-2017, Paul Miller
  * Copyright (c) 2017-2018, Tyler Bratton
@@ -9,6 +9,7 @@
 */
 
 using System;
+using System.Globalization;
 using System.Linq;
 
 namespace AnitomySharp
@@ -139,15 +140,8 @@ namespace AnitomySharp
         /// <returns></returns>
         public static int StringToInt(string str)
         {
-            try
-            {
-                return int.Parse(str);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex);
-                return 0;
-            }
+            // 非数字输入（例如等价集数 "12(341)"）此前会抛异常并把堆栈写到控制台/宿主日志。
+            return int.TryParse(str, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
         }
 
         /// <summary>

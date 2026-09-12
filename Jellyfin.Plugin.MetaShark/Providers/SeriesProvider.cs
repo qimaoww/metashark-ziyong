@@ -309,10 +309,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         var tmdbFallbackResult = await this.GetMetadataByTmdb(tmdbId, info, personNameScope, cancellationToken).ConfigureAwait(false);
                         ApplyLlmExternalIdWrites(tmdbFallbackResult, llmExternalIdResolutionResult);
                         ApplyLlmTextCompletion(tmdbFallbackResult, llmAssistResult);
-                        return FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                        return this.FinalizeMetadataResult(tmdbFallbackResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                     }
 
-                    return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                    return this.FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                 }
 
                 var seriesName = this.RemoveSeasonSuffix(subject.Name);
@@ -388,7 +388,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     await this.TryPersistLlmTmdbCompletionProviderIdsAsync(info, tmdbId, result.Item, cancellationToken).ConfigureAwait(false);
                 }
 
-                return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                return this.FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
             }
 
             if (!string.IsNullOrEmpty(tmdbId) && (shouldUseTmdbMetadataAfterCorrection || !doubanAllowed || tmdbSourceIsPrimary || string.IsNullOrEmpty(effectiveSid)))
@@ -412,14 +412,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
                 ApplyLlmExternalIdWrites(tmdbResult, llmExternalIdResolutionResult);
                 ApplyLlmTextCompletion(tmdbResult, llmAssistResult);
-                var finalizedResult = FinalizeMetadataResult(tmdbResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+                var finalizedResult = this.FinalizeMetadataResult(tmdbResult, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
                 this.TryQueueVerifiedTmdbCorrectionMetadataSnapshot(info, tmdbId, shouldUseTmdbMetadataAfterCorrection, finalizedResult.Item);
                 await this.TryPersistVerifiedTmdbCorrectionMetadataAsync(info, tmdbId, shouldUseTmdbMetadataAfterCorrection, finalizedResult.Item, cancellationToken).ConfigureAwait(false);
                 return finalizedResult;
             }
 
             this.Log("剧集匹配失败，可检查年份是否与豆瓣一致，或是否需要登录访问. name: {0} year: {1}", info.Name, info.Year);
-            return FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
+            return this.FinalizeMetadataResult(result, originalTmdbId, originalPublicProviderIds, hasVerifiedTmdbCorrection, shouldUseTmdbMetadataAfterCorrection);
         }
 
         private (string? Sid, string? TmdbId, string? EffectiveSid, MetaSource MetaSource, bool TmdbSourceIsPrimary, bool HasTmdbMeta, bool HasDoubanMeta, bool HasPersistedDoubanTmdbCorrection, bool HasPersistedDoubanTmdbCompletion) ApplyInitialSeriesProviderIdStage(SeriesInfo info, string? sid, string? tmdbId, DefaultScraperSemantic semantic, bool doubanAllowed)
@@ -460,9 +460,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return (tmdbId, true, tmdbCorrectionResult.ShouldUseTmdbMetadata);
         }
 
-        private static MetadataResult<Series> FinalizeMetadataResult(MetadataResult<Series> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
+        private MetadataResult<Series> FinalizeMetadataResult(MetadataResult<Series> result, string? originalTmdbId, IReadOnlyDictionary<string, string>? originalPublicProviderIds, bool hasVerifiedCorrection, bool shouldUseTmdbMetadataAfterCorrection)
         {
-            TmdbProviderIdPreservationHelper.PreserveSeriesTmdbId(originalTmdbId, result.Item, hasVerifiedCorrection);
+            TmdbProviderIdPreservationHelper.PreserveSeriesTmdbId(originalTmdbId, result.Item, hasVerifiedCorrection, this.Logger);
             PreserveNonTmdbProviderIdsAfterCorrection(result.Item, originalPublicProviderIds, hasVerifiedCorrection, shouldUseTmdbMetadataAfterCorrection);
             return result;
         }

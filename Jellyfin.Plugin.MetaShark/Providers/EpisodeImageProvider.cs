@@ -1,4 +1,4 @@
-﻿// <copyright file="EpisodeImageProvider.cs" company="PlaceholderCompany">
+// <copyright file="EpisodeImageProvider.cs" company="PlaceholderCompany">
 // Copyright (c) PlaceholderCompany. All rights reserved.
 // </copyright>
 
@@ -185,7 +185,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 var seasonPath = Path.GetDirectoryName(path);
                 if (!string.IsNullOrWhiteSpace(seasonPath))
                 {
-                    fallbackSeasonNumber = this.LibraryManager.GetSeasonNumberFromPath(seasonPath)
+                    fallbackSeasonNumber = this.LibraryManager.GetSeasonNumberFromPath(seasonPath, episode.ParentId)
                         ?? this.GuessSeasonNumberByDirectoryName(seasonPath);
                 }
             }

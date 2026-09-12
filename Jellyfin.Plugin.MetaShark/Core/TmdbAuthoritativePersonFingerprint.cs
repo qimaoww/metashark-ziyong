@@ -9,6 +9,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
     using System.Collections.Generic;
     using System.Reflection;
     using MediaBrowser.Controller.Entities;
+    using MediaBrowser.Controller.Library;
     using MediaBrowser.Model.Entities;
 
     public sealed class TmdbAuthoritativePersonFingerprint
@@ -41,6 +42,23 @@ namespace Jellyfin.Plugin.MetaShark.Core
             }
 
             return Create(tmdbPersonId, person.Type.ToString(), person.Role ?? string.Empty);
+        }
+
+        /// <summary>
+        /// Jellyfin 12 的 GetPeople/GetPeopleByItems 投影不再包含 ProviderIds，
+        /// 需要经 Person 实体读取 TMDb id；实体缺失时回退到传入对象（测试替身等场景）。
+        /// </summary>
+        internal static object? ResolvePersonForProviderIds(object? person, ILibraryManager? libraryManager)
+        {
+            if (person is PersonInfo personInfo
+                && personInfo.Id != Guid.Empty
+                && libraryManager != null
+                && libraryManager.GetItemById(personInfo.Id) is Person entity)
+            {
+                return entity;
+            }
+
+            return person;
         }
 
         public static bool TryCreateFromCurrentPerson(object? person, out TmdbAuthoritativePersonFingerprint? fingerprint)

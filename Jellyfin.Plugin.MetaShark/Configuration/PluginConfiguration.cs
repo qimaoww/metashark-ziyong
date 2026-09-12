@@ -319,12 +319,37 @@ public class PluginConfiguration : BasePluginConfiguration
 
     public IWebProxy? GetTmdbWebProxy()
     {
-        if (!string.IsNullOrEmpty(this.TmdbProxyType))
+        if (string.IsNullOrWhiteSpace(this.TmdbProxyType))
         {
-            return new WebProxy($"{this.TmdbProxyType}://{this.TmdbProxyHost}:{this.TmdbProxyPort}", true);
+            return null;
         }
 
-        return null;
+        // 配置页只提供 http/https/socks5；其他取值视为未配置，避免拼出非法 URI 让 TmdbApi 构造失败。
+        var proxyType = this.TmdbProxyType.Trim();
+        if (!string.Equals(proxyType, "http", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(proxyType, "https", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(proxyType, "socks5", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var proxyHost = this.TmdbProxyHost?.Trim();
+        if (string.IsNullOrWhiteSpace(proxyHost))
+        {
+            return null;
+        }
+
+        // 端口允许留空；填了就必须是合法端口，否则同样视为未配置。
+        var portText = this.TmdbProxyPort?.Trim();
+        if (!string.IsNullOrEmpty(portText)
+            && (!int.TryParse(portText, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var port)
+                || port is <= 0 or > 65535))
+        {
+            return null;
+        }
+
+        var authority = string.IsNullOrEmpty(portText) ? proxyHost : $"{proxyHost}:{portText}";
+        return new WebProxy($"{proxyType}://{authority}", true);
     }
 
     private static string NormalizeDefaultScraperMode(string? value)

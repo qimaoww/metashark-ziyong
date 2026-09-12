@@ -18,6 +18,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
         private readonly ILogger<FileEpisodeTitleBackfillCandidateStore> logger;
         private readonly string stateFilePath;
         private readonly Dictionary<string, Guid> itemIdsByPath = new Dictionary<string, Guid>(GetPathComparer());
+        private DateTimeOffset nextSweepAtUtc;
         private Dictionary<Guid, EpisodeTitleBackfillCandidate>? candidatesByItemId;
 
         public FileEpisodeTitleBackfillCandidateStore(string stateFilePath, ILoggerFactory loggerFactory)
@@ -322,6 +323,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
 
         private void RemoveExpiredEntries(DateTimeOffset nowUtc)
         {
+            // 每次 Peek/TryClaim 都全表扫描并落盘会带来持续的 CPU 与磁盘抖动，这里摊还到每分钟一次。
+            if (nowUtc < this.nextSweepAtUtc)
+            {
+                return;
+            }
+
+            this.nextSweepAtUtc = nowUtc.AddMinutes(1);
+
             var expiredCandidateIds = new List<Guid>();
             foreach (var candidate in this.candidatesByItemId!.Values)
             {
@@ -339,10 +348,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
                 }
             }
 
-            if (expiredCandidateIds.Count > 0)
-            {
-                this.Write();
-            }
+            // 读路径不落盘：过期项已从内存移除，会在下一次真实写入时一并持久化。
         }
 
         private void Upsert(EpisodeTitleBackfillCandidate candidate)

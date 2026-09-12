@@ -32,5 +32,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         public DateTimeOffset QueuedAtUtc { get; set; }
 
         public DateTimeOffset ExpiresAtUtc { get; set; }
+
+        /// <summary>
+        /// 当前抢占该快照的事件令牌；为空表示尚未被处理。
+        /// </summary>
+        public string ClaimToken { get; set; } = string.Empty;
     }
 }

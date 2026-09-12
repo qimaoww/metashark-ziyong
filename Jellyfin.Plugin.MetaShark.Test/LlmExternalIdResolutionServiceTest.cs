@@ -880,7 +880,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 "series-111-zh-CN-",
                 new TmdbTvShow { Id = 111, Name = "短篇特典", OriginalName = "短篇特典", FirstAirDate = new DateTime(1999, 1, 1) },
                 TimeSpan.FromMinutes(5));
-            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "ttspin111", "zh-CN", seriesIds: new[] { 111 });
+            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "tt0100007", "zh-CN", seriesIds: new[] { 111 });
             SeedFindByExternalId(tmdbApi, FindExternalSource.TvDb, "tvdb-spin-111", "zh-CN", seriesIds: new[] { 111 });
             var doubanApi = this.CreateDoubanApi();
             SeedDoubanSubject(doubanApi, "douban-spin-111", new DoubanSubject { Sid = "douban-spin-111", Category = "电视剧", Name = "短篇特典", OriginalName = "短篇特典", Year = 1999 });
@@ -895,7 +895,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 ProviderIds = new Dictionary<string, string>
                 {
                     [MetadataProvider.Tmdb.ToString()] = "111",
-                    [MetadataProvider.Imdb.ToString()] = "ttspin111",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100007",
                     [MetadataProvider.Tvdb.ToString()] = "tvdb-spin-111",
                     [BaseProvider.DoubanProviderId] = "douban-spin-111",
                 },
@@ -942,13 +942,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 "series-222-zh-CN-",
                 new TmdbTvShow { Id = 222, Name = "主线剧集", OriginalName = "主线剧集", FirstAirDate = new DateTime(2024, 1, 1) },
                 TimeSpan.FromMinutes(5));
-            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "ttmain222", "zh-CN", seriesIds: new[] { 222 });
+            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "tt0100009", "zh-CN", seriesIds: new[] { 222 });
             SeedFindByExternalId(tmdbApi, FindExternalSource.TvDb, "tvdb-main-222", "zh-CN", seriesIds: new[] { 222 });
             var doubanApi = this.CreateDoubanApi();
             SeedDoubanSubject(doubanApi, "douban-main-222", new DoubanSubject { Sid = "douban-main-222", Category = "电视剧", Name = "主线剧集", OriginalName = "主线剧集", Year = 2024 });
             var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Series", reason: "semantic conflict", evidence: "relative path and public ids align with main series")));
             var service = this.CreateService(llmApi, tmdbApi, doubanApi: doubanApi);
-            var lookupInfo = CreateSeriesCorrectionLookupInfo("111", imdbId: "ttmain222", tvdbId: "tvdb-main-222", doubanId: "douban-main-222");
+            var lookupInfo = CreateSeriesCorrectionLookupInfo("111", imdbId: "tt0100009", tvdbId: "tvdb-main-222", doubanId: "douban-main-222");
             lookupInfo.Name = "主线剧集";
             lookupInfo.Year = 2024;
             lookupInfo.Path = "/mnt/media/Shows/主线剧集 (2024)/短篇特典/第01集.mkv";
@@ -965,7 +965,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(result.ShouldReplace, result.Diagnostic);
             Assert.AreEqual("222", result.ReplacementTmdbId);
             Assert.AreEqual("111", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()], "服务层 correction 结果只返回 replacement，不应直接改写旧 TMDb。");
-            Assert.AreEqual("ttmain222", lookupInfo.ProviderIds[MetadataProvider.Imdb.ToString()]);
+            Assert.AreEqual("tt0100009", lookupInfo.ProviderIds[MetadataProvider.Imdb.ToString()]);
             Assert.AreEqual("tvdb-main-222", lookupInfo.ProviderIds[MetadataProvider.Tvdb.ToString()]);
             Assert.AreEqual("douban-main-222", lookupInfo.ProviderIds[BaseProvider.DoubanProviderId]);
         }
@@ -1066,13 +1066,13 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             var tmdbApi = this.CreateTmdbApi();
             SeedTmdbSeries(tmdbApi, 222, "zh-CN", string.Empty);
-            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "ttspin111", "zh-CN", seriesIds: new[] { 111 });
+            SeedFindByExternalId(tmdbApi, FindExternalSource.Imdb, "tt0100007", "zh-CN", seriesIds: new[] { 111 });
             SeedFindByExternalId(tmdbApi, FindExternalSource.TvDb, "tvdb-spin-111", "zh-CN", seriesIds: new[] { 111 });
             var doubanApi = this.CreateDoubanApi();
             SeedDoubanSubject(doubanApi, "douban-spin-111", new DoubanSubject { Sid = "douban-spin-111", Category = "电视剧", Name = "短篇特典", OriginalName = "短篇特典", Year = 1999 });
             var llmApi = new RecordingLlmApi(ResponseJson(CandidateJson("TMDb", "222", "Series", reason: "semantic conflict", evidence: "relative path alone is insufficient")));
             var service = this.CreateService(llmApi, tmdbApi, doubanApi: doubanApi);
-            var lookupInfo = CreateSeriesCorrectionLookupInfo("111", imdbId: "ttspin111", tvdbId: "tvdb-spin-111", doubanId: "douban-spin-111");
+            var lookupInfo = CreateSeriesCorrectionLookupInfo("111", imdbId: "tt0100007", tvdbId: "tvdb-spin-111", doubanId: "douban-spin-111");
             lookupInfo.Name = "主线剧集";
             lookupInfo.Year = 2024;
             lookupInfo.Path = "/mnt/media/Shows/主线剧集 (2024)/短篇特典/第01集.mkv";
@@ -1089,7 +1089,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsFalse(result.ShouldReplace, result.Diagnostic);
             Assert.IsTrue(result.Diagnostic.Contains("ImdbEvidenceDoesNotAlign", StringComparison.Ordinal) || result.Diagnostic.Contains("TvdbEvidenceDoesNotAlign", StringComparison.Ordinal), result.Diagnostic);
             Assert.AreEqual("111", lookupInfo.ProviderIds[MetadataProvider.Tmdb.ToString()]);
-            Assert.AreEqual("ttspin111", lookupInfo.ProviderIds[MetadataProvider.Imdb.ToString()]);
+            Assert.AreEqual("tt0100007", lookupInfo.ProviderIds[MetadataProvider.Imdb.ToString()]);
             Assert.AreEqual("tvdb-spin-111", lookupInfo.ProviderIds[MetadataProvider.Tvdb.ToString()]);
             Assert.AreEqual("douban-spin-111", lookupInfo.ProviderIds[BaseProvider.DoubanProviderId]);
         }

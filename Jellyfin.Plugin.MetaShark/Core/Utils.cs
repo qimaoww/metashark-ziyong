@@ -12,6 +12,34 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
     public static class Utils
     {
+        private static readonly Dictionary<char, char> ChineseNumberMap = new Dictionary<char, char>()
+        {
+            { '一', '1' },
+            { '二', '2' },
+            { '三', '3' },
+            { '四', '4' },
+            { '五', '5' },
+            { '六', '6' },
+            { '七', '7' },
+            { '八', '8' },
+            { '九', '9' },
+            { '零', '0' },
+        };
+
+        private static readonly Dictionary<char, char> AsciiNumberMap = new Dictionary<char, char>()
+        {
+            { '1', '一' },
+            { '2', '二' },
+            { '3', '三' },
+            { '4', '四' },
+            { '5', '五' },
+            { '6', '六' },
+            { '7', '七' },
+            { '8', '八' },
+            { '9', '九' },
+            { '0', '零' },
+        };
+
         public static DateTime UnixTimeStampToDateTime(long unixTimeStamp)
         {
             // Unix timestamp is seconds past epoch
@@ -31,22 +59,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return null;
             }
 
-            var chineseNumberMap = new Dictionary<char, char>()
-            {
-                { '一', '1' },
-                { '二', '2' },
-                { '三', '3' },
-                { '四', '4' },
-                { '五', '5' },
-                { '六', '6' },
-                { '七', '7' },
-                { '八', '8' },
-                { '九', '9' },
-                { '零', '0' },
-            };
-
-            var numberArr = str.ToCharArray().Select(x => chineseNumberMap.TryGetValue(x, out var mapped) ? mapped : x).ToArray();
-            var newNumberStr = new string(numberArr);
+            var numberArr = str.ToCharArray().Select(x => ChineseNumberMap.TryGetValue(x, out var mapped) ? mapped : x).ToArray();
             if (int.TryParse(new string(numberArr), out var number))
             {
                 return number;
@@ -66,21 +79,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return null;
             }
 
-            var chineseNumberMap = new Dictionary<char, char>()
-            {
-                { '1', '一' },
-                { '2', '二' },
-                { '3', '三' },
-                { '4', '四' },
-                { '5', '五' },
-                { '6', '六' },
-                { '7', '七' },
-                { '8', '八' },
-                { '9', '九' },
-                { '0', '零' },
-            };
-
-            var numberArr = $"{number}".ToCharArray().Select(x => chineseNumberMap.TryGetValue(x, out var mapped) ? mapped : x).ToArray();
+            var numberArr = $"{number}".ToCharArray().Select(x => AsciiNumberMap.TryGetValue(x, out var mapped) ? mapped : x).ToArray();
             return new string(numberArr);
         }
     }

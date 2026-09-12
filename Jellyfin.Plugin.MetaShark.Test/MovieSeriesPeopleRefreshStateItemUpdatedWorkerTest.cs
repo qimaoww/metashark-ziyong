@@ -638,6 +638,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     UpdateReason = ItemUpdateType.MetadataImport,
                 });
 
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
+
             Assert.AreEqual(1, postProcessServiceStub.CallCount);
             Assert.AreSame(movie, postProcessServiceStub.LastEventArgs?.Item);
             Assert.AreEqual(ItemUpdateType.MetadataImport, postProcessServiceStub.LastEventArgs?.UpdateReason);
@@ -660,7 +662,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public async Task StartAsync_LogsAndRethrows_WhenPostProcessThrows()
+        public async Task StartAsync_LogsAndSwallows_WhenPostProcessThrows()
         {
             var libraryManagerStub = new Mock<ILibraryManager>();
             var postProcessServiceStub = new RecordingMovieSeriesPeopleRefreshStatePostProcessService
@@ -675,16 +677,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
             await worker.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
             var series = CreateSeries(includeTmdb: true);
-            var actualException = Assert.ThrowsException<InvalidOperationException>(() => libraryManagerStub.Raise(
+            // 插件异常只记录，不再抛回 Jellyfin 的事件调用栈。
+            libraryManagerStub.Raise(
                 x => x.ItemUpdated += null,
                 libraryManagerStub.Object,
                 new ItemChangeEventArgs
                 {
                     Item = series,
                     UpdateReason = ItemUpdateType.MetadataDownload,
-                }));
+                });
 
-            Assert.AreSame(postProcessServiceStub.ExceptionToThrow, actualException);
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
+
             LogAssert.AssertLoggedOnce(
                 loggerStub,
                 LogLevel.Error,

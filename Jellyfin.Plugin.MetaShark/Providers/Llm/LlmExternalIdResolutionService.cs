@@ -115,7 +115,23 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
             foreach (var existingProviderId in existingProviderIds)
             {
-                var assessment = await this.AssessExistingProviderIdAsync(existingProviderId, request.LookupInfo, mediaType, request.Configuration, localContext, cancellationToken).ConfigureAwait(false);
+                ExistingProviderIdAssessment assessment;
+                try
+                {
+                    assessment = await this.AssessExistingProviderIdAsync(existingProviderId, request.LookupInfo, mediaType, request.Configuration, localContext, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+#pragma warning disable CA1031
+                catch (Exception)
+                {
+                    // 外部来源抖动时按“无法判定”处理，避免把一次网络异常升级为整个条目刮削失败。
+                    continue;
+                }
+#pragma warning restore CA1031
+
                 if (assessment == ExistingProviderIdAssessment.Conflict)
                 {
                     return LlmAssistTriggerDecision.Allowed("StaleExternalIdConflict");
@@ -1107,7 +1123,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                     Year = movie.ReleaseDate?.Year,
                     Confidence = 1,
                 };
-                var semanticVerification = await this.VerifyTmdbCandidateSemanticAsync(candidate, lookupInfo, targetMediaType, suggestion, cancellationToken).ConfigureAwait(false);
+                var semanticVerification = await this.VerifyTmdbCandidateSemanticAsync(candidate, lookupInfo, targetMediaType, suggestion, configuration, cancellationToken).ConfigureAwait(false);
                 return semanticVerification ?? VerificationSucceeded(candidate);
             }
 
@@ -1127,7 +1143,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                     Year = series.FirstAirDate?.Year,
                     Confidence = 1,
                 };
-                var semanticVerification = await this.VerifyTmdbCandidateSemanticAsync(candidate, lookupInfo, targetMediaType, suggestion, cancellationToken).ConfigureAwait(false);
+                var semanticVerification = await this.VerifyTmdbCandidateSemanticAsync(candidate, lookupInfo, targetMediaType, suggestion, configuration, cancellationToken).ConfigureAwait(false);
                 return semanticVerification ?? VerificationSucceeded(candidate);
             }
 
@@ -1173,9 +1189,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return await this.VerifyTmdbCandidateAsync(candidate, new ItemLookupInfo { MetadataLanguage = language }, targetMediaType, null, cancellationToken).ConfigureAwait(false);
         }
 
-        private async Task<LlmExternalIdVerificationResult?> VerifyTmdbCandidateSemanticAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, string targetMediaType, LlmScrapingSuggestion suggestion, CancellationToken cancellationToken)
+        private async Task<LlmExternalIdVerificationResult?> VerifyTmdbCandidateSemanticAsync(LlmExternalIdCandidate candidate, ItemLookupInfo lookupInfo, string targetMediaType, LlmScrapingSuggestion suggestion, PluginConfiguration? configuration, CancellationToken cancellationToken)
         {
-            var allowRelativePathContext = MetaSharkPlugin.Instance?.Configuration?.LlmAllowRelativePathContext ?? true;
+            var allowRelativePathContext = configuration?.LlmAllowRelativePathContext ?? true;
             var localContext = this.scrapeContextBuilder.Build(lookupInfo, targetMediaType, Array.Empty<string?>(), allowRelativePathContext);
             if (this.mismatchDetector.IsMismatch(localContext, suggestion))
             {
@@ -1185,7 +1201,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             var providerIds = GetProviderIds(lookupInfo);
             if (providerIds.TryGetValue(BaseProvider.DoubanProviderId, out var doubanId) && !string.IsNullOrWhiteSpace(doubanId))
             {
-                var doubanSubject = await this.TryGetDoubanSubjectForSemanticVerificationAsync(doubanId, cancellationToken).ConfigureAwait(false);
+                var doubanLookup = await this.TryGetDoubanSubjectForSemanticVerificationAsync(doubanId, cancellationToken).ConfigureAwait(false);
+                if (doubanLookup.LookupFailed)
+                {
+                    // 与 VerifyDoubanCandidateAsync 保持一致：查询失败按 fail-closed 处理，不能当作“没有佐证”放行。
+                    return VerificationFailed("Douban semantic verification unavailable", candidate);
+                }
+
+                var doubanSubject = doubanLookup.Subject;
                 if (doubanSubject != null)
                 {
                     if (!string.IsNullOrWhiteSpace(doubanSubject.Category)
@@ -1205,23 +1228,23 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return null;
         }
 
-        private async Task<DoubanSubject?> TryGetDoubanSubjectForSemanticVerificationAsync(string doubanId, CancellationToken cancellationToken)
+        private async Task<(DoubanSubject? Subject, bool LookupFailed)> TryGetDoubanSubjectForSemanticVerificationAsync(string doubanId, CancellationToken cancellationToken)
         {
             try
             {
-                return await this.doubanApi.GetMovieAsync(doubanId, cancellationToken).ConfigureAwait(false);
+                return (await this.doubanApi.GetMovieAsync(doubanId, cancellationToken).ConfigureAwait(false), false);
             }
             catch (InvalidOperationException)
             {
-                return null;
+                return (null, true);
             }
             catch (System.Net.Http.HttpRequestException)
             {
-                return null;
+                return (null, true);
             }
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return null;
+                return (null, true);
             }
         }
 
@@ -1259,6 +1282,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                     seriesId,
                     episodeInfo.ParentIndexNumber.Value,
                     episodeInfo.IndexNumber.Value,
+                    episodeInfo.SeriesDisplayOrder,
                     episodeInfo.MetadataLanguage,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -1266,14 +1290,20 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
             return episode?.Id == candidateEpisodeId ? VerificationSucceeded(candidate) : VerificationFailed("TMDb episode detail did not match the same series, season, and episode", candidate);
         }
 
-        private async Task<(int SeasonNumber, int EpisodeNumber)> ResolveTmdbEpisodeRequestAsync(PluginConfiguration? configuration, int seriesId, int seasonNumber, int episodeNumber, string? language, CancellationToken cancellationToken)
+        private async Task<(int SeasonNumber, int EpisodeNumber)> ResolveTmdbEpisodeRequestAsync(PluginConfiguration? configuration, int seriesId, int seasonNumber, int episodeNumber, string? displayOrder, string? language, CancellationToken cancellationToken)
         {
-            if (!this.episodeGroupMappingFacade.TryGetEffectiveGroupId(configuration, seriesId.ToString(CultureInfo.InvariantCulture), out var groupId))
+            TvGroupCollection? group = null;
+            if (this.episodeGroupMappingFacade.TryGetEffectiveGroupId(configuration, seriesId.ToString(CultureInfo.InvariantCulture), out var groupId))
             {
-                return (seasonNumber, episodeNumber);
+                group = await this.tmdbApi.GetEpisodeGroupByIdAsync(groupId, language ?? string.Empty, cancellationToken).ConfigureAwait(false);
             }
 
-            var group = await this.tmdbApi.GetEpisodeGroupByIdAsync(groupId, language ?? string.Empty, cancellationToken).ConfigureAwait(false);
+            // 与主刮削路径保持一致：没有显式剧集组映射时，按剧集播放顺序（absolute/dvd/production）换算真实 S/E。
+            if (group == null && !string.IsNullOrWhiteSpace(displayOrder))
+            {
+                group = await this.tmdbApi.GetSeriesGroupAsync(seriesId, displayOrder, language ?? string.Empty, string.Empty, cancellationToken).ConfigureAwait(false);
+            }
+
             var season = group?.Groups.Find(item => item.Order == seasonNumber);
             var episode = season?.Episodes.Find(item => item.Order == episodeNumber - 1);
             return episode == null ? (seasonNumber, episodeNumber) : (episode.SeasonNumber, episode.EpisodeNumber);

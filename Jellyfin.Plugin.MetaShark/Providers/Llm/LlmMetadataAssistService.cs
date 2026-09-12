@@ -73,8 +73,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
 
             var mediaType = request.MediaType ?? string.Empty;
             var allowRelativePathContext = request.Configuration?.LlmAllowRelativePathContext ?? true;
-            var context = this.contextBuilder.Build(request.LookupInfo, mediaType, request.LibraryRoots, allowRelativePathContext);
-            var prompt = this.contextBuilder.BuildJson(request.LookupInfo, mediaType, request.LibraryRoots, allowRelativePathContext);
+            var (context, prompt) = this.contextBuilder.BuildWithPromptJson(request.LookupInfo, mediaType, request.LibraryRoots, allowRelativePathContext);
             LlmApiResult apiResult;
             try
             {

@@ -448,6 +448,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                         Item = this.Episode,
                         UpdateReason = updateReason,
                     });
+
+                await this.worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
             }
 
             public void Dispose()

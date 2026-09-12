@@ -9,6 +9,8 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using Jellyfin.Plugin.MetaShark.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -31,6 +33,8 @@ public class MetaSharkPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// Gets the provider id.
     /// </summary>
     public const string ProviderId = "MetaSharkID";
+
+    private static readonly object ConfigurationSaveLock = new object();
 
     private readonly IServerApplicationHost appHost;
 
@@ -95,44 +99,110 @@ public class MetaSharkPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(rollbackConfiguration);
 
-        byte[]? originalFileBytes = null;
-        var configurationFilePath = this.ConfigurationFilePath;
-        var fileExisted = File.Exists(configurationFilePath);
-        if (fileExisted)
+        lock (ConfigurationSaveLock)
         {
-            originalFileBytes = File.ReadAllBytes(configurationFilePath);
-        }
-
-        try
-        {
-            this.SaveConfiguration(configuration);
-            this.Configuration = configuration;
-            saveException = null;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Exception? rollbackException = null;
+            byte[]? originalFileBytes = null;
+            var configurationFilePath = this.ConfigurationFilePath;
+            var fileExisted = false;
 
             try
             {
-                this.Configuration = rollbackConfiguration;
+                fileExisted = File.Exists(configurationFilePath);
                 if (fileExisted)
                 {
-                    File.WriteAllBytes(configurationFilePath, originalFileBytes ?? Array.Empty<byte>());
+                    originalFileBytes = File.ReadAllBytes(configurationFilePath);
                 }
-                else if (File.Exists(configurationFilePath))
-                {
-                    File.Delete(configurationFilePath);
-                }
+
+                this.SaveConfiguration(configuration);
+                this.Configuration = configuration;
+                saveException = null;
+                return true;
             }
-            catch (Exception restoreEx)
+            catch (Exception ex)
             {
-                rollbackException = restoreEx;
+                Exception? rollbackException = null;
+
+                try
+                {
+                    this.Configuration = rollbackConfiguration;
+                    if (fileExisted)
+                    {
+                        File.WriteAllBytes(configurationFilePath, originalFileBytes ?? Array.Empty<byte>());
+                    }
+                    else if (File.Exists(configurationFilePath))
+                    {
+                        File.Delete(configurationFilePath);
+                    }
+                }
+                catch (Exception restoreEx)
+                {
+                    rollbackException = restoreEx;
+                }
+
+                saveException = rollbackException == null ? ex : new AggregateException(ex, rollbackException);
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 在配置保存锁内基于最新配置执行一次变更，避免并发保存用锁外旧快照互相覆盖。
+    /// <paramref name="update"/> 返回 null 表示无需保存（调用方自行记录结果）。
+    /// </summary>
+    /// <param name="update">基于当前最新配置计算新配置的委托。</param>
+    /// <param name="saveException">保存失败时的异常。</param>
+    /// <returns>是否需要并成功保存。</returns>
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "配置保存必须把序列化/文件失败以及变更委托的异常都翻译成可恢复的结果，不能抛给调用方。")]
+    public bool TryUpdateConfigurationSafely(Func<PluginConfiguration, PluginConfiguration?> update, out Exception? saveException)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        lock (ConfigurationSaveLock)
+        {
+            var currentConfiguration = this.Configuration;
+            if (currentConfiguration == null)
+            {
+                saveException = null;
+                return false;
             }
 
-            saveException = rollbackException == null ? ex : new AggregateException(ex, rollbackException);
-            return false;
+            var rollbackConfiguration = CloneConfiguration(currentConfiguration);
+            PluginConfiguration? updatedConfiguration;
+            try
+            {
+                updatedConfiguration = update(currentConfiguration);
+            }
+            catch (Exception ex)
+            {
+                saveException = ex;
+                return false;
+            }
+
+            if (updatedConfiguration == null)
+            {
+                saveException = null;
+                return true;
+            }
+
+            return this.TrySaveConfigurationSafely(updatedConfiguration, rollbackConfiguration, out saveException);
         }
+    }
+
+    /// <summary>
+    /// 浅克隆插件配置（属性级），用于配置保存失败回滚与基于最新配置的增量修改。
+    /// </summary>
+    internal static PluginConfiguration CloneConfiguration(PluginConfiguration source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var clone = new PluginConfiguration();
+        foreach (var property in typeof(PluginConfiguration)
+                     .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                     .Where(static property => property.CanRead && property.CanWrite && property.GetIndexParameters().Length == 0))
+        {
+            property.SetValue(clone, property.GetValue(source));
+        }
+
+        return clone;
     }
 }

@@ -627,6 +627,9 @@
                         checkDoubanLogin();
 
                         Dashboard.hideLoadingMsg();
+                    }).catch(function () {
+                        // 配置读取失败时同样要关闭遮罩，否则页面会一直卡在 loading。
+                        Dashboard.hideLoadingMsg();
                     });
                 });
 
@@ -773,13 +776,16 @@
                 }
 
 
-                $.getJSON("/plugin/metashark/douban/checklogin", function (resp) {
-                    if (resp && resp.code != 1) {
-                        $('#login_msg').css("color", "red").text('(已失效)').show();
-                    } else {
-                        $('#login_msg').css("color", "green").text('(已生效)').show();
-                    }
-                })
+                // Jellyfin 可能部署在子路径（--baseurl），必须经 ApiClient.getUrl 生成地址。
+                ApiClient.getUrl('plugin/metashark/douban/checklogin').then(function (checkLoginUrl) {
+                    $.getJSON(checkLoginUrl, function (resp) {
+                        if (resp && resp.code != 1) {
+                            $('#login_msg').css("color", "red").text('(已失效)').show();
+                        } else {
+                            $('#login_msg').css("color", "green").text('(已生效)').show();
+                        }
+                    });
+                });
             }
 
             function refreshSeriesIfMappingChanged(oldManualMapping, newManualMapping, oldLlmMapping, newLlmMapping) {
@@ -790,7 +796,9 @@
                 }
 
                 Dashboard.showLoadingMsg();
-                $.ajax({
+
+                // 该接口需要 Jellyfin 鉴权；ApiClient.ajax 会自动携带当前会话令牌。
+                ApiClient.ajax({
                     type: 'POST',
                     url: '/plugin/metashark/tmdb/refresh-series',
                     contentType: 'application/json; charset=utf-8',
@@ -798,13 +806,17 @@
                         oldMapping: getEffectiveEpisodeGroupMap(oldManualMapping || '', oldLlmMapping || ''),
                         newMapping: getEffectiveEpisodeGroupMap(newManualMapping || '', newLlmMapping || '')
                     })
-                }).done(function (resp) {
+                }).then(function (resp) {
                     if (resp && resp.code === 1) {
                         Dashboard.alert(resp.msg || '已刷新节目元数据');
                     } else if (resp && resp.msg) {
                         Dashboard.alert(resp.msg);
                     }
-                }).always(function () {
+                }, function () {
+                    // 失败信息由 ApiClient 统一提示。
+                }).then(function () {
+                    Dashboard.hideLoadingMsg();
+                }, function () {
                     Dashboard.hideLoadingMsg();
                 });
             }

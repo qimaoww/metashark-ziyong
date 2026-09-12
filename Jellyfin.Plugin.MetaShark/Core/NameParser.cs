@@ -5,13 +5,13 @@
 namespace Jellyfin.Plugin.MetaShark.Core
 {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
     using System.Text;
     using System.Text.RegularExpressions;
     using System.Threading.Tasks;
-    using Emby.Naming.TV;
     using Jellyfin.Plugin.MetaShark.Model;
 
     public static class NameParser
@@ -34,6 +34,13 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
         private static readonly Regex EpisodePatternReg = new Regex(@"S\d{1,2}E\d{1,3}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        private const int ParseCacheLimit = 4096;
+
+        private static readonly ConcurrentDictionary<string, ParseNameResult> ParseCache = new ConcurrentDictionary<string, ParseNameResult>(StringComparer.Ordinal);
+
+        // NamingOptions 的构造与其中的正则生成非常昂贵（毫秒级/数十毫秒级），宿主自身也是单例只读使用。
+        private static readonly Emby.Naming.Common.NamingOptions DefaultNamingOptions = new Emby.Naming.Common.NamingOptions();
+
         private static readonly string[] ExtraKeywords =
         {
             "MENU",
@@ -45,7 +52,29 @@ namespace Jellyfin.Plugin.MetaShark.Core
             "EXTRA",
         };
 
+        /// <summary>
+        /// 解析入口带结果缓存：同一次刷新里 BaseProvider/EpisodeProvider/图片 provider 会对同一文件名重复解析。
+        /// </summary>
         public static ParseNameResult Parse(string fileName, bool isEpisode = false)
+        {
+            var sourceName = fileName ?? string.Empty;
+            var cacheKey = string.Concat(isEpisode ? "E|" : "M|", sourceName);
+            if (ParseCache.TryGetValue(cacheKey, out var cachedResult))
+            {
+                return cachedResult;
+            }
+
+            var parsedResult = ParseCore(sourceName, isEpisode);
+            if (ParseCache.Count >= ParseCacheLimit)
+            {
+                ParseCache.Clear();
+            }
+
+            ParseCache[cacheKey] = parsedResult;
+            return parsedResult;
+        }
+
+        private static ParseNameResult ParseCore(string fileName, bool isEpisode)
         {
             fileName = NormalizeFileName(fileName ?? string.Empty);
 
@@ -189,7 +218,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
             fileName = ResolutionReg.Replace(fileName, string.Empty);
 
             var parseResult = new ParseNameResult();
-            var nameOptions = new Emby.Naming.Common.NamingOptions();
+            var nameOptions = DefaultNamingOptions;
             var result = Emby.Naming.Video.VideoResolver.CleanDateTime(fileName, nameOptions);
             if (Emby.Naming.Video.VideoResolver.TryCleanString(result.Name, nameOptions, out var cleanName))
             {
@@ -203,19 +232,6 @@ namespace Jellyfin.Plugin.MetaShark.Core
             }
 
             return parseResult;
-        }
-
-        /// <summary>
-        /// emby原始剧集解析.
-        /// </summary>
-        /// <returns></returns>
-        public static EpisodePathParserResult ParseEpisodeByDefault(string fileName)
-        {
-            // EpisodePathParser需要路径信息， 这里添加一个分隔符模拟路径
-            var path = Path.DirectorySeparatorChar + fileName;
-            var nameOptions = new Emby.Naming.Common.NamingOptions();
-            return new EpisodePathParser(nameOptions)
-                .Parse(path, false);
         }
 
         public static bool IsSpecialDirectory(string path, bool isDirectory = false)
@@ -258,27 +274,27 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return false;
             }
 
-            if (Regex.Match(name, @"【[+0-9XVPI-]+】\s*【", RegexOptions.IgnoreCase).Success)
+            if (Regex.IsMatch(name, @"【[+0-9XVPI-]+】\s*【", RegexOptions.IgnoreCase))
             {
                 return true;
             }
 
-            if (Regex.Match(name, @"\s+-\s+[\dv]{1,4}\s+", RegexOptions.IgnoreCase).Success)
+            if (Regex.IsMatch(name, @"\s+-\s+[\dv]{1,4}\s+", RegexOptions.IgnoreCase))
             {
                 return true;
             }
 
-            if (Regex.Match(name, @"S\d{2}\s*-\s*S\d{2}|S\d{2}|\s+S\d{1,2}|EP?\d{2,4}\s*-\s*EP?\d{2,4}|EP?\d{2,4}|\s+EP?\d{1,4}", RegexOptions.IgnoreCase).Success)
+            if (Regex.IsMatch(name, @"S\d{2}\s*-\s*S\d{2}|S\d{2}|\s+S\d{1,2}|EP?\d{2,4}\s*-\s*EP?\d{2,4}|EP?\d{2,4}|\s+EP?\d{1,4}", RegexOptions.IgnoreCase))
             {
                 return true;
             }
 
-            if (Regex.Match(name, @"\[[+0-9XVPI-]+]\s*\[", RegexOptions.IgnoreCase).Success)
+            if (Regex.IsMatch(name, @"\[[+0-9XVPI-]+]\s*\[", RegexOptions.IgnoreCase))
             {
                 return true;
             }
 
-            if (Regex.Match(name, @"\[.+\].*?\[.+?\]", RegexOptions.IgnoreCase).Success)
+            if (Regex.IsMatch(name, @"\[.+\].*?\[.+?\]", RegexOptions.IgnoreCase))
             {
                 return true;
             }
