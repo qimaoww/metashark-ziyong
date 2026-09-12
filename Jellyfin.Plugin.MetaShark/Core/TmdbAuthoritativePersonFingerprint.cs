@@ -48,17 +48,91 @@ namespace Jellyfin.Plugin.MetaShark.Core
         /// Jellyfin 12 的 GetPeople/GetPeopleByItems 投影不再包含 ProviderIds，
         /// 需要经 Person 实体读取 TMDb id；实体缺失时回退到传入对象（测试替身等场景）。
         /// </summary>
-        internal static object? ResolvePersonForProviderIds(object? person, ILibraryManager? libraryManager)
+        internal static object? ResolvePersonForProviderIds(
+            object? person,
+            ILibraryManager? libraryManager,
+            IDictionary<string, Dictionary<string, string>?>? providerIdsCache = null)
         {
-            if (person is PersonInfo personInfo
-                && personInfo.Id != Guid.Empty
-                && libraryManager != null
-                && libraryManager.GetItemById(personInfo.Id) is Person entity)
+            if (person is not PersonInfo personInfo || libraryManager == null)
+            {
+                return person;
+            }
+
+            // Jellyfin 12 的 GetPeople/GetPeopleByItems 投影已经带上了 ProviderIds 时无需再查。
+            if (personInfo.ProviderIds is { Count: > 0 })
+            {
+                return personInfo;
+            }
+
+            var cacheKey = string.IsNullOrWhiteSpace(personInfo.Name) ? null : personInfo.Name;
+            Dictionary<string, string>? providerIds;
+            if (cacheKey != null && providerIdsCache != null && providerIdsCache.TryGetValue(cacheKey, out var cachedProviderIds))
+            {
+                providerIds = cachedProviderIds;
+            }
+            else
+            {
+                // Jellyfin 12 的 PersonInfo.Id 是 Peoples 实体 Id，并不是 BaseItems 里 Person 条目的 Id，
+                // 用 GetItemById 查不到；必须按人物名取 Person 条目才能读到 ProviderIds。
+                providerIds = ResolvePersonEntity(personInfo, libraryManager)?.ProviderIds;
+
+                if (cacheKey != null && providerIdsCache != null)
+                {
+                    providerIdsCache[cacheKey] = providerIds;
+                }
+            }
+
+            // Person 条目只有 ProviderIds，实体上没有 Type/Role；PersonInfo 反之。
+            // 因此把条目的 ProviderIds 合并回 PersonInfo 后再构造指纹。
+            return MergeProviderIds(personInfo, providerIds) ? personInfo : person;
+        }
+
+        /// <summary>
+        /// 按人物名解析 Jellyfin 的 Person 条目，回退到 PersonInfo.Id 恰好为条目 Id 的实现（以及测试替身）。
+        /// </summary>
+        internal static Person? ResolvePersonEntity(PersonInfo personInfo, ILibraryManager? libraryManager)
+        {
+            if (personInfo == null || libraryManager == null)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(personInfo.Name)
+                && libraryManager.GetPerson(personInfo.Name) is Person personByName)
+            {
+                return personByName;
+            }
+
+            if (personInfo.Id != Guid.Empty && libraryManager.GetItemById(personInfo.Id) is Person entity)
             {
                 return entity;
             }
 
-            return person;
+            return null;
+        }
+
+        /// <summary>
+        /// 把 Person 条目的 ProviderIds 合并进 PersonInfo，保留 PersonInfo 上的 Type/Role。
+        /// </summary>
+        internal static bool MergeProviderIds(PersonInfo? personInfo, IReadOnlyDictionary<string, string>? providerIds)
+        {
+            if (personInfo == null || providerIds is not { Count: > 0 })
+            {
+                return false;
+            }
+
+            personInfo.ProviderIds ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var merged = false;
+            foreach (var pair in providerIds)
+            {
+                if (!string.IsNullOrWhiteSpace(pair.Value))
+                {
+                    personInfo.ProviderIds[pair.Key] = pair.Value;
+                    merged = true;
+                }
+            }
+
+            return merged;
         }
 
         public static bool TryCreateFromCurrentPerson(object? person, out TmdbAuthoritativePersonFingerprint? fingerprint)
