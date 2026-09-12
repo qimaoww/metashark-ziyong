@@ -79,9 +79,35 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return false;
             }
 
-            return string.Equals(this.ItemType, other.ItemType, StringComparison.Ordinal)
-                && string.Equals(this.TmdbId, other.TmdbId, StringComparison.Ordinal)
-                && this.CreateFingerprintKeySet().SetEquals(other.CreateFingerprintKeySet());
+            if (ReferenceEquals(this, other))
+            {
+                return true;
+            }
+
+            if (!string.Equals(this.ItemType, other.ItemType, StringComparison.Ordinal)
+                || !string.Equals(this.TmdbId, other.TmdbId, StringComparison.Ordinal)
+                || this.People.Count != other.People.Count)
+            {
+                return false;
+            }
+
+            // 用 (TmdbPersonId, PersonType, Role) 元组集合比较：ValueTuple 的字符串比较是 Ordinal，
+            // 且不必为每个人构造 "a|b|c" 字符串，也省掉第二个 HashSet。
+            var remaining = new HashSet<(string TmdbPersonId, string PersonType, string Role)>(this.People.Count);
+            foreach (var fingerprint in this.People)
+            {
+                remaining.Add((fingerprint.TmdbPersonId, fingerprint.PersonType, fingerprint.Role));
+            }
+
+            foreach (var fingerprint in other.People)
+            {
+                if (!remaining.Remove((fingerprint.TmdbPersonId, fingerprint.PersonType, fingerprint.Role)))
+                {
+                    return false;
+                }
+            }
+
+            return remaining.Count == 0;
         }
 
         public TmdbAuthoritativePeopleSnapshot Clone()
@@ -183,11 +209,6 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
             fingerprints = result;
             return true;
-        }
-
-        private HashSet<string> CreateFingerprintKeySet()
-        {
-            return new HashSet<string>(this.People.Select(static fingerprint => fingerprint.ToKey()), StringComparer.Ordinal);
         }
     }
 }

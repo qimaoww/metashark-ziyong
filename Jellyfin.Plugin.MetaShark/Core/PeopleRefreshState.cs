@@ -26,9 +26,14 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
         public DateTimeOffset UpdatedAtUtc { get; set; }
 
-        public static CurrentItemAuthoritativePeopleStatus GetCurrentAuthoritativePeopleStatus(BaseItem? item, PeopleRefreshState? state)
+        public static CurrentItemAuthoritativePeopleStatus GetCurrentAuthoritativePeopleStatus(
+            BaseItem? item,
+            PeopleRefreshState? state,
+            TmdbAuthoritativePeopleSnapshot? currentSnapshot = null)
         {
-            return CurrentItemAuthoritativePeopleChecker.Check(item, state);
+            return currentSnapshot == null
+                ? CurrentItemAuthoritativePeopleChecker.Check(item, state)
+                : CurrentItemAuthoritativePeopleChecker.Check(item, state?.AuthoritativePeopleSnapshot, currentSnapshot);
         }
 
         public static bool RequiresBackfill(BaseItem? item, PeopleRefreshState? state)
@@ -36,7 +41,10 @@ namespace Jellyfin.Plugin.MetaShark.Core
             return IsInScope(item) && !HasCurrentState(item, state);
         }
 
-        public static bool HasCurrentState(BaseItem? item, PeopleRefreshState? state)
+        public static bool HasCurrentState(
+            BaseItem? item,
+            PeopleRefreshState? state,
+            TmdbAuthoritativePeopleSnapshot? currentSnapshot = null)
         {
             if (!TryGetIdentity(item, out var itemId, out var itemType, out var tmdbId))
             {
@@ -48,8 +56,17 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return false;
             }
 
-            return state.AuthoritativePeopleSnapshot != null
-                && CurrentItemAuthoritativePeopleChecker.IsAuthoritative(item, state);
+            if (state.AuthoritativePeopleSnapshot == null)
+            {
+                return false;
+            }
+
+            // currentSnapshot 为 null 表示调用方没有预取（或条目确实没有人物），
+            // 此时沿用会自行取快照的旧判定，保持既有语义。
+            return currentSnapshot == null
+                ? CurrentItemAuthoritativePeopleChecker.IsAuthoritative(item, state)
+                : CurrentItemAuthoritativePeopleChecker.Check(item, state.AuthoritativePeopleSnapshot, currentSnapshot)
+                    != CurrentItemAuthoritativePeopleStatus.NonAuthoritative;
         }
 
         public static bool IsMissing(BaseItem? item, PeopleRefreshState? state)

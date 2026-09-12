@@ -137,7 +137,13 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             var legacyResidueRemoved = !itemLocked && RemoveLegacyPeopleRefreshStateProviderId(item);
 
-            if (authoritativePeopleSnapshot == null && PeopleRefreshState.HasCurrentState(item, currentState))
+            // 同一条目事件最多只取一次当前人物快照，后续状态判定与结算共用，
+            // 避免对同一条目重复查询人物（人物图片事件可能成百上千条）。
+            var currentPeopleSnapshot = TmdbAuthoritativePeopleSnapshot.TryCreateFromCurrentItem(item, out var resolvedPeopleSnapshot)
+                ? resolvedPeopleSnapshot
+                : null;
+
+            if (authoritativePeopleSnapshot == null && PeopleRefreshState.HasCurrentState(item, currentState, currentPeopleSnapshot))
             {
                 await this.PersistLegacyResidueCleanupAsync(item, triggerName, e.UpdateReason, legacyResidueRemoved, cancellationToken).ConfigureAwait(false);
                 var legacyNfoResidueRemoved = !itemLocked && this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
@@ -153,16 +159,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             if (authoritativePeopleSnapshot == null
                 && currentState?.AuthoritativePeopleSnapshot != null
-                && PeopleRefreshState.GetCurrentAuthoritativePeopleStatus(item, currentState) == CurrentItemAuthoritativePeopleStatus.NonAuthoritative)
+                && PeopleRefreshState.GetCurrentAuthoritativePeopleStatus(item, currentState, currentPeopleSnapshot) == CurrentItemAuthoritativePeopleStatus.NonAuthoritative)
             {
                 this.LogSkip("CurrentItemNotAuthoritative", triggerName, item, e.UpdateReason, PeopleRefreshState.CurrentVersion);
                 return;
             }
 
-            var settlementAuthoritativePeopleSnapshot = authoritativePeopleSnapshot;
-            if (settlementAuthoritativePeopleSnapshot == null
-                && (!TmdbAuthoritativePeopleSnapshot.TryCreateFromCurrentItem(item, out settlementAuthoritativePeopleSnapshot)
-                    || settlementAuthoritativePeopleSnapshot == null))
+            var settlementAuthoritativePeopleSnapshot = authoritativePeopleSnapshot ?? currentPeopleSnapshot;
+            if (settlementAuthoritativePeopleSnapshot == null)
             {
                 this.LogSkip("StateSnapshotRejected", triggerName, item, e.UpdateReason, null);
                 return;
