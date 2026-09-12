@@ -10,6 +10,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -76,13 +77,15 @@ namespace AnitomySharp
         private static bool IsValidEpisodeNumber(string number)
         {
             // Eliminate non numeric portion of number, then parse as double.
-            var temp = "";
-            for (var i = 0; i < number.Length && char.IsDigit(number[i]); i++)
+            var length = 0;
+            while (length < number.Length && char.IsDigit(number[length]))
             {
-                temp += number[i];
+                length++;
             }
 
-            return !string.IsNullOrEmpty(temp) && double.Parse(temp) <= EpisodeNumberMax;
+            return length > 0
+                && double.TryParse(number.AsSpan(0, length), NumberStyles.None, CultureInfo.InvariantCulture, out var value)
+                && value <= EpisodeNumberMax;
         }
 
         /// <summary>
