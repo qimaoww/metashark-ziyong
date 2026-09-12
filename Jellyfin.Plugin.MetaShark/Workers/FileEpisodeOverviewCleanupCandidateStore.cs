@@ -15,10 +15,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "[MetaShark] 剧集简介清理候选加载失败，已重置状态. path={Path}.");
 
         private readonly object syncRoot = new object();
-        private DateTimeOffset nextSweepAtUtc;
         private readonly ILogger<FileEpisodeOverviewCleanupCandidateStore> logger;
         private readonly string stateFilePath;
         private readonly Dictionary<string, Guid> itemIdsByPath = new Dictionary<string, Guid>(GetPathComparer());
+        private DateTimeOffset nextSweepAtUtc;
         private Dictionary<Guid, EpisodeOverviewCleanupCandidate>? candidatesByItemId;
 
         public FileEpisodeOverviewCleanupCandidateStore(string stateFilePath, ILoggerFactory loggerFactory)

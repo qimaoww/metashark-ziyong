@@ -114,7 +114,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             // 识别：info的Name、IndexNumber和ParentIndexNumber是从文件名解析出来的，provinceIds有指定选择项的ProvinceId
             // 覆盖所有元数据：info的Name、IndexNumber和ParentIndexNumber是从文件名解析出来的，provinceIds保留所有旧值
             // 搜索缺少的元数据：info的Name、IndexNumber和ParentIndexNumber是从当前的元数据获取，provinceIds保留所有旧值
-            using var pathLookupScope = this.BeginPathLookupScope();
+            using var pathLookupScope = BeginPathLookupScope();
             var fileName = Path.GetFileName(info.Path);
             this.Log("开始获取单集元数据. name: {0} fileName: {1} episodeNumber: {2} seasonNumber: {3} isMissingEpisode: {4} enableTmdb: {5} displayOrder: {6}", info.Name, fileName, info.IndexNumber, info.ParentIndexNumber, info.IsMissingEpisode, Config.EnableTmdb, info.SeriesDisplayOrder);
             var result = new MetadataResult<Episode>();
@@ -1211,53 +1211,59 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var series = DescribeOverviewText(seriesOverview, null);
             var season = DescribeOverviewText(seasonOverview, null);
 
-            this.Logger.LogDebug(
-                "[MetaShark] 剧集简介诊断输入. itemId={ItemId} itemPath={ItemPath} detailsOverviewState={DetailsOverviewState} detailsOverviewLength={DetailsOverviewLength} detailsOverviewHash={DetailsOverviewHash} detailsOverviewSourceLanguage={DetailsOverviewSourceLanguage} detailsOverviewScriptKind={DetailsOverviewScriptKind} translationOverviewState={TranslationOverviewState} translationOverviewLength={TranslationOverviewLength} translationOverviewHash={TranslationOverviewHash} translationOverviewSourceLanguage={TranslationOverviewSourceLanguage} translationOverviewScriptKind={TranslationOverviewScriptKind} seriesOverviewState={SeriesOverviewState} seriesOverviewLength={SeriesOverviewLength} seriesOverviewHash={SeriesOverviewHash} seriesOverviewSourceLanguage={SeriesOverviewSourceLanguage} seriesOverviewScriptKind={SeriesOverviewScriptKind} seasonOverviewState={SeasonOverviewState} seasonOverviewLength={SeasonOverviewLength} seasonOverviewHash={SeasonOverviewHash} seasonOverviewSourceLanguage={SeasonOverviewSourceLanguage} seasonOverviewScriptKind={SeasonOverviewScriptKind} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
-                itemId,
-                itemPath,
-                details.State,
-                details.Length,
-                details.Hash,
-                details.SourceLanguage,
-                details.ScriptKind,
-                translation.State,
-                translation.Length,
-                translation.Hash,
-                translation.SourceLanguage,
-                translation.ScriptKind,
-                series.State,
-                series.Length,
-                series.Hash,
-                series.SourceLanguage,
-                series.ScriptKind,
-                season.State,
-                season.Length,
-                season.Hash,
-                season.SourceLanguage,
-                season.ScriptKind,
-                metadataRefreshMode ?? string.Empty,
-                replaceAllMetadata ?? string.Empty);
+            if (this.Logger.IsEnabled(LogLevel.Debug))
+            {
+                this.Logger.LogDebug(
+                    "[MetaShark] 剧集简介诊断输入. itemId={ItemId} itemPath={ItemPath} detailsOverviewState={DetailsOverviewState} detailsOverviewLength={DetailsOverviewLength} detailsOverviewHash={DetailsOverviewHash} detailsOverviewSourceLanguage={DetailsOverviewSourceLanguage} detailsOverviewScriptKind={DetailsOverviewScriptKind} translationOverviewState={TranslationOverviewState} translationOverviewLength={TranslationOverviewLength} translationOverviewHash={TranslationOverviewHash} translationOverviewSourceLanguage={TranslationOverviewSourceLanguage} translationOverviewScriptKind={TranslationOverviewScriptKind} seriesOverviewState={SeriesOverviewState} seriesOverviewLength={SeriesOverviewLength} seriesOverviewHash={SeriesOverviewHash} seriesOverviewSourceLanguage={SeriesOverviewSourceLanguage} seriesOverviewScriptKind={SeriesOverviewScriptKind} seasonOverviewState={SeasonOverviewState} seasonOverviewLength={SeasonOverviewLength} seasonOverviewHash={SeasonOverviewHash} seasonOverviewSourceLanguage={SeasonOverviewSourceLanguage} seasonOverviewScriptKind={SeasonOverviewScriptKind} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                    itemId,
+                    itemPath,
+                    details.State,
+                    details.Length,
+                    details.Hash,
+                    details.SourceLanguage,
+                    details.ScriptKind,
+                    translation.State,
+                    translation.Length,
+                    translation.Hash,
+                    translation.SourceLanguage,
+                    translation.ScriptKind,
+                    series.State,
+                    series.Length,
+                    series.Hash,
+                    series.SourceLanguage,
+                    series.ScriptKind,
+                    season.State,
+                    season.Length,
+                    season.Hash,
+                    season.SourceLanguage,
+                    season.ScriptKind,
+                    metadataRefreshMode ?? string.Empty,
+                    replaceAllMetadata ?? string.Empty);
+            }
         }
 
         private void LogOverviewDiagnosticsDecision(Guid itemId, string itemPath, EpisodeLocalizedValue? selectedOverview, string selectedOverviewSource, string rejectReason, string translationRejectReason, string detailsRejectReason, string? metadataRefreshMode, string? replaceAllMetadata)
         {
             var selected = DescribeOverviewText(selectedOverview?.Value, selectedOverview?.SourceLanguage);
 
-            this.Logger.LogDebug(
-                "[MetaShark] 剧集简介诊断决策. itemId={ItemId} itemPath={ItemPath} selectedOverviewState={SelectedOverviewState} selectedOverviewLength={SelectedOverviewLength} selectedOverviewHash={SelectedOverviewHash} selectedOverviewSourceLanguage={SelectedOverviewSourceLanguage} selectedOverviewScriptKind={SelectedOverviewScriptKind} selectedOverviewSource={SelectedOverviewSource} rejectReason={RejectReason} translationRejectReason={TranslationRejectReason} detailsRejectReason={DetailsRejectReason} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
-                itemId,
-                itemPath,
-                selected.State,
-                selected.Length,
-                selected.Hash,
-                selected.SourceLanguage,
-                selected.ScriptKind,
-                selectedOverviewSource,
-                rejectReason,
-                translationRejectReason,
-                detailsRejectReason,
-                metadataRefreshMode ?? string.Empty,
-                replaceAllMetadata ?? string.Empty);
+            if (this.Logger.IsEnabled(LogLevel.Debug))
+            {
+                this.Logger.LogDebug(
+                    "[MetaShark] 剧集简介诊断决策. itemId={ItemId} itemPath={ItemPath} selectedOverviewState={SelectedOverviewState} selectedOverviewLength={SelectedOverviewLength} selectedOverviewHash={SelectedOverviewHash} selectedOverviewSourceLanguage={SelectedOverviewSourceLanguage} selectedOverviewScriptKind={SelectedOverviewScriptKind} selectedOverviewSource={SelectedOverviewSource} rejectReason={RejectReason} translationRejectReason={TranslationRejectReason} detailsRejectReason={DetailsRejectReason} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                    itemId,
+                    itemPath,
+                    selected.State,
+                    selected.Length,
+                    selected.Hash,
+                    selected.SourceLanguage,
+                    selected.ScriptKind,
+                    selectedOverviewSource,
+                    rejectReason,
+                    translationRejectReason,
+                    detailsRejectReason,
+                    metadataRefreshMode ?? string.Empty,
+                    replaceAllMetadata ?? string.Empty);
+            }
         }
 
 #pragma warning restore CA1848

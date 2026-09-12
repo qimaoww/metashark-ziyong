@@ -482,7 +482,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var request = new LlmScrapingAssistRequest
             {
                 Configuration = Config,
-                LookupInfo = CreateLlmLookupInfo(info),
+                LookupInfo = this.CreateLlmLookupInfo(info),
                 MediaType = nameof(Season),
                 Semantic = semantic,
                 IsImageProvider = false,

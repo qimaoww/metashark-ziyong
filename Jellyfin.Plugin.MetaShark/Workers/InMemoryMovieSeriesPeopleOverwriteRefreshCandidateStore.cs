@@ -14,8 +14,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
         private readonly object syncRoot = new object();
         private readonly Dictionary<Guid, MovieSeriesPeopleOverwriteRefreshCandidate> candidatesByItemId = new Dictionary<Guid, MovieSeriesPeopleOverwriteRefreshCandidate>();
-        private DateTimeOffset nextSweepAtUtc;
         private readonly Dictionary<string, Guid> itemIdsByPath = new Dictionary<string, Guid>(GetPathComparer());
+        private DateTimeOffset nextSweepAtUtc;
 
         public static InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore Shared { get; } = new InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore();
 

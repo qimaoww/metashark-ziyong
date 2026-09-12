@@ -64,10 +64,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             {
                 this.DispatchItemUpdated(e);
             }
+#pragma warning disable CA1031 // 插件后处理异常只记录，不能抛回 Jellyfin 的事件调用栈。
             catch (Exception ex)
             {
                 LogPostProcessFailed(this.logger, item?.Id ?? Guid.Empty, e.UpdateReason, ex);
             }
+#pragma warning restore CA1031
         }
     }
 }

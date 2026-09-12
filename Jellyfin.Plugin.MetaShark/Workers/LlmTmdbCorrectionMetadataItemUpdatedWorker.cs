@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using Microsoft.Extensions.Hosting;
     using Microsoft.Extensions.Logging;
 
-    public sealed class LlmTmdbCorrectionMetadataItemUpdatedWorker : IHostedService
+    public sealed class LlmTmdbCorrectionMetadataItemUpdatedWorker : IHostedService, IDisposable
     {
         private static readonly Action<ILogger, Exception?> LogWorkerStart =
             LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "[MetaShark] 开始 LLM TMDb 纠错元数据条目更新工作器.");
@@ -50,6 +50,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         {
             this.libraryManager.ItemUpdated -= this.OnItemUpdated;
             await this.dispatchQueue.StopAsync().ConfigureAwait(false);
+        }
+
+        public void Dispose()
+        {
+            this.dispatchQueue.Dispose();
+            GC.SuppressFinalize(this);
         }
 
         internal void DispatchItemUpdated(ItemChangeEventArgs e)

@@ -35,7 +35,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.Llm
                 }
             }
 
-            var snapshot = ParseSnapshotCore(normalizedMapping);
+            var snapshot = this.ParseSnapshotCore(normalizedMapping);
             lock (this.cacheLock)
             {
                 this.cachedMapping = normalizedMapping;

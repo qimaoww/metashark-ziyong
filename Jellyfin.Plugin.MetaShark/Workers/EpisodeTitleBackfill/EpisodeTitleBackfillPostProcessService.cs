@@ -90,12 +90,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
                 return;
             }
 
-            this.logger.LogDebug(
-                "[MetaShark] 收到剧集标题回填后处理事件. trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
-                triggerName,
-                episode.Id,
-                episode.Path ?? string.Empty,
-                e.UpdateReason);
+            if (this.logger.IsEnabled(LogLevel.Debug))
+            {
+                this.logger.LogDebug(
+                    "[MetaShark] 收到剧集标题回填后处理事件. trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                    triggerName,
+                    episode.Id,
+                    episode.Path ?? string.Empty,
+                    e.UpdateReason);
+            }
+
             var claimToken = Guid.NewGuid().ToString("N");
             var currentTitle = (episode.Name ?? string.Empty).Trim();
 
@@ -187,14 +191,17 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             }
 
             this.pendingResolver.Complete(candidate);
-            this.logger.LogInformation(
-                "[MetaShark] 已应用剧集标题回填. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
-                episode.Id,
-                triggerName,
-                itemPath,
-                currentTitle,
-                candidateTitle,
-                e.UpdateReason);
+            if (this.logger.IsEnabled(LogLevel.Information))
+            {
+                this.logger.LogInformation(
+                    "[MetaShark] 已应用剧集标题回填. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                    episode.Id,
+                    triggerName,
+                    itemPath,
+                    currentTitle,
+                    candidateTitle,
+                    e.UpdateReason);
+            }
         }
 
         private static void ValidateTriggerName(string triggerName)
@@ -224,29 +231,35 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
         {
             if (string.IsNullOrWhiteSpace(detail))
             {
+                if (this.logger.IsEnabled(LogLevel.Information))
+                {
+                    this.logger.LogInformation(
+                        "[MetaShark] 跳过剧集标题回填. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                        reason,
+                        triggerName,
+                        episode.Id,
+                        episode.Path ?? string.Empty,
+                        currentTitle,
+                        candidateTitle,
+                        updateReason);
+                }
+
+                return;
+            }
+
+            if (this.logger.IsEnabled(LogLevel.Information))
+            {
                 this.logger.LogInformation(
-                    "[MetaShark] 跳过剧集标题回填. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason}.",
+                    "[MetaShark] 跳过剧集标题回填. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason} detail={Detail}.",
                     reason,
                     triggerName,
                     episode.Id,
                     episode.Path ?? string.Empty,
                     currentTitle,
                     candidateTitle,
-                    updateReason);
-
-                return;
+                    updateReason,
+                    detail);
             }
-
-            this.logger.LogInformation(
-                "[MetaShark] 跳过剧集标题回填. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} currentTitle={CurrentTitle} candidateTitle={CandidateTitle} updateReason={UpdateReason} detail={Detail}.",
-                reason,
-                triggerName,
-                episode.Id,
-                episode.Path ?? string.Empty,
-                currentTitle,
-                candidateTitle,
-                updateReason,
-                detail);
         }
 #pragma warning restore CA1848
     }

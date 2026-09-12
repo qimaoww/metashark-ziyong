@@ -15,10 +15,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1, nameof(EnsureLoaded)), "[MetaShark] 剧集标题回填候选加载失败，已重置状态. path={Path}.");
 
         private readonly object syncRoot = new object();
-        private DateTimeOffset nextSweepAtUtc;
         private readonly ILogger<FileEpisodeTitleBackfillCandidateStore> logger;
         private readonly string stateFilePath;
         private readonly Dictionary<string, Guid> itemIdsByPath = new Dictionary<string, Guid>(GetPathComparer());
+        private DateTimeOffset nextSweepAtUtc;
         private Dictionary<Guid, EpisodeTitleBackfillCandidate>? candidatesByItemId;
 
         public FileEpisodeTitleBackfillCandidateStore(string stateFilePath, ILoggerFactory loggerFactory)

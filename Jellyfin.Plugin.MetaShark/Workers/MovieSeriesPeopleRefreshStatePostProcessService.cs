@@ -82,12 +82,15 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            this.logger.LogDebug(
-                "[MetaShark] 收到影视人物刷新状态后处理事件. trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
-                triggerName,
-                item.Id,
-                item.Path ?? string.Empty,
-                e.UpdateReason);
+            if (this.logger.IsEnabled(LogLevel.Debug))
+            {
+                this.logger.LogDebug(
+                    "[MetaShark] 收到影视人物刷新状态后处理事件. trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                    triggerName,
+                    item.Id,
+                    item.Path ?? string.Empty,
+                    e.UpdateReason);
+            }
 
             if (item is Person person)
             {
@@ -194,13 +197,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 this.CleanupLegacyPeopleRefreshStateNfoResidue(item, triggerName, e.UpdateReason);
             }
 
-            this.logger.LogInformation(
-                "[MetaShark] 已结清影视人物刷新状态. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} stateVersion={StateVersion}.",
-                item.Id,
-                triggerName,
-                item.Path ?? string.Empty,
-                e.UpdateReason,
-                PeopleRefreshState.CurrentVersion);
+            if (this.logger.IsEnabled(LogLevel.Information))
+            {
+                this.logger.LogInformation(
+                    "[MetaShark] 已结清影视人物刷新状态. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} stateVersion={StateVersion}.",
+                    item.Id,
+                    triggerName,
+                    item.Path ?? string.Empty,
+                    e.UpdateReason,
+                    PeopleRefreshState.CurrentVersion);
+            }
         }
 #pragma warning restore CA1848
 
@@ -417,13 +423,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 throw;
             }
 
-            this.logger.LogInformation(
-                "[MetaShark] 已清理影视人物刷新 legacy provider id 残留. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} providerId={ProviderId}.",
-                item.Id,
-                triggerName,
-                item.Path ?? string.Empty,
-                updateReason,
-                LegacyPeopleRefreshStateProviderId);
+            if (this.logger.IsEnabled(LogLevel.Information))
+            {
+                this.logger.LogInformation(
+                    "[MetaShark] 已清理影视人物刷新 legacy provider id 残留. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} providerId={ProviderId}.",
+                    item.Id,
+                    triggerName,
+                    item.Path ?? string.Empty,
+                    updateReason,
+                    LegacyPeopleRefreshStateProviderId);
+            }
         }
 
         private bool CleanupLegacyPeopleRefreshStateNfoResidue(BaseItem item, string triggerName, ItemUpdateType updateReason)
@@ -453,13 +462,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 }
 
                 cleaned = true;
-                this.logger.LogInformation(
-                    "[MetaShark] 已清理影视人物刷新 legacy NFO 残留. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} nfoPath={NfoPath}.",
-                    item.Id,
-                    triggerName,
-                    item.Path ?? string.Empty,
-                    updateReason,
-                    nfoPath);
+                if (this.logger.IsEnabled(LogLevel.Information))
+                {
+                    this.logger.LogInformation(
+                        "[MetaShark] 已清理影视人物刷新 legacy NFO 残留. itemId={ItemId} trigger={Trigger} itemPath={ItemPath} updateReason={UpdateReason} nfoPath={NfoPath}.",
+                        item.Id,
+                        triggerName,
+                        item.Path ?? string.Empty,
+                        updateReason,
+                        nfoPath);
+                }
             }
 
             return cleaned;
@@ -729,26 +741,33 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         {
             if (string.IsNullOrWhiteSpace(detail))
             {
+                if (this.logger.IsEnabled(level))
+                {
+                    this.logger.Log(
+                        level,
+                        "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                        reason,
+                        triggerName,
+                        item.Id,
+                        item.Path ?? string.Empty,
+                        updateReason);
+                }
+
+                return;
+            }
+
+            if (this.logger.IsEnabled(level))
+            {
                 this.logger.Log(
                     level,
-                    "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason}.",
+                    "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
                     reason,
                     triggerName,
                     item.Id,
                     item.Path ?? string.Empty,
-                    updateReason);
-                return;
+                    updateReason,
+                    detail);
             }
-
-            this.logger.Log(
-                level,
-                "[MetaShark] 跳过影视人物刷新状态结清. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
-                reason,
-                triggerName,
-                item.Id,
-                item.Path ?? string.Empty,
-                updateReason,
-                detail);
         }
 #pragma warning restore CA1848
     }

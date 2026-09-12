@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
     using Microsoft.Extensions.Hosting;
     using Microsoft.Extensions.Logging;
 
-    public sealed class EpisodeTitleBackfillItemUpdatedWorker : IHostedService
+    public sealed class EpisodeTitleBackfillItemUpdatedWorker : IHostedService, IDisposable
     {
         private static readonly Action<ILogger, Exception?> LogWorkerStart =
             LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "[MetaShark] 开始剧集标题回填条目更新工作器.");
@@ -51,6 +51,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
         {
             this.libraryManager.ItemUpdated -= this.OnItemUpdated;
             await this.dispatchQueue.StopAsync().ConfigureAwait(false);
+        }
+
+        public void Dispose()
+        {
+            this.dispatchQueue.Dispose();
+            GC.SuppressFinalize(this);
         }
 
         internal void DispatchItemUpdated(ItemChangeEventArgs e)

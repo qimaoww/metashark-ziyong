@@ -95,49 +95,58 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
 
         private void LogSearchMissingMetadataTitleBackfillInputs(Guid itemId, string itemPath, string? lookupLanguage, string? titleMetadataLanguage, string? episodePreferredLanguage, string? seriesPreferredLanguage, string? seasonPreferredLanguage, EpisodeLocalizedValue? detailsTitle, EpisodeLocalizedValue? translationTitle, EpisodeLocalizedValue? effectiveProviderTitle, bool isSearchMissingMetadataRequest)
         {
-            this.logger.LogInformation(
-                "[MetaShark] 剧集标题回填输入. itemId={ItemId} itemPath={ItemPath} lookupLanguage={LookupLanguage} titleMetadataLanguage={TitleMetadataLanguage} episodePreferredLanguage={EpisodePreferredLanguage} seriesPreferredLanguage={SeriesPreferredLanguage} seasonPreferredLanguage={SeasonPreferredLanguage} detailsTitle={DetailsTitle} detailsTitleSourceLanguage={DetailsTitleSourceLanguage} translationTitle={TranslationTitle} translationTitleSourceLanguage={TranslationTitleSourceLanguage} effectiveProviderTitle={EffectiveProviderTitle} effectiveProviderTitleSourceLanguage={EffectiveProviderTitleSourceLanguage} isSearchMissingMetadataRequest={IsSearchMissingMetadataRequest}.",
-                itemId,
-                itemPath,
-                lookupLanguage ?? string.Empty,
-                titleMetadataLanguage ?? string.Empty,
-                episodePreferredLanguage ?? string.Empty,
-                seriesPreferredLanguage ?? string.Empty,
-                seasonPreferredLanguage ?? string.Empty,
-                detailsTitle?.Value ?? string.Empty,
-                detailsTitle?.SourceLanguage ?? string.Empty,
-                translationTitle?.Value ?? string.Empty,
-                translationTitle?.SourceLanguage ?? string.Empty,
-                effectiveProviderTitle?.Value ?? string.Empty,
-                effectiveProviderTitle?.SourceLanguage ?? string.Empty,
-                isSearchMissingMetadataRequest);
+            if (this.logger.IsEnabled(LogLevel.Information))
+            {
+                this.logger.LogInformation(
+                    "[MetaShark] 剧集标题回填输入. itemId={ItemId} itemPath={ItemPath} lookupLanguage={LookupLanguage} titleMetadataLanguage={TitleMetadataLanguage} episodePreferredLanguage={EpisodePreferredLanguage} seriesPreferredLanguage={SeriesPreferredLanguage} seasonPreferredLanguage={SeasonPreferredLanguage} detailsTitle={DetailsTitle} detailsTitleSourceLanguage={DetailsTitleSourceLanguage} translationTitle={TranslationTitle} translationTitleSourceLanguage={TranslationTitleSourceLanguage} effectiveProviderTitle={EffectiveProviderTitle} effectiveProviderTitleSourceLanguage={EffectiveProviderTitleSourceLanguage} isSearchMissingMetadataRequest={IsSearchMissingMetadataRequest}.",
+                    itemId,
+                    itemPath,
+                    lookupLanguage ?? string.Empty,
+                    titleMetadataLanguage ?? string.Empty,
+                    episodePreferredLanguage ?? string.Empty,
+                    seriesPreferredLanguage ?? string.Empty,
+                    seasonPreferredLanguage ?? string.Empty,
+                    detailsTitle?.Value ?? string.Empty,
+                    detailsTitle?.SourceLanguage ?? string.Empty,
+                    translationTitle?.Value ?? string.Empty,
+                    translationTitle?.SourceLanguage ?? string.Empty,
+                    effectiveProviderTitle?.Value ?? string.Empty,
+                    effectiveProviderTitle?.SourceLanguage ?? string.Empty,
+                    isSearchMissingMetadataRequest);
+            }
         }
 
         private void LogSearchMissingMetadataTitleBackfillQueued(Guid itemId, string itemPath, string originalTitle, string candidateTitle, string? metadataRefreshMode, string? replaceAllMetadata, bool liveVisible)
         {
-            this.logger.Log(
-                liveVisible ? LogLevel.Information : LogLevel.Debug,
-                "[MetaShark] 已排队剧集标题回填. itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} candidateTitle={CandidateTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
-                itemId,
-                itemPath,
-                originalTitle,
-                candidateTitle,
-                metadataRefreshMode ?? string.Empty,
-                replaceAllMetadata ?? string.Empty);
+            if (this.logger.IsEnabled(liveVisible ? LogLevel.Information : LogLevel.Debug))
+            {
+                this.logger.Log(
+                    liveVisible ? LogLevel.Information : LogLevel.Debug,
+                    "[MetaShark] 已排队剧集标题回填. itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} candidateTitle={CandidateTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                    itemId,
+                    itemPath,
+                    originalTitle,
+                    candidateTitle,
+                    metadataRefreshMode ?? string.Empty,
+                    replaceAllMetadata ?? string.Empty);
+            }
         }
 
         private void LogSearchMissingMetadataTitleBackfillDecision(string reason, Guid itemId, string itemPath, string originalTitle, string resolvedTitle, string? metadataRefreshMode, string? replaceAllMetadata, bool liveVisible)
         {
-            this.logger.Log(
-                liveVisible ? LogLevel.Information : LogLevel.Debug,
-                "[MetaShark] 剧集标题回填决策. reason={Reason} itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} resolvedTitle={ResolvedTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
-                reason,
-                itemId,
-                itemPath,
-                originalTitle,
-                resolvedTitle,
-                metadataRefreshMode ?? string.Empty,
-                replaceAllMetadata ?? string.Empty);
+            if (this.logger.IsEnabled(liveVisible ? LogLevel.Information : LogLevel.Debug))
+            {
+                this.logger.Log(
+                    liveVisible ? LogLevel.Information : LogLevel.Debug,
+                    "[MetaShark] 剧集标题回填决策. reason={Reason} itemId={ItemId} itemPath={ItemPath} originalTitle={OriginalTitle} resolvedTitle={ResolvedTitle} metadataRefreshMode={MetadataRefreshMode} replaceAllMetadata={ReplaceAllMetadata}.",
+                    reason,
+                    itemId,
+                    itemPath,
+                    originalTitle,
+                    resolvedTitle,
+                    metadataRefreshMode ?? string.Empty,
+                    replaceAllMetadata ?? string.Empty);
+            }
         }
 
         internal sealed record EpisodeTitleBackfillOrchestrationInput(

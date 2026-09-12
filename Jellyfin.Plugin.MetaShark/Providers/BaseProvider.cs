@@ -563,11 +563,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             var removedDouban = RemoveProviderIdIfPresent(item, DoubanProviderId);
             var changed = removedDouban;
-            changed |= SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), tmdbId.Trim());
-            changed |= SetProviderIdIfDifferent(item, MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{tmdbId.Trim()}");
-            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString());
-            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString());
-            changed |= CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString());
+            changed |= this.SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), tmdbId.Trim());
+            changed |= this.SetProviderIdIfDifferent(item, MetaSharkPlugin.ProviderId, $"{MetaSource.Tmdb}_{tmdbId.Trim()}");
+            changed |= this.CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString());
+            changed |= this.CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString());
+            changed |= this.CopyProviderIdIfPresent(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString());
             changed |= metadataChanged;
             if (!changed)
             {
@@ -625,12 +625,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var replacesDifferentTmdbId = !string.IsNullOrWhiteSpace(originalItemTmdbId)
                 && !string.Equals(originalItemTmdbId.Trim(), normalizedTmdbId, StringComparison.Ordinal);
             var changed = false;
-            changed |= SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), normalizedTmdbId);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, DoubanProviderId, removeWhenMissing: false);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetaSharkPlugin.ProviderId, removeWhenMissing: false);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString(), replacesDifferentTmdbId);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString(), replacesDifferentTmdbId);
-            changed |= SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString(), replacesDifferentTmdbId);
+            changed |= this.SetProviderIdIfDifferent(item, MetadataProvider.Tmdb.ToString(), normalizedTmdbId);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, DoubanProviderId, removeWhenMissing: false);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetaSharkPlugin.ProviderId, removeWhenMissing: false);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Imdb.ToString(), replacesDifferentTmdbId);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.Tvdb.ToString(), replacesDifferentTmdbId);
+            changed |= this.SyncProviderIdFromAuthoritativeItem(item, authoritativeMetadataItem, MetadataProvider.TvRage.ToString(), replacesDifferentTmdbId);
             if (!changed)
             {
                 return;
@@ -1081,7 +1081,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         /// <summary>
         /// 在一次元数据刷新内复用按路径查询的结果：同一次刷新会多次查询相同的季/剧目录。
         /// </summary>
-        protected IDisposable BeginPathLookupScope()
+        protected static IDisposable BeginPathLookupScope()
         {
             var previous = PathLookupCache.Value;
             PathLookupCache.Value = new Dictionary<string, BaseItem?>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);

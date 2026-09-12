@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using Microsoft.Extensions.Hosting;
     using Microsoft.Extensions.Logging;
 
-    public sealed class MovieSeriesPeopleRefreshStateItemUpdatedWorker : IHostedService
+    public sealed class MovieSeriesPeopleRefreshStateItemUpdatedWorker : IHostedService, IDisposable
     {
         private static readonly Action<ILogger, Exception?> LogWorkerStart =
             LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "[MetaShark] 开始影视人物刷新状态条目更新工作器.");
@@ -51,6 +51,12 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         {
             this.libraryManager.ItemUpdated -= this.OnItemUpdated;
             await this.dispatchQueue.StopAsync().ConfigureAwait(false);
+        }
+
+        public void Dispose()
+        {
+            this.dispatchQueue.Dispose();
+            GC.SuppressFinalize(this);
         }
 
         internal void DispatchItemUpdated(ItemChangeEventArgs e)
