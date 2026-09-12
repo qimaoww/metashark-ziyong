@@ -7,7 +7,8 @@
 这是一个 AI 修改过的自用 fork。本文档仅说明当前仓库已经落地的状态，不代表上游官方说明，也不替代上游文档。
 
 ## 适用版本
-当前已知适配环境为 `nyanmisaka/jellyfin 10.10.7`。其他 Jellyfin 版本是否可用，仍需使用者自行验证。
+当前已知适配环境为 `Jellyfin 12.0`。插件直接引用 NuGet 包 `Jellyfin.Controller` / `Jellyfin.Model` 12.0.0，不依赖 vendor 源码子模块。
+构建目标框架为 `net10.0`，仅适用于 Jellyfin 12.0 及以上的服务端；Jellyfin 10.x / 11.x 不再兼容，需要旧版本请使用 `v3.1.0` 的构建产物。
 
 ## 功能
 - 支持 TMDb 剧集组映射。

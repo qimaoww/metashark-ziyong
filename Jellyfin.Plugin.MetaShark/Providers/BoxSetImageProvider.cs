@@ -55,7 +55,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteImageInfo>> GetImages(BaseItem item, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(item);
-            var tmdbId = Convert.ToInt32(item.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
+            var tmdbId = item.GetProviderId(MetadataProvider.Tmdb)?.ToInt() ?? 0;
             this.Log("开始获取合集图片. name: {0} tmdbId: {1}", item.Name, tmdbId);
 
             if (tmdbId <= 0)

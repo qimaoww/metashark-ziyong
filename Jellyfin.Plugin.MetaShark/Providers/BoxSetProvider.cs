@@ -13,6 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Api;
+    using Jellyfin.Plugin.MetaShark.Core;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Library;
@@ -38,7 +39,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<IEnumerable<RemoteSearchResult>> GetSearchResults(BoxSetInfo searchInfo, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(searchInfo);
-            var tmdbId = Convert.ToInt32(searchInfo.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
+            var tmdbId = searchInfo.GetProviderId(MetadataProvider.Tmdb)?.ToInt() ?? 0;
             var language = searchInfo.MetadataLanguage;
 
             if (tmdbId > 0)
@@ -90,7 +91,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         public async Task<MetadataResult<BoxSet>> GetMetadata(BoxSetInfo info, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(info);
-            var tmdbId = Convert.ToInt32(info.GetProviderId(MetadataProvider.Tmdb), CultureInfo.InvariantCulture);
+            var tmdbId = info.GetProviderId(MetadataProvider.Tmdb)?.ToInt() ?? 0;
             var language = info.MetadataLanguage;
             this.Log("开始获取合集元数据. name: {0} tmdbId: {1} enableTmdb: {2}", info.Name, tmdbId, Config.EnableTmdb);
 

@@ -13,7 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.Api.Http
     {
         public HttpClientHandlerExtended()
         {
-            // Ignore SSL certificate errors.
+            // Ignore SSL certificate errors.（现有测试 HttpClientHandlerExtended_CurrentTlsValidationIsPermissive 锁定了该行为，暂不修改）
             this.ServerCertificateCustomValidationCallback = (message, certificate2, arg3, arg4) => true;
             this.CheckCertificateRevocationList = true;
             this.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;

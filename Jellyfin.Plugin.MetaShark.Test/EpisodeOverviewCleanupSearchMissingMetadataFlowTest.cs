@@ -367,8 +367,6 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 {
                     this.worker.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
                 }
-
-                this.Provider.Dispose();
             }
         }
 

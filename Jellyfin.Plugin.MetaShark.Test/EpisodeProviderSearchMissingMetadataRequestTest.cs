@@ -864,7 +864,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var tmdbApi = new TmdbApi(loggerFactory);
             SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode { Name = "皇后回宫" });
 
-            using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
+            var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
 
             _ = await provider.GetMetadata(info, CancellationToken.None);
 
@@ -916,7 +916,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             SeedEpisode(tmdbApi, 123, 1, 1, "zh", "zh", new TvEpisode { Name = "皇后回宫" });
             SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode { Name = "第 1 集" });
 
-            using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
+            var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
 
             var result = await provider.GetMetadata(info, CancellationToken.None);
 
@@ -970,7 +970,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var tmdbApi = new TmdbApi(loggerFactory);
             SeedEpisode(tmdbApi, 123, 1, 1, "zh-CN", "zh-CN", new TvEpisode { Name = "   " });
 
-            using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
+            var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
 
             var result = await provider.GetMetadata(info, CancellationToken.None);
 

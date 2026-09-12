@@ -397,7 +397,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             try
             {
                 var repositoryUpdateReason = item.OnMetadataChanged();
-                if (repositoryUpdateReason == 0)
+                if (repositoryUpdateReason == ItemUpdateType.None)
                 {
                     repositoryUpdateReason = ItemUpdateType.MetadataEdit;
                 }

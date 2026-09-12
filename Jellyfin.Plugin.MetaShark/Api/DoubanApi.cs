@@ -333,6 +333,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
             {
                 LogSuggestError(this.logger, keyword, ex);
             }
+            catch (JsonException ex)
+            {
+                // 风控页/网关错误页也可能是 200 + HTML，反序列化失败不应让整个条目刷新失败。
+                LogSuggestError(this.logger, keyword, ex);
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
@@ -546,6 +551,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
 
             // 兼容旧版 ID 处理
+            await this.LimitRequestFrequently().ConfigureAwait(false);
             var personageID = await this.CheckPersonageIDAsync(id, cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(personageID))
             {
@@ -766,6 +772,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
             }
 
             keyword = HttpUtility.UrlEncode(keyword);
+            await this.LimitRequestFrequently().ConfigureAwait(false);
             var url = $"https://movie.douban.com/celebrities/search?search_text={keyword}";
             var response = await this.httpClient.GetAsync(new Uri(url), cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
@@ -892,6 +899,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         {
             try
             {
+                await this.LimitRequestFrequently().ConfigureAwait(false);
                 var url = "https://www.douban.com/mine/";
                 var response = await this.httpClient.GetAsync(new Uri(url), cancellationToken).ConfigureAwait(false);
                 var requestUrl = response.RequestMessage?.RequestUri?.ToString();
@@ -924,6 +932,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
             var loginInfo = new DoubanLoginInfo();
             try
             {
+                await this.LimitRequestFrequently().ConfigureAwait(false);
                 var url = "https://www.douban.com/mine/";
                 var response = await this.httpClient.GetAsync(new Uri(url), cancellationToken).ConfigureAwait(false);
                 var requestUrl = response.RequestMessage?.RequestUri?.ToString();
@@ -1117,7 +1126,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     var cookieList = configCookie.Split(';');
                     foreach (var cookie in cookieList)
                     {
-                        var cookieArr = cookie.Trim().Split('=');
+                        // cookie 值本身可能包含 '='（base64 填充等），只按第一个 '=' 切分。
+                        var cookieArr = cookie.Trim().Split('=', 2);
                         if (cookieArr.Length < 2)
                         {
                             continue;

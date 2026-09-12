@@ -118,7 +118,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             cancellationToken.ThrowIfCancellationRequested();
 
             var item = e.Item;
-            if (e.UpdateReason == ItemUpdateType.ImageUpdate)
+            if (e.UpdateReason.HasFlag(ItemUpdateType.ImageUpdate))
             {
                 if (item != null && item.Id != Guid.Empty)
                 {
@@ -146,7 +146,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                     .Select(pair => $"{pair.Key}={pair.Value}"));
         }
 
-        private List<BaseItem> GetTvItemsForRefill()
+        private IReadOnlyList<BaseItem> GetTvItemsForRefill()
         {
             var query = new InternalItemsQuery
             {

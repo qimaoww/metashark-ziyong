@@ -40,14 +40,18 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             }
             catch (IOException ex)
             {
-                return Reset<TState>(path, logLoadFailed, ex);
+                // IO/权限问题通常是瞬时故障，原文件可能仍然完好，不能直接覆盖为空状态。
+                logLoadFailed(path, ex);
+                return new Dictionary<Guid, TState>();
             }
             catch (UnauthorizedAccessException ex)
             {
-                return Reset<TState>(path, logLoadFailed, ex);
+                logLoadFailed(path, ex);
+                return new Dictionary<Guid, TState>();
             }
             catch (JsonException ex)
             {
+                // 确认文件内容已损坏时才重写为空状态。
                 return Reset<TState>(path, logLoadFailed, ex);
             }
         }

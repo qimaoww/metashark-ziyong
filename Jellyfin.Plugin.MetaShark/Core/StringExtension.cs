@@ -15,6 +15,10 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
     public static class StringExtension
     {
+        private static readonly Regex ChineseOnlyRegex = new Regex(@"[\u4e00-\u9fa5：]{1,}", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        private static readonly Regex HasChineseRegex = new Regex(@"[\u4e00-\u9fa5]", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
         public static long ToLong(this string s)
         {
             long val;
@@ -51,14 +55,12 @@ namespace Jellyfin.Plugin.MetaShark.Core
         public static bool IsChinese(this string s)
         {
             ArgumentNullException.ThrowIfNull(s);
-            Regex chineseReg = new Regex(@"[\u4e00-\u9fa5：]{1,}", RegexOptions.Compiled);
-            return chineseReg.IsMatch(s.Replace(" ", string.Empty, StringComparison.Ordinal).Trim());
+            return ChineseOnlyRegex.IsMatch(s.Replace(" ", string.Empty, StringComparison.Ordinal).Trim());
         }
 
         public static bool HasChinese(this string s)
         {
-            Regex chineseReg = new Regex(@"[\u4e00-\u9fa5]", RegexOptions.Compiled);
-            return chineseReg.Match(s).Success;
+            return HasChineseRegex.IsMatch(s);
         }
 
         public static bool IsSameLanguage(this string s1, string s2)

@@ -6,6 +6,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Jellyfin.Data.Enums;
@@ -226,9 +227,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private List<BaseItem> GetMissingMetadataCandidates()
         {
             var items = this.libraryManager.GetItemList(CreateFullLibraryQuery());
-            return items.FindAll(item =>
+            return items.Where(item =>
                 IsMissingMetadataSearchCandidate(item, this.peopleRefreshStateStore.GetState(item.Id))
-                && this.IsMetadataAllowed(item));
+                && this.IsMetadataAllowed(item)).ToList();
         }
 
         private bool IsMetadataAllowed(BaseItem item)

@@ -40,7 +40,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             var triggers = task.GetDefaultTriggers().ToArray();
 
             Assert.AreEqual(1, triggers.Length);
-            Assert.AreEqual(TaskTriggerInfo.TriggerDaily, triggers[0].Type);
+            Assert.AreEqual(TaskTriggerInfoType.DailyTrigger, triggers[0].Type);
             Assert.AreEqual(TimeSpan.FromHours(0).Ticks, triggers[0].TimeOfDayTicks);
         }
 

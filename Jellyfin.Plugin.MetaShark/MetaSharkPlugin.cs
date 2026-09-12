@@ -32,6 +32,8 @@ public class MetaSharkPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// </summary>
     public const string ProviderId = "MetaSharkID";
 
+    private static readonly object ConfigurationSaveLock = new object();
+
     private readonly IServerApplicationHost appHost;
 
     /// <summary>
@@ -95,44 +97,49 @@ public class MetaSharkPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(rollbackConfiguration);
 
-        byte[]? originalFileBytes = null;
-        var configurationFilePath = this.ConfigurationFilePath;
-        var fileExisted = File.Exists(configurationFilePath);
-        if (fileExisted)
+        lock (ConfigurationSaveLock)
         {
-            originalFileBytes = File.ReadAllBytes(configurationFilePath);
-        }
-
-        try
-        {
-            this.SaveConfiguration(configuration);
-            this.Configuration = configuration;
-            saveException = null;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Exception? rollbackException = null;
+            byte[]? originalFileBytes = null;
+            var configurationFilePath = this.ConfigurationFilePath;
+            var fileExisted = false;
 
             try
             {
-                this.Configuration = rollbackConfiguration;
+                fileExisted = File.Exists(configurationFilePath);
                 if (fileExisted)
                 {
-                    File.WriteAllBytes(configurationFilePath, originalFileBytes ?? Array.Empty<byte>());
+                    originalFileBytes = File.ReadAllBytes(configurationFilePath);
                 }
-                else if (File.Exists(configurationFilePath))
-                {
-                    File.Delete(configurationFilePath);
-                }
-            }
-            catch (Exception restoreEx)
-            {
-                rollbackException = restoreEx;
-            }
 
-            saveException = rollbackException == null ? ex : new AggregateException(ex, rollbackException);
-            return false;
+                this.SaveConfiguration(configuration);
+                this.Configuration = configuration;
+                saveException = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Exception? rollbackException = null;
+
+                try
+                {
+                    this.Configuration = rollbackConfiguration;
+                    if (fileExisted)
+                    {
+                        File.WriteAllBytes(configurationFilePath, originalFileBytes ?? Array.Empty<byte>());
+                    }
+                    else if (File.Exists(configurationFilePath))
+                    {
+                        File.Delete(configurationFilePath);
+                    }
+                }
+                catch (Exception restoreEx)
+                {
+                    rollbackException = restoreEx;
+                }
+
+                saveException = rollbackException == null ? ex : new AggregateException(ex, rollbackException);
+                return false;
+            }
         }
     }
 }

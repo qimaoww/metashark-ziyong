@@ -11,6 +11,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
 using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
@@ -146,6 +147,7 @@ public sealed class BoxSetManager : IHostedService, IDisposable
                 {
                     IncludeItemTypes = new[] { BaseItemKind.Movie },
                     IsVirtualItem = false,
+                    Recursive = true,
                     OrderBy = new[] { (ItemSortBy.SortName, SortOrder.Ascending) },
                     Parent = library,
                     StartIndex = startIndex,

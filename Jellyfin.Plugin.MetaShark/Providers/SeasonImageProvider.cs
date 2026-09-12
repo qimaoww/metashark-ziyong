@@ -1,4 +1,4 @@
-﻿// <copyright file="SeasonImageProvider.cs" company="PlaceholderCompany">
+// <copyright file="SeasonImageProvider.cs" company="PlaceholderCompany">
 // Copyright (c) PlaceholderCompany. All rights reserved.
 // </copyright>
 
@@ -75,7 +75,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     {
                         new RemoteImageInfo
                         {
-                            ProviderName = primary.Name,
+                            ProviderName = this.Name,
                             Url = this.GetDoubanPoster(primary),
                             Type = ImageType.Primary,
                             Language = "zh",

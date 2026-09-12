@@ -58,6 +58,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers
         private static readonly Action<ILogger, string, Exception?> LogMetaSharkInfo =
             LoggerMessage.Define<string>(LogLevel.Information, new EventId(1, nameof(Log)), "[MetaShark] {Message}");
 
+        private static readonly Regex RegChineseSeasonName = new Regex(@"第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
+
+        private static readonly Regex RegSeasonNumberPrefix = new Regex(@"\s第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
+
+        private static readonly Regex RegSeasonSxx = new Regex(@"(?<![a-z])S(\d\d?)(?![0-9a-z])", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private readonly ILogger logger;
         private readonly IHttpClientFactory httpClientFactory;
         private readonly DoubanApi doubanApi;
@@ -269,8 +275,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // 中文季名
-            var regSeason = new Regex(@"第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
-            var match = regSeason.Match(fileName);
+            var match = RegChineseSeasonName.Match(fileName);
             if (match.Success && match.Groups.Count > 1)
             {
                 var seasonNumber = match.Groups[1].Value.ToInt();
@@ -287,8 +292,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             }
 
             // SXX 季名
-            regSeason = new Regex(@"(?<![a-z])S(\d\d?)(?![0-9a-z])", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-            match = regSeason.Match(fileName);
+            match = RegSeasonSxx.Match(fileName);
             if (match.Success && match.Groups.Count > 1)
             {
                 var seasonNumber = match.Groups[1].Value.ToInt();
@@ -1270,8 +1274,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private static int? ParseChineseSeasonNumberByName(string name)
         {
-            var regSeason = new Regex(@"\s第([0-9零一二三四五六七八九]+?)(季|部)", RegexOptions.Compiled);
-            var match = regSeason.Match(name);
+            var match = RegSeasonNumberPrefix.Match(name);
             if (match.Success && match.Groups.Count > 1)
             {
                 var seasonNumber = match.Groups[1].Value.ToInt();

@@ -1,4 +1,4 @@
-﻿// <copyright file="SeasonProvider.cs" company="PlaceholderCompany">
+// <copyright file="SeasonProvider.cs" company="PlaceholderCompany">
 // Copyright (c) PlaceholderCompany. All rights reserved.
 // </copyright>
 
@@ -555,12 +555,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return hasAsciiLetter;
         }
 
-        private static SeasonInfo CreateLlmLookupInfo(SeasonInfo info)
+        private SeasonInfo CreateLlmLookupInfo(SeasonInfo info)
         {
             return new SeasonInfo
             {
                 Name = info.Name,
-                Path = LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Season)),
+                Path = Config.LlmAllowRelativePathContext
+                    ? LlmRelativePathSanitizer.Sanitize(info.Path, Array.Empty<string?>(), nameof(Season))
+                    : string.Empty,
                 MetadataLanguage = info.MetadataLanguage,
                 Year = info.Year,
                 IndexNumber = info.IndexNumber,

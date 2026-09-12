@@ -157,6 +157,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     this.logTvdbError(this.logger, nameof(this.GetSeriesEpisodesAsync), ex);
                     return episodes;
                 }
+                catch (JsonException ex)
+                {
+                    // TVDB 网关异常时可能返回 HTML/空响应，反序列化失败按“无数据”处理。
+                    this.logTvdbError(this.logger, nameof(this.GetSeriesEpisodesAsync), ex);
+                    return episodes;
+                }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw;
@@ -351,6 +357,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 return null;
             }
             catch (HttpRequestException ex)
+            {
+                this.logTvdbError(this.logger, nameof(this.EnsureTokenAsync), ex);
+                return null;
+            }
+            catch (JsonException ex)
             {
                 this.logTvdbError(this.logger, nameof(this.EnsureTokenAsync), ex);
                 return null;

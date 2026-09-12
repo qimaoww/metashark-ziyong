@@ -775,7 +775,18 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             if (includeProviderIds)
             {
-                item.SetProviderId(MetadataProvider.Tmdb, $"{typeof(T).Name}-tmdb-1");
+                // Jellyfin 12 起 SetProviderId 会校验 TMDb id 必须为正整数，非数字值会被静默丢弃。
+                var tmdbId = typeof(T).Name switch
+                {
+                    nameof(Movie) => "1001",
+                    nameof(Series) => "1002",
+                    nameof(Season) => "1003",
+                    nameof(Episode) => "1004",
+                    nameof(BoxSet) => "1005",
+                    nameof(Person) => "1006",
+                    _ => "1099",
+                };
+                item.SetProviderId(MetadataProvider.Tmdb, tmdbId);
             }
 
             if (includeOverview)
