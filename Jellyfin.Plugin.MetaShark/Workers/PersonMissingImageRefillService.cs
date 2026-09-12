@@ -320,7 +320,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return gateDecision?.Reason.ToString() ?? "ImageGateDenied";
             }
 
-            var refreshOptions = this.CreateRefreshOptions();
+            var refreshOptions = this.CreateRefreshOptions(person);
             this.stateStore.Save(new PersonImageRefillState
             {
                 PersonId = person.Id,
@@ -336,11 +336,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return null;
         }
 
-        private MetadataRefreshOptions CreateRefreshOptions()
+        private MetadataRefreshOptions CreateRefreshOptions(Person person)
         {
+            ArgumentNullException.ThrowIfNull(person);
+
+            // 纯补图不需要重跑元数据管线；人物还没有 TMDb id 时才需要整条刷新补齐 id。
+            var hasTmdbId = !string.IsNullOrWhiteSpace(person.GetProviderId(MetadataProvider.Tmdb));
+
             return new MetadataRefreshOptions(new DirectoryService(this.fileSystem))
             {
-                MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
+                MetadataRefreshMode = hasTmdbId ? MetadataRefreshMode.None : MetadataRefreshMode.FullRefresh,
                 ImageRefreshMode = MetadataRefreshMode.FullRefresh,
                 ReplaceAllMetadata = false,
                 ReplaceAllImages = false,

@@ -216,6 +216,11 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     IsVirtualItem = false,
                     IsMissing = false,
                     Recursive = true,
+
+                    // 映射只收录带 TMDb id 的人物，下推到数据库可避免加载全部人物；
+                    // 判定只用 ProviderIds 列/导航，跳过 Data JSON 反序列化。
+                    HasTmdbId = true,
+                    SkipDeserialization = true,
                 };
 
                 var items = this.libraryManager.GetItemList(peopleQuery);

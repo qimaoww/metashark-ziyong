@@ -216,7 +216,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             var refreshOptions = new MetadataRefreshOptions(new DirectoryService(this.fileSystem))
             {
-                MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
+                // 纯补图不需要重跑元数据管线；只有条目（或其剧集）还没有 TMDb id 时，
+                // 才需要整条刷新让元数据 provider 先补齐 id。
+                MetadataRefreshMode = ResolveHasOfficialTmdbId(item) ? MetadataRefreshMode.None : MetadataRefreshMode.FullRefresh,
                 ImageRefreshMode = MetadataRefreshMode.FullRefresh,
                 ReplaceAllMetadata = false,
                 ReplaceAllImages = false,
@@ -237,6 +239,19 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.Normal);
 
             return null;
+        }
+
+        private static bool ResolveHasOfficialTmdbId(BaseItem item)
+        {
+            return item switch
+            {
+                Series series => !string.IsNullOrWhiteSpace(series.GetProviderId(MetadataProvider.Tmdb)),
+                Season season => !string.IsNullOrWhiteSpace(season.GetProviderId(MetadataProvider.Tmdb))
+                    || !string.IsNullOrWhiteSpace(season.Series?.GetProviderId(MetadataProvider.Tmdb)),
+                Episode episode => !string.IsNullOrWhiteSpace(episode.GetProviderId(MetadataProvider.Tmdb))
+                    || !string.IsNullOrWhiteSpace(episode.Series?.GetProviderId(MetadataProvider.Tmdb)),
+                _ => false,
+            };
         }
 
         private bool TryHandleStructuralHardMiss(BaseItem item, string fingerprint, TvImageRefillState? currentState)

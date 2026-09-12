@@ -627,6 +627,9 @@
                         checkDoubanLogin();
 
                         Dashboard.hideLoadingMsg();
+                    }).catch(function () {
+                        // 配置读取失败时同样要关闭遮罩，否则页面会一直卡在 loading。
+                        Dashboard.hideLoadingMsg();
                     });
                 });
 
@@ -773,13 +776,16 @@
                 }
 
 
-                $.getJSON("/plugin/metashark/douban/checklogin", function (resp) {
-                    if (resp && resp.code != 1) {
-                        $('#login_msg').css("color", "red").text('(已失效)').show();
-                    } else {
-                        $('#login_msg').css("color", "green").text('(已生效)').show();
-                    }
-                })
+                // Jellyfin 可能部署在子路径（--baseurl），必须经 ApiClient.getUrl 生成地址。
+                ApiClient.getUrl('plugin/metashark/douban/checklogin').then(function (checkLoginUrl) {
+                    $.getJSON(checkLoginUrl, function (resp) {
+                        if (resp && resp.code != 1) {
+                            $('#login_msg').css("color", "red").text('(已失效)').show();
+                        } else {
+                            $('#login_msg').css("color", "green").text('(已生效)').show();
+                        }
+                    });
+                });
             }
 
             function refreshSeriesIfMappingChanged(oldManualMapping, newManualMapping, oldLlmMapping, newLlmMapping) {
