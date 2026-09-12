@@ -43,6 +43,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private readonly LlmAssistTriggerPolicy triggerPolicy;
         private readonly EpisodeGroupRefreshCoordinator episodeGroupRefreshCoordinator;
         private readonly ILogger<LlmEpisodeGroupMappingProviderAssistService> logger;
+        private readonly EpisodeGroupMappingConfigurationRefreshService? configurationRefreshService;
 
         public LlmEpisodeGroupMappingProviderAssistService(
             ILlmEpisodeGroupMappingAssistService assistService,
@@ -102,7 +103,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             EpisodeGroupRefreshCoordinator episodeGroupRefreshCoordinator,
             IEpisodeGroupMappingFacade episodeGroupMappingFacade,
             LlmAssistTriggerPolicy triggerPolicy,
-            ILogger<LlmEpisodeGroupMappingProviderAssistService> logger)
+            ILogger<LlmEpisodeGroupMappingProviderAssistService> logger,
+            EpisodeGroupMappingConfigurationRefreshService? configurationRefreshService = null)
         {
             this.assistService = assistService ?? throw new ArgumentNullException(nameof(assistService));
             this.tmdbApi = tmdbApi ?? throw new ArgumentNullException(nameof(tmdbApi));
@@ -110,6 +112,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             this.episodeGroupMappingFacade = episodeGroupMappingFacade ?? throw new ArgumentNullException(nameof(episodeGroupMappingFacade));
             this.triggerPolicy = triggerPolicy ?? throw new ArgumentNullException(nameof(triggerPolicy));
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            this.configurationRefreshService = configurationRefreshService;
         }
 
         public async Task<LlmEpisodeGroupMappingAssistResult> SuggestWriteAndRefreshAsync(LlmEpisodeGroupMappingProviderAssistRequest request, CancellationToken cancellationToken)
@@ -231,6 +234,10 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 queuedHandler: MarkRefreshQueued);
 
             LogQueuedRefresh(this.logger, outcome.QueuedCount, null);
+
+            // LLM 写入后这里已经刷新过受影响剧集，同步基线可避免下一次配置保存
+            // 把同一批变更再刷新一遍。
+            this.configurationRefreshService?.SynchronizeEffectiveMappingBaseline(newMapping);
         }
 
         private static SemaphoreSlim GetSeriesLock(string seriesTmdbId)
