@@ -13,6 +13,7 @@ namespace Jellyfin.Plugin.MetaShark
     using Jellyfin.Plugin.MetaShark.Workers;
     using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
     using MediaBrowser.Controller;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Persistence;
     using MediaBrowser.Controller.Plugins;
@@ -71,7 +72,10 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<IPersonMissingImageRefillService, PersonMissingImageRefillService>();
             serviceCollection.AddSingleton<IMissingMetadataSearchService, MissingMetadataSearchService>();
             serviceCollection.AddSingleton<MetaSharkOrdinaryItemLibraryCapabilityResolver>();
-            serviceCollection.AddSingleton<MetaSharkSharedEntityLibraryCapabilityResolver>();
+            serviceCollection.AddSingleton((ctx) => new MetaSharkSharedEntityLibraryCapabilityResolver(
+                ctx.GetRequiredService<ILibraryManager>(),
+                ctx.GetService<ILinkedChildrenService>(),
+                ctx.GetService<IBaseItemManager>()));
             serviceCollection.AddSingleton<IMovieSeriesPeopleOverwriteRefreshCandidateStore>((_) => InMemoryMovieSeriesPeopleOverwriteRefreshCandidateStore.Shared);
             serviceCollection.AddSingleton<ITmdbCorrectionRefreshIntentStore>((_) => InMemoryTmdbCorrectionRefreshIntentStore.Shared);
             serviceCollection.AddSingleton<ILlmTmdbCorrectionMetadataStore, InMemoryLlmTmdbCorrectionMetadataStore>();

@@ -26,7 +26,10 @@ namespace Jellyfin.Plugin.MetaShark.Core
         private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemResolver;
         private readonly ILinkedChildrenService? linkedChildrenService;
 
-        public MetaSharkSharedEntityLibraryCapabilityResolver(ILibraryManager libraryManager, ILinkedChildrenService? linkedChildrenService = null, IBaseItemManager? baseItemManager = null)
+        public MetaSharkSharedEntityLibraryCapabilityResolver(
+            ILibraryManager libraryManager,
+            ILinkedChildrenService? linkedChildrenService = null,
+            IBaseItemManager? baseItemManager = null)
         {
             ArgumentNullException.ThrowIfNull(libraryManager);
             this.libraryManager = libraryManager;
@@ -199,12 +202,15 @@ namespace Jellyfin.Plugin.MetaShark.Core
             // 一个演员可能关联数百个条目，批量取人物避免逐条 GetPeople 的 N+1。
             var peopleByItem = this.libraryManager.GetPeopleByItems(candidates.Select(item => item.Id).ToList());
             var result = new List<BaseItem>(candidates.Count);
+
+            // 同一人物会出现在同批次的多个条目上，按人物名缓存 Person 条目查询，避免重复读库。
+            var providerIdsCache = new Dictionary<string, Dictionary<string, string>?>(StringComparer.Ordinal);
             foreach (var item in candidates)
             {
                 if (peopleByItem != null)
                 {
                     if (peopleByItem.TryGetValue(item.Id, out var batchedPeople)
-                        && this.ContainsTmdbPersonId(batchedPeople, personTmdbId))
+                        && this.ContainsTmdbPersonId(batchedPeople, personTmdbId, providerIdsCache))
                     {
                         result.Add(item);
                     }
@@ -221,12 +227,12 @@ namespace Jellyfin.Plugin.MetaShark.Core
             return result;
         }
 
-        private bool ContainsTmdbPersonId(IReadOnlyList<PersonInfo> people, string personTmdbId)
+        private bool ContainsTmdbPersonId(IReadOnlyList<PersonInfo> people, string personTmdbId, IDictionary<string, Dictionary<string, string>?> providerIdsCache)
         {
             foreach (var person in people)
             {
-                // 批量接口不返回 ProviderIds，需解析为 Person 实体后再判定 TMDb id。
-                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(person, this.libraryManager);
+                // 12.0 的批量人物投影不含 ProviderIds，需解析 Person 条目补全后再比对 TMDb id。
+                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(person, this.libraryManager, providerIdsCache);
                 if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(resolvedPerson, out var fingerprint)
                     && fingerprint != null
                     && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
@@ -245,9 +251,10 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return false;
             }
 
+            var providerIdsCache = new Dictionary<string, Dictionary<string, string>?>(StringComparer.Ordinal);
             foreach (var currentPerson in people)
             {
-                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(currentPerson, this.libraryManager);
+                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(currentPerson, this.libraryManager, providerIdsCache);
                 if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(resolvedPerson, out var fingerprint)
                     && fingerprint != null
                     && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
