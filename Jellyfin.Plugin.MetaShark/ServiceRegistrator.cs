@@ -32,10 +32,15 @@ namespace Jellyfin.Plugin.MetaShark
             ArgumentNullException.ThrowIfNull(serviceCollection);
             ArgumentNullException.ThrowIfNull(applicationHost);
 
-            var dataFolderPath = MetaSharkPlugin.Instance?.DataFolderPath;
-            if (string.IsNullOrWhiteSpace(dataFolderPath))
+            // 插件实例在服务注册阶段可能尚未就绪（Jellyfin 12 会先调用 RegisterServices），
+            // 因此这里不能在注册时求值：延迟到解析各状态存储时再读取插件数据目录，
+            // 否则状态文件会落到临时目录，重启/清理后丢失。
+            static string ResolveDataFolderPath()
             {
-                dataFolderPath = Path.Combine(Path.GetTempPath(), MetaSharkPlugin.PluginName);
+                var path = MetaSharkPlugin.Instance?.DataFolderPath;
+                return string.IsNullOrWhiteSpace(path)
+                    ? Path.Combine(Path.GetTempPath(), MetaSharkPlugin.PluginName)
+                    : path;
             }
 
             serviceCollection.AddHostedService<BoxSetManager>();
@@ -52,19 +57,19 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<ITvImageRefillStateStore>((ctx) =>
             {
                 return new FileTvImageRefillStateStore(
-                    Path.Combine(dataFolderPath, "tv-image-refill-state.json"),
+                    Path.Combine(ResolveDataFolderPath(), "tv-image-refill-state.json"),
                     ctx.GetRequiredService<ILoggerFactory>());
             });
             serviceCollection.AddSingleton<IPersonImageRefillStateStore>((ctx) =>
             {
                 return new FilePersonImageRefillStateStore(
-                    Path.Combine(dataFolderPath, "person-image-refill-state.json"),
+                    Path.Combine(ResolveDataFolderPath(), "person-image-refill-state.json"),
                     ctx.GetRequiredService<ILoggerFactory>());
             });
             serviceCollection.AddSingleton<IPeopleRefreshStateStore>((ctx) =>
             {
                 return new FilePeopleRefreshStateStore(
-                    Path.Combine(dataFolderPath, "people-refresh-state.json"),
+                    Path.Combine(ResolveDataFolderPath(), "people-refresh-state.json"),
                     ctx.GetRequiredService<ILoggerFactory>());
             });
             serviceCollection.AddSingleton<ITvImageRefillOutcomeReporter, TvImageRefillOutcomeReporter>();
@@ -83,7 +88,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<IEpisodeTitleBackfillCandidateStore>((ctx) =>
             {
                 return new FileEpisodeTitleBackfillCandidateStore(
-                    Path.Combine(dataFolderPath, "title-candidates.json"),
+                    Path.Combine(ResolveDataFolderPath(), "title-candidates.json"),
                     ctx.GetRequiredService<ILoggerFactory>());
             });
             serviceCollection.AddSingleton<IEpisodeTitleBackfillPendingResolver, EpisodeTitleBackfillPendingResolver>();
@@ -112,7 +117,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupCandidateStore>((ctx) =>
             {
                 return new FileEpisodeOverviewCleanupCandidateStore(
-                    Path.Combine(dataFolderPath, "overview-candidates.json"),
+                    Path.Combine(ResolveDataFolderPath(), "overview-candidates.json"),
                     ctx.GetRequiredService<ILoggerFactory>());
             });
             serviceCollection.AddSingleton<IEpisodeOverviewCleanupPendingResolver, EpisodeOverviewCleanupPendingResolver>();
