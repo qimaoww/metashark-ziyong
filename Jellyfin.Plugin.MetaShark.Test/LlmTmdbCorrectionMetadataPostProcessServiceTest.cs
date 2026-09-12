@@ -141,7 +141,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 ProductionYear = 2024,
                 PremiereDate = new DateTime(2024, 2, 3),
             };
-            snapshot.ProviderIds[MetadataProvider.Imdb.ToString()] = "ttnew";
+            snapshot.ProviderIds[MetadataProvider.Imdb.ToString()] = "tt0100002";
             store.Save(snapshot);
             var service = new LlmTmdbCorrectionMetadataPostProcessService(store, NullLogger<LlmTmdbCorrectionMetadataPostProcessService>.Instance);
 
@@ -161,7 +161,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual(new DateTime(2024, 2, 3), item.PremiereDate);
             Assert.AreEqual("222", item.GetProviderId(MetadataProvider.Tmdb));
             Assert.AreEqual("Tmdb_222", item.GetProviderId(MetaSharkPlugin.ProviderId));
-            Assert.AreEqual("ttnew", item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100002", item.GetProviderId(MetadataProvider.Imdb));
             Assert.IsFalse(item.ProviderIds.ContainsKey(Providers.BaseProvider.DoubanProviderId));
             Assert.AreEqual(1, item.UpdateToRepositoryCallCount);
             Assert.IsNull(store.Peek(item.Id));

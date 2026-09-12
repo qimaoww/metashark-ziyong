@@ -3,6 +3,7 @@ using Jellyfin.Plugin.MetaShark.Providers;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Model.Entities;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.MetaShark.Test
 {
@@ -59,10 +60,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
         {
             var parameters = method.GetParameters();
 
-            Assert.AreEqual(3, parameters.Length);
+            Assert.AreEqual(4, parameters.Length);
             Assert.AreEqual(typeof(string), parameters[0].ParameterType);
             Assert.AreEqual(expectedItemType, parameters[1].ParameterType);
             Assert.AreEqual(typeof(bool), parameters[2].ParameterType);
+            Assert.AreEqual(typeof(ILogger), parameters[3].ParameterType);
+            Assert.IsTrue(parameters[3].IsOptional, "logger 参数应为可选，保持既有调用方兼容。");
         }
     }
 }

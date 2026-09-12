@@ -686,6 +686,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 this.logTmdbError(this.logger, nameof(this.GetEpisodeAsync), ex);
                 return null;
             }
+            catch (GeneralHttpException ex) when (cancellationToken.IsCancellationRequested)
+            {
+                // 调用方已取消时必须向上传播，不能被当作 TMDb HTTP 错误吞掉。
+                throw new TaskCanceledException("TMDB episode request cancelled by the caller.", ex, cancellationToken);
+            }
             catch (GeneralHttpException ex)
             {
                 this.logTmdbUnexpectedHttpError(this.logger, nameof(this.GetEpisodeAsync), ex);

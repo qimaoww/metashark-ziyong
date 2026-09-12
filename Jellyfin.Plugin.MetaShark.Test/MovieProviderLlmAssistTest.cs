@@ -450,7 +450,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     [BaseProvider.DoubanProviderId] = "movie-completion-stale",
                     [MetaSharkPlugin.ProviderId] = "Douban_movie-completion-stale",
                     [MetadataProvider.Tmdb.ToString()] = "1111",
-                    [MetadataProvider.Imdb.ToString()] = "ttoldmovie",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100004",
                     [MetadataProvider.Tvdb.ToString()] = "old-tvdb",
                 },
             };
@@ -470,7 +470,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "movie-completion-stale",
                 [MetaSharkPlugin.ProviderId] = "Douban_movie-completion-stale",
                 [MetadataProvider.Tmdb.ToString()] = "1111",
-                [MetadataProvider.Imdb.ToString()] = "ttoldmovie",
+                [MetadataProvider.Imdb.ToString()] = "tt0100004",
                 [MetadataProvider.Tvdb.ToString()] = "old-tvdb",
             };
 
@@ -803,7 +803,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     [BaseProvider.DoubanProviderId] = "verified-replacement-douban",
                     [MetaSharkPlugin.ProviderId] = "Douban_verified-replacement-douban",
                     [MetadataProvider.Tmdb.ToString()] = "111",
-                    [MetadataProvider.Imdb.ToString()] = "ttold",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100001",
                 },
             };
             var libraryManager = new Mock<ILibraryManager>();
@@ -822,7 +822,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "verified-replacement-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_verified-replacement-douban",
                 [MetadataProvider.Tmdb.ToString()] = "111",
-                [MetadataProvider.Imdb.ToString()] = "ttold",
+                [MetadataProvider.Imdb.ToString()] = "tt0100001",
             };
 
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
@@ -862,7 +862,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "manual-correction-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_manual-correction-douban",
                 [MetadataProvider.Tmdb.ToString()] = "111",
-                [MetadataProvider.Imdb.ToString()] = "ttoldimdb",
+                [MetadataProvider.Imdb.ToString()] = "tt0100003",
                 [MetadataProvider.Tvdb.ToString()] = "81001",
             };
 
@@ -875,7 +875,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("Corrected Manual Movie", result.Item!.Name);
             Assert.AreEqual("Corrected Manual Movie overview", result.Item.Overview);
             Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
-            Assert.AreEqual("ttoldimdb", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100003", result.Item.GetProviderId(MetadataProvider.Imdb));
             Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
             Assert.AreEqual("81001", result.Item.GetProviderId(MetadataProvider.Tvdb));
@@ -910,7 +910,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "provider-id-preservation-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_provider-id-preservation-douban",
                 [MetadataProvider.Tmdb.ToString()] = "112",
-                [MetadataProvider.Imdb.ToString()] = "tt-preserved",
+                [MetadataProvider.Imdb.ToString()] = "tt0100005",
                 [MetadataProvider.Tvdb.ToString()] = "88047",
                 ["MetaSharkTmdbID"] = "112",
             };
@@ -921,7 +921,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("224", result.Item!.GetProviderId(MetadataProvider.Tmdb));
             Assert.AreEqual("Tmdb_224", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
-            Assert.AreEqual("tt-preserved", result.Item.GetProviderId(MetadataProvider.Imdb), "Verified TMDb correction must preserve reliable existing IMDb id semantics.");
+            Assert.AreEqual("tt0100005", result.Item.GetProviderId(MetadataProvider.Imdb), "Verified TMDb correction must preserve reliable existing IMDb id semantics.");
             Assert.AreEqual("88047", result.Item.GetProviderId(MetadataProvider.Tvdb), "Verified TMDb correction must preserve reliable existing TVDB id semantics.");
             Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId), "TMDb-authoritative correction currently clears stale Douban id from the result.");
             Assert.IsNull(result.Item.GetProviderId("MetaSharkTmdbID"), "Provider flow must not write the historical MetaSharkTmdbID key.");
@@ -1019,7 +1019,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     [BaseProvider.DoubanProviderId] = "verified-replacement-douban",
                     [MetaSharkPlugin.ProviderId] = "Douban_verified-replacement-douban",
                     [MetadataProvider.Tmdb.ToString()] = "111",
-                    [MetadataProvider.Imdb.ToString()] = "ttold",
+                    [MetadataProvider.Imdb.ToString()] = "tt0100001",
                 },
             };
             var libraryManager = new Mock<ILibraryManager>();
@@ -1037,7 +1037,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "verified-replacement-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_verified-replacement-douban",
                 [MetadataProvider.Tmdb.ToString()] = "111",
-                [MetadataProvider.Imdb.ToString()] = "ttold",
+                [MetadataProvider.Imdb.ToString()] = "tt0100001",
             };
 
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
@@ -1051,7 +1051,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.AreEqual("222", result.Item.GetProviderId(MetadataProvider.Tmdb));
             Assert.IsNull(result.Item.GetProviderId(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", result.Item.GetProviderId(MetaSharkPlugin.ProviderId));
-            Assert.AreEqual("ttold", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100001", result.Item.GetProviderId(MetadataProvider.Imdb));
             Assert.IsFalse(currentMovie.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId));
             Assert.AreEqual("Tmdb_222", currentMovie.GetProviderId(MetaSharkPlugin.ProviderId));
             Assert.AreEqual("222", currentMovie.GetProviderId(MetadataProvider.Tmdb));
@@ -1207,7 +1207,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 [BaseProvider.DoubanProviderId] = "whitelisted-stale-douban",
                 [MetaSharkPlugin.ProviderId] = "Douban_whitelisted-stale-douban",
                 [MetadataProvider.Tmdb.ToString()] = "111",
-                [MetadataProvider.Imdb.ToString()] = "ttspinoff111",
+                [MetadataProvider.Imdb.ToString()] = "tt0100008",
                 [MetadataProvider.Tvdb.ToString()] = "tvdb-spinoff-111",
             };
 
@@ -1221,7 +1221,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsTrue(result.HasMetadata);
             Assert.AreEqual("222", info.GetProviderId(MetadataProvider.Tmdb));
             Assert.AreEqual("222", result.Item!.GetProviderId(MetadataProvider.Tmdb));
-            Assert.AreEqual("ttspinoff111", result.Item.GetProviderId(MetadataProvider.Imdb));
+            Assert.AreEqual("tt0100008", result.Item.GetProviderId(MetadataProvider.Imdb));
             Assert.AreEqual("tvdb-spinoff-111", result.Item.GetProviderId(MetadataProvider.Tvdb));
             Assert.IsTrue(refreshIntentStore.HasPending(refreshItemId, info.Path), "桥接 search-missing intent 需要保留到短 TTL 窗口，供 Jellyfin 同轮后续 queryless provider 调用复用。 ");
         }

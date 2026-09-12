@@ -105,10 +105,11 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     LogLlmRequestFailed(this.logger, (int)response.StatusCode, httpDiagnostic, null);
                     return LlmApiResult.Failed(lastDiagnostic);
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
                 {
-                    // 保留原始堆栈，便于定位取消来源。
-                    throw;
+                    // HttpClient 可能把调用方取消包装成 TaskCanceledException；统一回调用方的取消类型，
+                    // 并用 InnerException 保留原始堆栈便于定位取消来源。
+                    throw new OperationCanceledException("LLM request cancelled by the caller.", ex, cancellationToken);
                 }
                 catch (OperationCanceledException) when (requestCancellationToken.IsCancellationRequested)
                 {

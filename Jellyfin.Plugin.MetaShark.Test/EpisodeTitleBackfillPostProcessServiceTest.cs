@@ -447,7 +447,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                 episodeId,
                 disabledEpisode.Path!,
                 disabledEpisode.Name!,
-                "皇后回宫",
+
+                // 门控拒绝发生在抢占候选之前，因此此时没有候选标题可报告。
+                string.Empty,
                 ItemUpdateType.MetadataImport,
                 detail: MetaSharkLibraryCapabilityGateReason.CapabilityDisabledForResolvedLibrary.ToString());
 

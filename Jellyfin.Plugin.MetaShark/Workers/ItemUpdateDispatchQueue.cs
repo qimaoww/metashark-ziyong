@@ -77,8 +77,11 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                     return;
                 }
 
-                this.cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                this.pumpTask = Task.Run(() => this.PumpAsync(this.cancellation.Token), CancellationToken.None);
+                // 必须捕获局部变量：StopAsync 会把 this.cancellation 置空，
+                // 若 lambda 那时才执行就会空引用。
+                var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                this.cancellation = linkedCancellation;
+                this.pumpTask = Task.Run(() => this.PumpAsync(linkedCancellation.Token), CancellationToken.None);
             }
         }
 
@@ -94,7 +97,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 this.pumpTask = null;
             }
 
-            cancellation?.Cancel();
+            if (cancellation != null)
+            {
+                await cancellation.CancelAsync().ConfigureAwait(false);
+            }
 
             if (pump != null)
             {
@@ -145,11 +151,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                     {
                         try
                         {
-                            await this.handler(e, cancellationToken).ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                        {
-                            throw;
+                            // 后处理契约始终是 CancellationToken.None（宿主事件本身不携带 token），
+                            // 队列自身的 token 只用于停止 pump。
+                            await this.handler(e, CancellationToken.None).ConfigureAwait(false);
                         }
 #pragma warning disable CA1031
                         catch (Exception ex)
