@@ -14,12 +14,12 @@ namespace Jellyfin.Plugin.MetaShark.Providers.SimilarItems
     using Microsoft.Extensions.Logging;
 
     /// <summary>
-    /// 剧集相似项目提供商（豆瓣）。
+    /// 剧集相似项目提供商（豆瓣优先，TMDb 兜底）。
     /// </summary>
     public sealed class MetaSharkSeriesSimilarItemsProvider : MetaSharkSimilarItemsProviderBase, IRemoteSimilarItemsProvider<Series>
     {
-        public MetaSharkSeriesSimilarItemsProvider(DoubanApi doubanApi, ILogger<MetaSharkSeriesSimilarItemsProvider> logger)
-            : base(doubanApi, logger)
+        public MetaSharkSeriesSimilarItemsProvider(DoubanApi doubanApi, TmdbApi tmdbApi, ILogger<MetaSharkSeriesSimilarItemsProvider> logger)
+            : base(doubanApi, tmdbApi, logger)
         {
         }
 
@@ -29,7 +29,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers.SimilarItems
             SimilarItemsQuery query,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
-            await foreach (var reference in this.GetDoubanSimilarItemsAsync(item, true, query, cancellationToken).ConfigureAwait(false))
+            await foreach (var reference in this.GetSimilarItemsAsync(item, true, query, cancellationToken).ConfigureAwait(false))
             {
                 yield return reference;
             }
