@@ -77,8 +77,8 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
         private readonly Regex regMetaSourcePrefix = new Regex(@"^\[.+\]", RegexOptions.Compiled);
         private readonly Regex regSeasonNameSuffix = new Regex(@"\s第[0-9一二三四五六七八九十]+?季$|\sSeason\s\d+?$|(?<![0-9a-zA-Z])\d$", RegexOptions.Compiled);
-        private readonly Regex regDoubanIdAttribute = new Regex(@"\[(?:douban|doubanid)-(\d+?)\]", RegexOptions.Compiled);
-        private readonly Regex regTmdbIdAttribute = new Regex(@"\[(?:tmdb|tmdbid)-(\d+?)\]", RegexOptions.Compiled);
+        private readonly Regex regDoubanIdAttribute = new Regex(@"[\[{(](?:douban|doubanid)-(\d+?)[\]})]", RegexOptions.Compiled);
+        private readonly Regex regTmdbIdAttribute = new Regex(@"[\[{(](?:tmdb|tmdbid)-(\d+?)[\]})]", RegexOptions.Compiled);
 
         protected BaseProvider(IHttpClientFactory httpClientFactory, ILogger logger, ILibraryManager libraryManager, IHttpContextAccessor httpContextAccessor, DoubanApi doubanApi, TmdbApi tmdbApi, OmdbApi omdbApi, ImdbApi imdbApi, ILlmTmdbCorrectionMapFacade? llmTmdbCorrectionMapFacade = null, IEpisodeGroupMappingFacade? episodeGroupMappingFacade = null)
         {
@@ -799,7 +799,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(info);
             var fileName = GetOriginalFileName(info);
 
-            // 从文件名属性格式获取，如[douban-12345]或[doubanid-12345]
+            // 从文件名属性格式获取，如 [douban-12345]、{douban-12345}、(doubanid-12345)
             var doubanId = this.RegDoubanIdAttribute.FirstMatchGroup(fileName);
             if (!string.IsNullOrWhiteSpace(doubanId))
             {
@@ -881,7 +881,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             ArgumentNullException.ThrowIfNull(info);
             var fileName = GetOriginalFileName(info);
 
-            // 从文件名属性格式获取，如[tmdb-12345]或{tmdb-12345}
+            // 从文件名属性格式获取，如 [tmdb-12345]、{tmdb-12345}、(tmdbid-12345)
             var tmdbId = this.RegTmdbIdAttribute.FirstMatchGroup(fileName);
             if (!string.IsNullOrWhiteSpace(tmdbId))
             {
