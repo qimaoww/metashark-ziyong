@@ -10,6 +10,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     using Jellyfin.Data.Enums;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Library;
+    using MediaBrowser.Controller.Persistence;
     using MediaBrowser.Controller.Providers;
     using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.IO;
@@ -22,18 +23,21 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
         private readonly IProviderManager providerManager;
         private readonly IFileSystem fileSystem;
         private readonly EpisodeGroupRefreshService refreshService;
+        private readonly ILinkedChildrenService? linkedChildrenService;
         private readonly ConcurrentDictionary<string, (string GroupId, DateTimeOffset ExpiresAt)> recentlyQueuedSeriesIds = new(StringComparer.OrdinalIgnoreCase);
 
         public EpisodeGroupRefreshCoordinator(
             ILibraryManager libraryManager,
             IProviderManager providerManager,
             IFileSystem fileSystem,
-            EpisodeGroupRefreshService? refreshService = null)
+            EpisodeGroupRefreshService? refreshService = null,
+            ILinkedChildrenService? linkedChildrenService = null)
         {
             this.libraryManager = libraryManager ?? throw new ArgumentNullException(nameof(libraryManager));
             this.providerManager = providerManager ?? throw new ArgumentNullException(nameof(providerManager));
             this.fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
             this.refreshService = refreshService ?? new EpisodeGroupRefreshService();
+            this.linkedChildrenService = linkedChildrenService;
         }
 
         public EpisodeGroupRefreshQueueOutcome QueueAffectedSeriesRefresh(
@@ -55,7 +59,8 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
                 this.libraryManager,
                 this.fileSystem,
                 affectedSeriesIds,
-                item => item.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var tmdbId) ? tmdbId : null);
+                item => item.ProviderIds.TryGetValue(MetadataProvider.Tmdb.ToString(), out var tmdbId) ? tmdbId : null,
+                this.linkedChildrenService);
 
             var queued = 0;
             var queuedGroupStates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

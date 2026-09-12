@@ -14,6 +14,7 @@ namespace Jellyfin.Plugin.MetaShark
     using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
     using MediaBrowser.Controller;
     using MediaBrowser.Controller.Library;
+    using MediaBrowser.Controller.Persistence;
     using MediaBrowser.Controller.Plugins;
     using MediaBrowser.Controller.Providers;
     using MediaBrowser.Model.IO;
@@ -195,7 +196,10 @@ namespace Jellyfin.Plugin.MetaShark
                 return new EpisodeGroupRefreshCoordinator(
                     ctx.GetRequiredService<ILibraryManager>(),
                     ctx.GetRequiredService<IProviderManager>(),
-                    ctx.GetRequiredService<IFileSystem>());
+                    ctx.GetRequiredService<IFileSystem>(),
+                    // 事件/扫描路径都允许在没有该服务时退化为不含多版本分集，
+                    // 因此这里是可选解析，插件不强依赖宿主一定注册它。
+                    linkedChildrenService: ctx.GetService<ILinkedChildrenService>());
             });
             serviceCollection.AddSingleton<ITmdbEpisodeGroupMapPersistenceService>((_) => new TmdbEpisodeGroupMapPersistenceService(EpisodeGroupMapParser.Shared, saveLlmMapping: true));
             serviceCollection.AddSingleton<LlmEpisodeGroupMappingAssistService>((ctx) =>
