@@ -37,6 +37,9 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     UpdateReason = ItemUpdateType.MetadataImport,
                 });
 
+            // ItemUpdated 现在由后台队列串行处理，断言前必须等队列排空。
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
+
             refillServiceStub.Verify(
                 x => x.QueueMissingImagesForUpdatedItem(
                     It.Is<ItemChangeEventArgs>(e => e.Item == person && e.UpdateReason == ItemUpdateType.MetadataImport),
@@ -83,6 +86,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Item = person,
                     UpdateReason = ItemUpdateType.MetadataDownload,
                 });
+
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
 
             LogAssert.AssertLoggedOnce(
                 loggerStub,

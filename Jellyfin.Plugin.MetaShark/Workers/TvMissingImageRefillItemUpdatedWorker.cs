@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using Microsoft.Extensions.Hosting;
     using Microsoft.Extensions.Logging;
 
-    public sealed class TvMissingImageRefillItemUpdatedWorker : IHostedService
+    public sealed class TvMissingImageRefillItemUpdatedWorker : IHostedService, IDisposable
     {
         private static readonly Action<ILogger, Exception?> LogWorkerStart =
             LoggerMessage.Define(LogLevel.Information, new EventId(1, nameof(StartAsync)), "[MetaShark] 开始电视缺图回填条目更新工作器.");
@@ -26,6 +26,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private readonly ILibraryManager libraryManager;
         private readonly ITvMissingImageRefillService refillService;
         private readonly ILogger<TvMissingImageRefillItemUpdatedWorker> logger;
+        private readonly ItemUpdateDispatchQueue dispatchQueue;
 
         public TvMissingImageRefillItemUpdatedWorker(
             ILibraryManager libraryManager,
@@ -35,41 +36,64 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.libraryManager = libraryManager;
             this.refillService = refillService;
             this.logger = logger;
+            this.dispatchQueue = new ItemUpdateDispatchQueue(this.ProcessItemUpdatedAsync, logger);
         }
 
         public Task StartAsync(CancellationToken cancellationToken)
         {
             LogWorkerStart(this.logger, null);
             this.libraryManager.ItemUpdated += this.OnItemUpdated;
+            this.dispatchQueue.Start(cancellationToken);
             return Task.CompletedTask;
         }
 
-        public Task StopAsync(CancellationToken cancellationToken)
+        public async Task StopAsync(CancellationToken cancellationToken)
         {
             this.libraryManager.ItemUpdated -= this.OnItemUpdated;
-            return Task.CompletedTask;
+            await this.dispatchQueue.StopAsync().ConfigureAwait(false);
         }
 
+        public void Dispose()
+        {
+            this.dispatchQueue.Dispose();
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// 同步投递入口：保留给需要立即执行的内部调用方与既有测试。
+        /// </summary>
         internal void DispatchItemUpdated(ItemChangeEventArgs e)
         {
             this.refillService.QueueMissingImagesForUpdatedItem(e, CancellationToken.None);
         }
 
-        private void OnItemUpdated(object? sender, ItemChangeEventArgs e)
+        internal Task WaitForPendingUpdatesAsync()
+        {
+            return this.dispatchQueue.WaitForIdleAsync();
+        }
+
+#pragma warning disable CA1031 // 缺图回填是可选增强，异常只记录，不能影响宿主事件线程或后续条目。
+        private Task ProcessItemUpdatedAsync(ItemChangeEventArgs e, CancellationToken cancellationToken)
         {
             var item = e.Item;
-            LogItemUpdated(this.logger, item?.Name ?? string.Empty, item?.Id ?? Guid.Empty, e.UpdateReason, null);
-
             try
             {
-                this.DispatchItemUpdated(e);
+                this.refillService.QueueMissingImagesForUpdatedItem(e, CancellationToken.None);
             }
-#pragma warning disable CA1031 // 插件后处理异常只记录，不能抛回 Jellyfin 的事件调用栈。
             catch (Exception ex)
             {
                 LogPostProcessFailed(this.logger, item?.Id ?? Guid.Empty, e.UpdateReason, ex);
             }
+
+            return Task.CompletedTask;
+        }
 #pragma warning restore CA1031
+
+        private void OnItemUpdated(object? sender, ItemChangeEventArgs e)
+        {
+            var item = e.Item;
+            LogItemUpdated(this.logger, item?.Name ?? string.Empty, item?.Id ?? Guid.Empty, e.UpdateReason, null);
+            this.dispatchQueue.TryEnqueue(e);
         }
     }
 }
