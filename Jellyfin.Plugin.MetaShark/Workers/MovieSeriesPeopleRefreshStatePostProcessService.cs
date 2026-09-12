@@ -652,10 +652,50 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             };
 
             var items = effectiveLibraryManager.GetItemList(query);
-            return items
-                .Where(item => item is Movie or Series)
-                .Where(item => this.CurrentItemContainsTmdbPersonId(item, personTmdbId))
-                .ToList();
+            var candidates = items.Where(item => item is Movie or Series).ToList();
+            if (candidates.Count == 0)
+            {
+                return candidates;
+            }
+
+            // 批量取人物，避免逐条 GetPeople 的 N+1。
+            var peopleByItem = effectiveLibraryManager.GetPeopleByItems(candidates.Select(item => item.Id).ToList());
+            var result = new List<BaseItem>(candidates.Count);
+            foreach (var item in candidates)
+            {
+                if (peopleByItem != null)
+                {
+                    if (peopleByItem.TryGetValue(item.Id, out var batchedPeople)
+                        && ContainsTmdbPersonId(batchedPeople, personTmdbId))
+                    {
+                        result.Add(item);
+                    }
+
+                    continue;
+                }
+
+                if (this.CurrentItemContainsTmdbPersonId(item, personTmdbId))
+                {
+                    result.Add(item);
+                }
+            }
+
+            return result;
+        }
+
+        private static bool ContainsTmdbPersonId(IReadOnlyList<PersonInfo> people, string personTmdbId)
+        {
+            foreach (var person in people)
+            {
+                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(person, out var fingerprint)
+                    && fingerprint != null
+                    && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool CurrentItemContainsTmdbPersonId(BaseItem item, string personTmdbId)

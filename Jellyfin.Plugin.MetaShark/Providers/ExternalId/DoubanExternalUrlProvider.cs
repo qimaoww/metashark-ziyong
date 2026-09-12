@@ -4,9 +4,7 @@
 
 namespace Jellyfin.Plugin.MetaShark.Providers.ExternalId
 {
-    using System;
     using System.Collections.Generic;
-    using System.Diagnostics.CodeAnalysis;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
@@ -16,9 +14,10 @@ namespace Jellyfin.Plugin.MetaShark.Providers.ExternalId
     /// <summary>
     /// External URLs for Douban.
     /// </summary>
-    // Internal to avoid registering a second visible Douban provider entry.
-    [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes", Justification = "Instantiated via Jellyfin type discovery.")]
-    internal sealed class DoubanExternalUrlProvider : IExternalUrlProvider
+    /// <remarks>
+    /// 必须是 public：Jellyfin 通过程序集的 GetExportedTypes() 发现插件类型，internal 类型不会被实例化。
+    /// </remarks>
+    public sealed class DoubanExternalUrlProvider : IExternalUrlProvider
     {
         /// <inheritdoc/>
         public string Name => BaseProvider.DoubanProviderName;

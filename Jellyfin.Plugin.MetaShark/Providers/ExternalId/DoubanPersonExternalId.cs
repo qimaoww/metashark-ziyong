@@ -18,8 +18,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers.ExternalId
         /// <inheritdoc />
         public string Key => BaseProvider.DoubanProviderId;
 
-        public string UrlFormatString => "https://movie.douban.com/celebrity/{0}/";
-
         /// <inheritdoc />
         public ExternalIdMediaType? Type => ExternalIdMediaType.Person;
 

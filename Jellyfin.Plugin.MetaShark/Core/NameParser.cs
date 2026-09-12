@@ -5,6 +5,7 @@
 namespace Jellyfin.Plugin.MetaShark.Core
 {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
@@ -34,6 +35,10 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
         private static readonly Regex EpisodePatternReg = new Regex(@"S\d{1,2}E\d{1,3}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        private const int ParseCacheLimit = 4096;
+
+        private static readonly ConcurrentDictionary<string, ParseNameResult> ParseCache = new ConcurrentDictionary<string, ParseNameResult>(StringComparer.Ordinal);
+
         private static readonly string[] ExtraKeywords =
         {
             "MENU",
@@ -45,7 +50,29 @@ namespace Jellyfin.Plugin.MetaShark.Core
             "EXTRA",
         };
 
+        /// <summary>
+        /// 解析入口带结果缓存：同一次刷新里 BaseProvider/EpisodeProvider/图片 provider 会对同一文件名重复解析。
+        /// </summary>
         public static ParseNameResult Parse(string fileName, bool isEpisode = false)
+        {
+            var sourceName = fileName ?? string.Empty;
+            var cacheKey = string.Concat(isEpisode ? "E|" : "M|", sourceName);
+            if (ParseCache.TryGetValue(cacheKey, out var cachedResult))
+            {
+                return cachedResult;
+            }
+
+            var parsedResult = ParseCore(sourceName, isEpisode);
+            if (ParseCache.Count >= ParseCacheLimit)
+            {
+                ParseCache.Clear();
+            }
+
+            ParseCache[cacheKey] = parsedResult;
+            return parsedResult;
+        }
+
+        private static ParseNameResult ParseCore(string fileName, bool isEpisode)
         {
             fileName = NormalizeFileName(fileName ?? string.Empty);
 

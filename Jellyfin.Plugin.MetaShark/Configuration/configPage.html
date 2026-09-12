@@ -790,27 +790,27 @@
                 }
 
                 Dashboard.showLoadingMsg();
-                $.ajax({
+
+                // 该接口需要 Jellyfin 鉴权；ApiClient.ajax 会自动携带当前会话令牌。
+                ApiClient.ajax({
                     type: 'POST',
                     url: '/plugin/metashark/tmdb/refresh-series',
                     contentType: 'application/json; charset=utf-8',
-                    beforeSend: function (xhr) {
-                        var token = window.ApiClient && ApiClient.accessToken ? ApiClient.accessToken() : null;
-                        if (token) {
-                            xhr.setRequestHeader('Authorization', 'MediaBrowser Token="' + token + '"');
-                        }
-                    },
                     data: JSON.stringify({
                         oldMapping: getEffectiveEpisodeGroupMap(oldManualMapping || '', oldLlmMapping || ''),
                         newMapping: getEffectiveEpisodeGroupMap(newManualMapping || '', newLlmMapping || '')
                     })
-                }).done(function (resp) {
+                }).then(function (resp) {
                     if (resp && resp.code === 1) {
                         Dashboard.alert(resp.msg || '已刷新节目元数据');
                     } else if (resp && resp.msg) {
                         Dashboard.alert(resp.msg);
                     }
-                }).always(function () {
+                }, function () {
+                    // 失败信息由 ApiClient 统一提示。
+                }).then(function () {
+                    Dashboard.hideLoadingMsg();
+                }, function () {
                     Dashboard.hideLoadingMsg();
                 });
             }

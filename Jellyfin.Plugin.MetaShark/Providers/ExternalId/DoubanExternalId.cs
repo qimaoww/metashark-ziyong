@@ -1,4 +1,4 @@
-﻿// <copyright file="DoubanExternalId.cs" company="PlaceholderCompany">
+// <copyright file="DoubanExternalId.cs" company="PlaceholderCompany">
 // Copyright (c) PlaceholderCompany. All rights reserved.
 // </copyright>
 
@@ -20,8 +20,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers.ExternalId
         public string ProviderName => BaseProvider.DoubanProviderName;
 
         public string Key => BaseProvider.DoubanProviderId;
-
-        public string UrlFormatString => "https://movie.douban.com/subject/{0}/";
 
         public ExternalIdMediaType? Type => null;
 
