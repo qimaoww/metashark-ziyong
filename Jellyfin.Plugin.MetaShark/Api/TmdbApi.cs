@@ -277,6 +277,65 @@ namespace Jellyfin.Plugin.MetaShark.Api
         }
 
         /// <summary>
+        /// 获取 TMDb 的推荐列表（recommendations），用于「相似项目」。
+        /// </summary>
+        /// <param name="tmdbId">条目的 TMDb id.</param>
+        /// <param name="isSeries">是否剧集.</param>
+        /// <param name="cancellationToken">取消令牌.</param>
+        public async Task<List<TmdbSimilarItem>> GetRecommendationsAsync(int tmdbId, bool isSeries, CancellationToken cancellationToken)
+        {
+            var list = new List<TmdbSimilarItem>();
+            if (!IsEnable() || tmdbId <= 0)
+            {
+                return list;
+            }
+
+            var key = $"recommend-{tmdbId.ToString(CultureInfo.InvariantCulture)}-{isSeries}";
+            if (this.memoryCache.TryGetValue(key, out List<TmdbSimilarItem>? cached) && cached != null)
+            {
+                return cached;
+            }
+
+            try
+            {
+                await this.EnsureClientConfigAsync().ConfigureAwait(false);
+
+                if (isSeries)
+                {
+                    var containers = await this.tmDbClient.GetTvShowRecommendationsAsync(tmdbId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    foreach (var item in containers?.Results ?? new List<SearchTv>())
+                    {
+                        list.Add(new TmdbSimilarItem { Id = item.Id, Title = item.Name ?? string.Empty, VoteAverage = item.VoteAverage });
+                    }
+                }
+                else
+                {
+                    var containers = await this.tmDbClient.GetMovieRecommendationsAsync(tmdbId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    foreach (var item in containers?.Results ?? new List<SearchMovie>())
+                    {
+                        list.Add(new TmdbSimilarItem { Id = item.Id, Title = item.Title ?? string.Empty, VoteAverage = item.VoteAverage });
+                    }
+                }
+
+                this.memoryCache.Set(key, list, TimeSpan.FromHours(CacheDurationInHours));
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetRecommendationsAsync), ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                this.logTmdbError(this.logger, nameof(this.GetRecommendationsAsync), ex);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            return list;
+        }
+
+        /// <summary>
         /// Gets a tv show from the TMDb API based on its TMDb id.
         /// </summary>
         /// <param name="tmdbId">The tv show's TMDb id.</param>

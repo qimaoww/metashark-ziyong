@@ -104,6 +104,22 @@
                             </label>
                             <div class="fieldDescription">原图豆瓣限制更严格，一般不建议开启</div>
                         </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label" for="EnableDoubanSimilarItems">
+                                <input id="EnableDoubanSimilarItems" name="EnableDoubanSimilarItems" type="checkbox"
+                                    is="emby-checkbox" />
+                                <span>启用豆瓣相似项目</span>
+                            </label>
+                            <div class="fieldDescription">
+                                在条目的「相似项目」里使用豆瓣的「喜欢这部电影/电视剧的人也喜欢」。启用后还需要在媒体库设置的「相似项目提供商」中勾选 MetaShark，并按优先级排序；只对已有豆瓣编号的条目生效。
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="DoubanSimilarItemsCacheDays">相似项目缓存天数</label>
+                            <input id="DoubanSimilarItemsCacheDays" name="DoubanSimilarItemsCacheDays" type="number"
+                                class="emby-input" min="0" max="90" step="1" />
+                            <div class="fieldDescription">允许范围 0-90 天，默认 7 天，0 表示不缓存。相似项目来自豆瓣接口，缓存可以减少请求次数、降低触发风控的概率。</div>
+                        </div>
                             </fieldset>
 
                             <fieldset class="verticalSection verticalSection-extrabottompadding">
@@ -570,6 +586,8 @@
                         document.querySelector('#EnableDoubanAvoidRiskControl').checked = config.EnableDoubanAvoidRiskControl;
                         document.querySelector('#EnableDoubanLargePoster').checked = config.EnableDoubanLargePoster;
                         document.querySelector('#EnableDoubanBackdropRaw').checked = config.EnableDoubanBackdropRaw;
+                        document.querySelector('#EnableDoubanSimilarItems').checked = config.EnableDoubanSimilarItems;
+                        document.querySelector('#DoubanSimilarItemsCacheDays').value = config.DoubanSimilarItemsCacheDays;
 
                         document.querySelector('#EnableTmdb').checked = config.EnableTmdb;
                          document.querySelector('#EnableTmdbSearch').checked = config.EnableTmdbSearch;
@@ -646,6 +664,8 @@
                         config.EnableDoubanAvoidRiskControl = document.querySelector('#EnableDoubanAvoidRiskControl').checked;
                         config.EnableDoubanLargePoster = document.querySelector('#EnableDoubanLargePoster').checked;
                         config.EnableDoubanBackdropRaw = document.querySelector('#EnableDoubanBackdropRaw').checked;
+                        config.EnableDoubanSimilarItems = document.querySelector('#EnableDoubanSimilarItems').checked;
+                        config.DoubanSimilarItemsCacheDays = getNumberInputValueOrFallback('#DoubanSimilarItemsCacheDays', config.DoubanSimilarItemsCacheDays);
 
                         config.EnableTmdb = document.querySelector('#EnableTmdb').checked;
                          config.EnableTmdbSearch = document.querySelector('#EnableTmdbSearch').checked;

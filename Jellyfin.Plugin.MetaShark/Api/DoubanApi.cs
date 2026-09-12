@@ -76,6 +76,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private static readonly Action<ILogger, Exception?> LogGetLoginInfoError =
             LoggerMessage.Define(LogLevel.Error, new EventId(11, nameof(GetLoginInfoAsync)), "[MetaShark] 获取 Douban 登录信息失败.");
 
+        private static readonly Action<ILogger, string, HttpStatusCode, Exception?> LogRecommendFailed =
+            LoggerMessage.Define<string, HttpStatusCode>(LogLevel.Warning, new EventId(13, nameof(GetRecommendationsAsync)), "[MetaShark] Douban 相似项目请求失败. 条目编号={Sid} 状态码={StatusCode}");
+
+        private static readonly Action<ILogger, string, Exception?> LogRecommendError =
+            LoggerMessage.Define<string>(LogLevel.Warning, new EventId(14, nameof(GetRecommendationsAsync)), "[MetaShark] 获取 Douban 相似项目失败. 条目编号={Sid}");
+
         private static readonly object Lock = new object();
         private readonly ILogger<DoubanApi> logger;
         private readonly IDoubanHttpClientFactory httpClientFactory;
@@ -886,6 +892,84 @@ namespace Jellyfin.Plugin.MetaShark.Api
             catch (HttpRequestException ex)
             {
                 LogWallpaperError(this.logger, sid, ex);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            return list;
+        }
+
+        /// <summary>
+        /// 获取豆瓣相似项目，对应豆瓣的「喜欢这部电影/电视剧的人也喜欢」。
+        /// </summary>
+        /// <param name="sid">豆瓣条目编号.</param>
+        /// <param name="isSeries">是否为剧集，决定使用 rexxar 的 tv 还是 movie 端点.</param>
+        /// <param name="cancellationToken">取消令牌.</param>
+        public async Task<List<DoubanRecommendation>> GetRecommendationsAsync(string sid, bool isSeries, CancellationToken cancellationToken)
+        {
+            var list = new List<DoubanRecommendation>();
+            if (string.IsNullOrEmpty(sid))
+            {
+                return list;
+            }
+
+            var cacheKey = $"recommend_{sid}";
+            var expiredOption = new MemoryCacheEntryOptions() { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30) };
+            if (this.memoryCache.TryGetValue(cacheKey, out List<DoubanRecommendation>? recommendations) && recommendations != null)
+            {
+                return recommendations;
+            }
+
+            await this.LimitRequestFrequently().ConfigureAwait(false);
+
+            try
+            {
+                var category = isSeries ? "tv" : "movie";
+                var url = $"https://m.douban.com/rexxar/api/v2/{category}/{sid}/recommendations?count=20&start=0";
+
+                // rexxar 接口校验 Referer，缺失时直接返回 400。
+                using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(url));
+                request.Headers.Referrer = new Uri($"https://m.douban.com/movie/subject/{sid}/");
+                using var response = await this.httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    LogRecommendFailed(this.logger, sid, response.StatusCode, null);
+                    return list;
+                }
+
+                var body = await this.ReadBodyUnlessBlockedAsync(response, url, cancellationToken).ConfigureAwait(false);
+                if (body == null)
+                {
+                    return list;
+                }
+
+                var parsed = JsonSerializer.Deserialize<List<DoubanRecommendation>>(body, JsonDefaults.Options);
+                if (parsed != null)
+                {
+                    foreach (var item in parsed)
+                    {
+                        if (!string.IsNullOrEmpty(item.Id) && !string.IsNullOrEmpty(item.Title))
+                        {
+                            list.Add(item);
+                        }
+                    }
+                }
+
+                this.memoryCache.Set<List<DoubanRecommendation>>(cacheKey, list, expiredOption);
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                LogRecommendError(this.logger, sid, ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                LogRecommendError(this.logger, sid, ex);
+            }
+            catch (JsonException ex)
+            {
+                LogRecommendError(this.logger, sid, ex);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

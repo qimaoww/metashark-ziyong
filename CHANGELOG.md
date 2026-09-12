@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### 新增：豆瓣相似项目提供商（Jellyfin 12）
+
+- 实现 `IRemoteSimilarItemsProvider<Movie>` / `IRemoteSimilarItemsProvider<Series>`，把豆瓣的「喜欢这部电影/电视剧的人也喜欢」接入 Jellyfin 12 的「相似项目」（rexxar 接口，电影走 `/v2/movie/{sid}`、剧集走 `/v2/tv/{sid}`，复用插件已有的豆瓣限流与风控检测）。
+- 新增配置项「启用豆瓣相似项目」与「相似项目缓存天数」（0-90 天，默认 7 天，0 表示不缓存），配置页已同步。
+- 引用使用 `DoubanID` 作为 ProviderId，由 Jellyfin 按 ProviderIds 解析成库内条目；豆瓣评分按 0-10 换算为 0-1 的相似度分数，无评分时不参与加权。
+- 只对已有豆瓣编号的条目生效；是否启用由媒体库设置里的「相似项目提供商」勾选决定（宿主按 `TypeOptions.SimilarItemProviders` 过滤，远程提供商默认不勾选）。
+- Provider 由 Jellyfin 反射发现（无需 DI 注册），实测 `GET /Libraries/AvailableOptions` 中电影/剧集的相似项目提供商已出现 `MetaShark`。
+- 来源按插件现有路由走：复用 `DefaultScraperPolicy`，`default` 模式下豆瓣优先、TMDb 兜底；`tmdb-only` 模式下相似项目只走 TMDb（新增 `TmdbApi.GetRecommendationsAsync`，用 TMDbLib 的 movie/tv recommendations），不再回豆瓣。
+
 ## 3.2.1 - 2026-09-12
 
 - 适配 Jellyfin 12.0：目标框架升级到 `net10.0`，依赖 `Jellyfin.Controller` / `Jellyfin.Model` 12.0.0。
