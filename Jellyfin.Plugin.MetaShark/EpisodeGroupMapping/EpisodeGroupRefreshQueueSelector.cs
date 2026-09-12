@@ -12,6 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Controller.Providers;
+    using MediaBrowser.Model.Entities;
     using MediaBrowser.Model.IO;
 
     internal static class EpisodeGroupRefreshQueueSelector
@@ -40,14 +41,22 @@ namespace Jellyfin.Plugin.MetaShark.EpisodeGroupMapping
             ArgumentNullException.ThrowIfNull(affectedGroupKeys);
             ArgumentNullException.ThrowIfNull(groupKeySelector);
 
-            var seriesItems = libraryManager.GetItemList(new InternalItemsQuery
-            {
-                IncludeItemTypes = new[] { BaseItemKind.Series },
-                IsVirtualItem = false,
-                IsMissing = false,
-                Recursive = true,
-                HasTmdbId = true,
-            });
+            // affectedGroupKeys 就是受影响剧集的 TMDb id（groupKeySelector 取 ProviderIds["Tmdb"]），
+            // 下推到数据库后无需加载全库剧集，也只需对少量剧集做磁盘探测。
+            IReadOnlyList<BaseItem> seriesItems = affectedGroupKeys.Count == 0
+                ? Array.Empty<BaseItem>()
+                : libraryManager.GetItemList(new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { BaseItemKind.Series },
+                    IsVirtualItem = false,
+                    IsMissing = false,
+                    Recursive = true,
+                    HasTmdbId = true,
+                    HasAnyProviderIds = new Dictionary<string, string[]>(StringComparer.Ordinal)
+                    {
+                        [MetadataProvider.Tmdb.ToString()] = affectedGroupKeys.ToArray(),
+                    },
+                });
 
             var queueableSeriesItems = SelectQueueableItems(seriesItems, fileSystem, groupKeySelector);
             return queueableSeriesItems

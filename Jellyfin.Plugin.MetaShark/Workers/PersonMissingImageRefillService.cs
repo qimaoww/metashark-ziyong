@@ -279,6 +279,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 缺图判定只用列/导航字段，跳过 Data JSON 反序列化。
+                SkipDeserialization = true,
             };
 
             return this.libraryManager

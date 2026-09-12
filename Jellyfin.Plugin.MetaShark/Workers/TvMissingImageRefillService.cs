@@ -154,6 +154,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 指纹与缺图判定只用列/导航字段，跳过 Data JSON 反序列化。
+                SkipDeserialization = true,
             };
 
             return this.libraryManager.GetItemList(query);

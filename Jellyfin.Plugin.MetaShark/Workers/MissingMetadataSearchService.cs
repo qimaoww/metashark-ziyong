@@ -212,6 +212,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 判定只依赖列与导航字段（Id/Name/Overview/ProviderIds/Images/父链），
+                // 跳过 Data JSON 反序列化可省掉整库扫描最贵的一环。
+                SkipDeserialization = true,
             };
         }
 
