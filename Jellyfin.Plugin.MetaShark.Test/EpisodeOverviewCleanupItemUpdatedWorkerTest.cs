@@ -40,6 +40,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     UpdateReason = ItemUpdateType.MetadataImport,
                 });
 
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
+
             postProcessServiceStub.Verify(
                 x => x.TryApplyAsync(
                     It.Is<ItemChangeEventArgs>(e => e.Item == episode && e.UpdateReason == ItemUpdateType.MetadataImport),
@@ -89,6 +91,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Item = episode,
                     UpdateReason = ItemUpdateType.MetadataDownload,
                 });
+
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
 
             LogAssert.AssertLoggedOnce(
                 loggerStub,

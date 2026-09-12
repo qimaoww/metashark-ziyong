@@ -25,6 +25,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
         private readonly ILibraryManager libraryManager;
         private readonly ILlmTmdbCorrectionMetadataPostProcessService postProcessService;
         private readonly ILogger<LlmTmdbCorrectionMetadataItemUpdatedWorker> logger;
+        private readonly ItemUpdateDispatchQueue dispatchQueue;
 
         public LlmTmdbCorrectionMetadataItemUpdatedWorker(
             ILibraryManager libraryManager,
@@ -34,19 +35,21 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.libraryManager = libraryManager;
             this.postProcessService = postProcessService;
             this.logger = logger;
+            this.dispatchQueue = new ItemUpdateDispatchQueue(this.ProcessItemUpdatedAsync, logger);
         }
 
         public Task StartAsync(CancellationToken cancellationToken)
         {
             LogWorkerStart(this.logger, null);
             this.libraryManager.ItemUpdated += this.OnItemUpdated;
+            this.dispatchQueue.Start(cancellationToken);
             return Task.CompletedTask;
         }
 
-        public Task StopAsync(CancellationToken cancellationToken)
+        public async Task StopAsync(CancellationToken cancellationToken)
         {
             this.libraryManager.ItemUpdated -= this.OnItemUpdated;
-            return Task.CompletedTask;
+            await this.dispatchQueue.StopAsync().ConfigureAwait(false);
         }
 
         internal void DispatchItemUpdated(ItemChangeEventArgs e)
@@ -54,21 +57,37 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.postProcessService.TryApplyAsync(e, ILlmTmdbCorrectionMetadataPostProcessService.ItemUpdatedTrigger, CancellationToken.None).GetAwaiter().GetResult();
         }
 
+        internal Task WaitForPendingUpdatesAsync()
+        {
+            return this.dispatchQueue.WaitForIdleAsync();
+        }
+
+        private async Task ProcessItemUpdatedAsync(ItemChangeEventArgs e, CancellationToken cancellationToken)
+        {
+            var item = e.Item;
+            var itemPath = item?.Path ?? string.Empty;
+            try
+            {
+                await this.postProcessService.TryApplyAsync(e, ILlmTmdbCorrectionMetadataPostProcessService.ItemUpdatedTrigger, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+#pragma warning disable CA1031
+            catch (Exception ex)
+            {
+                LogPostProcessFailed(this.logger, item?.Id ?? Guid.Empty, itemPath, ex);
+            }
+#pragma warning restore CA1031
+        }
+
         private void OnItemUpdated(object? sender, ItemChangeEventArgs e)
         {
             var item = e.Item;
             var itemPath = item?.Path ?? string.Empty;
             LogItemUpdated(this.logger, ILlmTmdbCorrectionMetadataPostProcessService.ItemUpdatedTrigger, item?.Id ?? Guid.Empty, itemPath, null);
-
-            try
-            {
-                this.DispatchItemUpdated(e);
-            }
-            catch (Exception ex)
-            {
-                // 插件异常不应沿 Jellyfin 的 ItemUpdated 事件栈向上传播，避免中断宿主扫描/刷新流程。
-                LogPostProcessFailed(this.logger, item?.Id ?? Guid.Empty, itemPath, ex);
-            }
+            this.dispatchQueue.TryEnqueue(e);
         }
     }
 }

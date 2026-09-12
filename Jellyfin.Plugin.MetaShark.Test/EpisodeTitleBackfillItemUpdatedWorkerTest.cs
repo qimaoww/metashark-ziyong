@@ -41,6 +41,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     UpdateReason = ItemUpdateType.MetadataImport,
                 });
 
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
+
             postProcessServiceStub.Verify(
                 x => x.TryApplyAsync(
                     It.Is<ItemChangeEventArgs>(e => e.Item == episode),
@@ -88,6 +90,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     UpdateReason = ItemUpdateType.MetadataImport,
                 });
 
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
+
             postProcessServiceStub.Verify(
                 x => x.TryApplyAsync(
                     It.Is<ItemChangeEventArgs>(e => e.Item == episode && e.UpdateReason == ItemUpdateType.MetadataImport),
@@ -117,6 +121,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Item = new Episode { Id = Guid.NewGuid(), Name = "Episode D", Path = "/library/tv/series-a/Season 01/episode-d.mkv" },
                     UpdateReason = ItemUpdateType.MetadataImport,
                 });
+
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
 
             postProcessServiceStub.Verify(
                 x => x.TryApplyAsync(It.IsAny<ItemChangeEventArgs>(), IEpisodeTitleBackfillPostProcessService.ItemUpdatedTrigger, CancellationToken.None),
@@ -150,6 +156,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Item = episode,
                     UpdateReason = ItemUpdateType.MetadataDownload,
                 });
+
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
 
             LogAssert.AssertLoggedOnce(
                 loggerStub,

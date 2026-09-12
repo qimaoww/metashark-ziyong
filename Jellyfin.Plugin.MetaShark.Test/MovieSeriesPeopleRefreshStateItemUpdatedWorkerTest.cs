@@ -638,6 +638,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     UpdateReason = ItemUpdateType.MetadataImport,
                 });
 
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
+
             Assert.AreEqual(1, postProcessServiceStub.CallCount);
             Assert.AreSame(movie, postProcessServiceStub.LastEventArgs?.Item);
             Assert.AreEqual(ItemUpdateType.MetadataImport, postProcessServiceStub.LastEventArgs?.UpdateReason);
@@ -684,6 +686,8 @@ namespace Jellyfin.Plugin.MetaShark.Test
                     Item = series,
                     UpdateReason = ItemUpdateType.MetadataDownload,
                 });
+
+            await worker.WaitForPendingUpdatesAsync().ConfigureAwait(false);
 
             LogAssert.AssertLoggedOnce(
                 loggerStub,
