@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.1 - 2026-09-12
 
 - 适配 Jellyfin 12.0：目标框架升级到 `net10.0`，依赖 `Jellyfin.Controller` / `Jellyfin.Model` 12.0.0。
 - 适配 Jellyfin 12.0 API：`TaskTriggerInfo.Type` 改用 `TaskTriggerInfoType` 枚举，`GetSeasonNumberFromPath` 需要传入 `parentId`，`GetItemList` 返回 `IReadOnlyList<BaseItem>`，排序方向 `SortOrder` 迁移到 `Jellyfin.Database.Implementations.Enums`。
@@ -49,6 +49,12 @@
 - 能力门控在媒体库缺少该类型选项时回退到 Jellyfin 原生 `IBaseItemManager` fetcher 语义（默认跟随全局配置），并接线到 `MissingMetadataSearchService`、`RefreshMetadataTask`、`BoxSetManager`、`AutoCreateCollectionTask`、`TvMissingImageRefillService` 等入口。
 - 合集刷新按名称把过滤下推到数据库，不再把全部合集拉进内存。
 - 豆瓣 `ConfigurationChanged` 订阅改为具名委托并在 `Dispose` 退订，避免插件重载时旧实例被静态事件钉住。
+
+### 第五轮：Jellyfin 12 实机全功能验证修复
+
+- 修复 Jellyfin 12 下人物指纹无法构造导致共享实体库解析全线失效：12.0 的 `GetPeople`/`GetPeopleByItems` 投影不再返回 `ProviderIds`，而 `Person` 实体本身没有 `Type`/`Role`（二者只在 `PersonInfo` 上），原先"读取 Person 实体"的适配恒失败。改为把 Person 条目的 `ProviderIds` 合并回 `PersonInfo` 后再构造指纹，并按人物名缓存条目查询避免同批次重复读库。此前人物缺图回填被全部跳过、影视人物刷新状态长期判定 `CurrentItemNotAuthoritative`、电视缺图回填的图片门控失败。
+- 修复插件状态文件落到临时目录：Jellyfin 12 在插件实例就绪前调用 `RegisterServices`，注册阶段求值的 `DataFolderPath` 退化为 `Path.GetTempPath()/MetaShark`，导致人物/电视缺图回填冷却、标题回填候选、简介清理候选写在临时目录，重启或清理后丢失。改为延迟到状态存储被解析时读取插件数据目录。
+- 实机验证（Jellyfin 12.0.0 + 真实媒体库）：豆瓣/TMDb/IMDb 刮削、人物与图片、合集自动创建、TMDb 剧集组映射、人物缺图回填（删除图片后自动补回）、电视缺图回填（移走海报后自动重下）、影视人物刷新状态结清、剧集标题回填（`第 N 集` → 候选入队并应用）、剧集简介清理、LLM 外部 ID 解析（本地 mock 服务）、3 个插件 API 与配置页。
 
 ## 5.2.2 - 2026-02-10
 
