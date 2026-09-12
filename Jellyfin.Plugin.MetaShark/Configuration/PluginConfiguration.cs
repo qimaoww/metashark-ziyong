@@ -40,6 +40,7 @@ public class PluginConfiguration : BasePluginConfiguration
     private int llmEpisodeGroupMappingMaxCandidateGroups = 8;
     private string? llmStructuredOutputMode = LlmStructuredOutputModeJsonSchema;
     private string? llmReasoningEffort = LlmReasoningEffortDefault;
+    private int doubanSimilarItemsCacheDays = 7;
 
     /// <summary>
     /// Gets 插件版本.
@@ -68,6 +69,21 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     [SuppressMessage("Design", "CA1056:Uri properties should not be strings", Justification = "XML serialization in Jellyfin cannot handle System.Uri.")]
     public string DoubanImageProxyBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether 启用豆瓣相似项目推荐.
+    /// 该开关只是总闸，还需要在媒体库设置里把 MetaShark 勾选为「相似项目提供商」才会生效。
+    /// </summary>
+    public bool EnableDoubanSimilarItems { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets 豆瓣相似项目缓存天数，0 表示不缓存（默认 7 天，最大 90 天）.
+    /// </summary>
+    public int DoubanSimilarItemsCacheDays
+    {
+        get => this.doubanSimilarItemsCacheDays;
+        set => this.doubanSimilarItemsCacheDays = Math.Clamp(value, 0, 90);
+    }
 
     /// <summary>
     /// Gets or sets a value indicating whether 启用获取tmdb元数据.
