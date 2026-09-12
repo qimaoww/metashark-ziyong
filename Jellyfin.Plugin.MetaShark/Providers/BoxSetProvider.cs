@@ -136,6 +136,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                         IncludeItemTypes = new[] { BaseItemKind.BoxSet },
                         CollapseBoxSetItems = false,
                         Recursive = true,
+
+                        // 12.0 支持按名称下推过滤，避免把所有合集都拉进内存。
+                        Name = collection.Name,
                     }) ?? Enumerable.Empty<BaseItem>();
                     var oldBoxSet = existingItems.OfType<BoxSet>().FirstOrDefault(x => x.Name == collection.Name);
                     if (oldBoxSet != null)

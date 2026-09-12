@@ -13,6 +13,7 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Providers;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Library;
@@ -56,13 +57,14 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
             ILogger<RefreshMetadataTask> logger,
             ILibraryManager libraryManager,
             IProviderManager providerManager,
-            IFileSystem fileSystem)
+            IFileSystem fileSystem,
+            IBaseItemManager? baseItemManager = null)
         {
             this.logger = logger;
             this.libraryManager = libraryManager;
             this.providerManager = providerManager;
             this.fileSystem = fileSystem;
-            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
+            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager, baseItemManager);
         }
 
         /// <inheritdoc />

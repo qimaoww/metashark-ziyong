@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.MetaShark.Core;
+using MediaBrowser.Controller.BaseItemManager;
 using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -50,8 +51,8 @@ public sealed class BoxSetManager : IHostedService, IDisposable
     private bool isStopped;
     private int drainRunning;
 
-    public BoxSetManager(ILibraryManager libraryManager, ICollectionManager collectionManager, ILoggerFactory loggerFactory)
-        : this(libraryManager, collectionManager, loggerFactory, DefaultDebounceDelay, new TimerBoxSetDebounceScheduler())
+    public BoxSetManager(ILibraryManager libraryManager, ICollectionManager collectionManager, ILoggerFactory loggerFactory, IBaseItemManager? baseItemManager = null)
+        : this(libraryManager, collectionManager, loggerFactory, DefaultDebounceDelay, new TimerBoxSetDebounceScheduler(), baseItemManager)
     {
     }
 
@@ -60,11 +61,12 @@ public sealed class BoxSetManager : IHostedService, IDisposable
         ICollectionManager collectionManager,
         ILoggerFactory loggerFactory,
         TimeSpan debounceDelay,
-        IBoxSetDebounceScheduler scheduler)
+        IBoxSetDebounceScheduler scheduler,
+        IBaseItemManager? baseItemManager = null)
     {
         this.libraryManager = libraryManager;
         this.collectionManager = collectionManager;
-        this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
+        this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager, baseItemManager);
         this.logger = loggerFactory.CreateLogger<BoxSetManager>();
         this.debounceDelay = debounceDelay;
         this.scheduler = scheduler;

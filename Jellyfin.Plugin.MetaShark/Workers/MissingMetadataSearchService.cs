@@ -12,6 +12,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
     using Jellyfin.Data.Enums;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Providers;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
@@ -73,8 +74,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             ILibraryManager libraryManager,
             IProviderManager providerManager,
             IFileSystem fileSystem,
-            IPeopleRefreshStateStore peopleRefreshStateStore)
-            : this(logger, libraryManager, providerManager, fileSystem, peopleRefreshStateStore, (delay, cancellationToken) => Task.Delay(delay, cancellationToken))
+            IPeopleRefreshStateStore peopleRefreshStateStore,
+            IBaseItemManager? baseItemManager = null)
+            : this(logger, libraryManager, providerManager, fileSystem, peopleRefreshStateStore, (delay, cancellationToken) => Task.Delay(delay, cancellationToken), baseItemManager)
         {
         }
 
@@ -84,7 +86,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             IProviderManager providerManager,
             IFileSystem fileSystem,
             IPeopleRefreshStateStore peopleRefreshStateStore,
-            Func<TimeSpan, CancellationToken, Task> delayAsync)
+            Func<TimeSpan, CancellationToken, Task> delayAsync,
+            IBaseItemManager? baseItemManager = null)
         {
             ArgumentNullException.ThrowIfNull(logger);
             ArgumentNullException.ThrowIfNull(libraryManager);
@@ -98,8 +101,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             this.peopleRefreshStateStore = peopleRefreshStateStore;
             this.providerManager = providerManager;
             this.fileSystem = fileSystem;
-            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
-            this.sharedEntityLibraryCapabilityResolver = new MetaSharkSharedEntityLibraryCapabilityResolver(libraryManager);
+            this.ordinaryItemLibraryCapabilityResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager, baseItemManager);
+            this.sharedEntityLibraryCapabilityResolver = new MetaSharkSharedEntityLibraryCapabilityResolver(libraryManager, linkedChildrenService: null, baseItemManager: baseItemManager);
             this.delayAsync = delayAsync;
         }
 

@@ -82,6 +82,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private readonly HttpClient httpClient;
         private readonly HttpClientHandlerExtended httpClientHandler;
         private readonly DoubanSecHandler doubanHandler;
+        private EventHandler<MediaBrowser.Model.Plugins.BasePluginConfiguration>? configurationChangedHandler;
         private readonly MemoryCache memoryCache;
         private CookieContainer cookieContainer;
         private Regex regId = new Regex(@"/(\d+?)/", RegexOptions.Compiled);
@@ -146,10 +147,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
             this.LoadLoadDoubanCookie();
             if (MetaSharkPlugin.Instance != null)
             {
-                MetaSharkPlugin.Instance.ConfigurationChanged += (_, _) =>
-                {
-                    this.LoadLoadDoubanCookie();
-                };
+                this.configurationChangedHandler = (_, _) => this.LoadLoadDoubanCookie();
+                MetaSharkPlugin.Instance.ConfigurationChanged += this.configurationChangedHandler;
             }
         }
 
@@ -971,6 +970,12 @@ namespace Jellyfin.Plugin.MetaShark.Api
         {
             if (disposing)
             {
+                if (this.configurationChangedHandler != null && MetaSharkPlugin.Instance != null)
+                {
+                    MetaSharkPlugin.Instance.ConfigurationChanged -= this.configurationChangedHandler;
+                    this.configurationChangedHandler = null;
+                }
+
                 this.httpClient.Dispose();
                 this.doubanHandler.Dispose();
                 this.httpClientHandler.Dispose();

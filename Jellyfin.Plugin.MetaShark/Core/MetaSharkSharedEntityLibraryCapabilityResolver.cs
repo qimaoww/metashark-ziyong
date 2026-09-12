@@ -10,6 +10,7 @@ namespace Jellyfin.Plugin.MetaShark.Core
     using System.Linq;
     using System.Reflection;
     using Jellyfin.Data.Enums;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Entities;
     using MediaBrowser.Controller.Entities.Movies;
     using MediaBrowser.Controller.Entities.TV;
@@ -25,11 +26,11 @@ namespace Jellyfin.Plugin.MetaShark.Core
         private readonly MetaSharkOrdinaryItemLibraryCapabilityResolver ordinaryItemResolver;
         private readonly ILinkedChildrenService? linkedChildrenService;
 
-        public MetaSharkSharedEntityLibraryCapabilityResolver(ILibraryManager libraryManager, ILinkedChildrenService? linkedChildrenService = null)
+        public MetaSharkSharedEntityLibraryCapabilityResolver(ILibraryManager libraryManager, ILinkedChildrenService? linkedChildrenService = null, IBaseItemManager? baseItemManager = null)
         {
             ArgumentNullException.ThrowIfNull(libraryManager);
             this.libraryManager = libraryManager;
-            this.ordinaryItemResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager);
+            this.ordinaryItemResolver = new MetaSharkOrdinaryItemLibraryCapabilityResolver(libraryManager, baseItemManager);
             this.linkedChildrenService = linkedChildrenService;
         }
 

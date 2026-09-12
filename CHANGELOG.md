@@ -42,6 +42,14 @@
 - LLM 文本辅助对同一文件名只解析一次（上下文与提示词共用一次 Anitomy 解析）。
 - LLM TMDb 纠错快照增加抢占令牌：并发事件不再重复写库，条目被锁定时只释放抢占并保留待应用纠错。
 
+### 第四轮：事件异步化与原生语义对齐
+
+- 新增 `ItemUpdateDispatchQueue`（有界 Channel + 单消费者 + 异常隔离 + 测试 drain 钩子）；四个阻塞型 ItemUpdated worker 改为后台队列处理，不再在宿主事件线程同步等待 IO/数据库。
+- 延迟重试仅在"本次未完成"时记录退避（新增 `IsPending` 判断），成功应用不再产生多余的计数与写盘。
+- 能力门控在媒体库缺少该类型选项时回退到 Jellyfin 原生 `IBaseItemManager` fetcher 语义（默认跟随全局配置），并接线到 `MissingMetadataSearchService`、`RefreshMetadataTask`、`BoxSetManager`、`AutoCreateCollectionTask`、`TvMissingImageRefillService` 等入口。
+- 合集刷新按名称把过滤下推到数据库，不再把全部合集拉进内存。
+- 豆瓣 `ConfigurationChanged` 订阅改为具名委托并在 `Dispose` 退订，避免插件重载时旧实例被静态事件钉住。
+
 ## 5.2.2 - 2026-02-10
 
 - Fix special placement ordering for TMDb extras.

@@ -8,6 +8,7 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
     using System.Collections.Generic;
     using System.Threading;
     using System.Threading.Tasks;
+    using MediaBrowser.Controller.BaseItemManager;
     using MediaBrowser.Controller.Collections;
     using MediaBrowser.Controller.Library;
     using MediaBrowser.Model.Tasks;
@@ -29,10 +30,10 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         /// </summary>
         /// <param name="loggerFactory">Instance of the <see cref="ILoggerFactory"/> interface.</param>
         /// <param name="libraryManager">Instance of the <see cref="ILibraryManager"/> interface.</param>
-        public AutoCreateCollectionTask(ILoggerFactory loggerFactory, ILibraryManager libraryManager, ICollectionManager collectionManager)
+        public AutoCreateCollectionTask(ILoggerFactory loggerFactory, ILibraryManager libraryManager, ICollectionManager collectionManager, IBaseItemManager? baseItemManager = null)
         {
             this.logger = loggerFactory.CreateLogger<AutoCreateCollectionTask>();
-            this.boxSetManager = new BoxSetManager(libraryManager, collectionManager, loggerFactory);
+            this.boxSetManager = new BoxSetManager(libraryManager, collectionManager, loggerFactory, baseItemManager);
         }
 
         public string Key => $"{MetaSharkPlugin.PluginName}AutoCreateCollection";
