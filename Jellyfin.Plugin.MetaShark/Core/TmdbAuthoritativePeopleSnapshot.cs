@@ -133,7 +133,11 @@ namespace Jellyfin.Plugin.MetaShark.Core
             if (item.SupportsPeople && libraryManager != null)
             {
                 var peopleFromLibraryManager = libraryManager.GetPeople(item);
-                people = peopleFromLibraryManager.Cast<object?>().ToArray();
+
+                // 12.0 的 GetPeople 投影不含 ProviderIds，改用 Person 实体读取 TMDb id。
+                people = peopleFromLibraryManager
+                    .Select(person => TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(person, libraryManager))
+                    .ToArray();
                 return true;
             }
 

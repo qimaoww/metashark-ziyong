@@ -678,7 +678,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 if (peopleByItem != null)
                 {
                     if (peopleByItem.TryGetValue(item.Id, out var batchedPeople)
-                        && ContainsTmdbPersonId(batchedPeople, personTmdbId))
+                        && this.ContainsTmdbPersonId(batchedPeople, personTmdbId))
                     {
                         result.Add(item);
                     }
@@ -695,11 +695,14 @@ namespace Jellyfin.Plugin.MetaShark.Workers
             return result;
         }
 
-        private static bool ContainsTmdbPersonId(IReadOnlyList<PersonInfo> people, string personTmdbId)
+        private bool ContainsTmdbPersonId(IReadOnlyList<PersonInfo> people, string personTmdbId)
         {
+            var effectiveLibraryManager = this.libraryManager ?? BaseItem.LibraryManager;
             foreach (var person in people)
             {
-                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(person, out var fingerprint)
+                // 批量接口不返回 ProviderIds，需解析为 Person 实体后再判定 TMDb id。
+                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(person, effectiveLibraryManager);
+                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(resolvedPerson, out var fingerprint)
                     && fingerprint != null
                     && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
                 {
@@ -725,7 +728,8 @@ namespace Jellyfin.Plugin.MetaShark.Workers
 
             foreach (var currentPerson in people)
             {
-                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(currentPerson, out var fingerprint)
+                var resolvedPerson = TmdbAuthoritativePersonFingerprint.ResolvePersonForProviderIds(currentPerson, effectiveLibraryManager);
+                if (TmdbAuthoritativePersonFingerprint.TryCreateFromCurrentPerson(resolvedPerson, out var fingerprint)
                     && fingerprint != null
                     && string.Equals(fingerprint.TmdbPersonId, personTmdbId, StringComparison.Ordinal))
                 {
