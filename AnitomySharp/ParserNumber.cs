@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2014-2017, Eren Okka
  * Copyright (c) 2016-2017, Paul Miller
  * Copyright (c) 2017-2018, Tyler Bratton
@@ -829,7 +829,7 @@ namespace AnitomySharp
                 if (it > 1 && _parser.Tokens[it].Enclosed && _parser.ParseHelper.IsTokenIsolated(it))
                 {
                     string[] episodes = _parser.Tokens[it].Content.Split(new string[] { "(", ")" }, StringSplitOptions.RemoveEmptyEntries);
-                    if (StringHelper.IsNumericString(episodes[0]) && StringHelper.IsNumericString(episodes[1]))
+                    if (episodes.Length >= 2 && StringHelper.IsNumericString(episodes[0]) && StringHelper.IsNumericString(episodes[1]))
                     {
                         SetEpisodeNumber(episodes[0], _parser.Tokens[it], false);
                         SetAlternativeEpisodeNumber(episodes[1], _parser.Tokens[it]);

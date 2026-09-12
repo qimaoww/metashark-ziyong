@@ -124,9 +124,6 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
 
                 processedCount++;
                 progress.Report(processedCount * 100.0 / totalItems);
-
-                // 等待5秒，避免短时间内请求过多
-                await Task.Delay(5000, cancellationToken).ConfigureAwait(false);
             }
 
             LogFinished(this.logger, totalItems, null);
@@ -144,10 +141,11 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
 
             var items = this.libraryManager.GetItemList(query);
 
+            // Series 的 Path 是目录，只判断 File.Exists 会让"有豆瓣 ID 但缺主图"的剧集永远进不来。
             return items
                 .Where(item =>
                     (((!item.ProviderIds.ContainsKey(BaseProvider.DoubanProviderId) && !item.HasImage(ImageType.Primary))
-                    || (File.Exists(item.Path) && !item.HasImage(ImageType.Primary)))
+                    || ((File.Exists(item.Path) || Directory.Exists(item.Path)) && !item.HasImage(ImageType.Primary)))
                     && this.IsMetadataAllowed(item)))
                 .ToList();
         }
