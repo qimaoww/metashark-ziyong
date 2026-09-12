@@ -23,6 +23,15 @@
 - 依赖：AngleSharp 1.0.1 → 1.8.1，修复 GHSA-pgww-w46g-26qg。
 - 测试：适配 Jellyfin 12 的 ProviderId 格式校验与 API 变更。
 
+### 基于 Jellyfin 12 的深度优化（第二轮）
+
+- 12.0 行为适配：ProviderId 写入改用 `TrySetProviderId` 并记录被拒绝的值；合集成员读写优先走 `ILinkedChildrenService`（适配 `LinkedChildrenLoaded` 语义）；人物关联查询下推 `InternalItemsQuery.PersonIds`；LLM 单集外部 ID 校验按 `SeriesDisplayOrder` 回退换算真实 S/E。
+- 性能：`PersonNameResolver` 在作用域内只做一次全库人物查询；TMDb 纠错映射单槽缓存；候选存储的过期扫描摊还到每分钟且读路径不再落盘；内存候选加 30 分钟 TTL；TMDb 代理 HttpClient 按代理地址复用；`JsonStateFile` 去掉每次状态变更的 fsync。
+- 可靠性：LLM 语义校验改用调用链的配置快照；豆瓣交叉校验查询失败改为 fail-closed；单个已有 ProviderId 评估异常不再中断整条目刮削；人物刷新状态按 180 天摊还裁剪；配置保存与状态文件 IO 处理更稳健。
+- 安全：`POST /plugin/metashark/tmdb/refresh-series` 改为需要 Jellyfin 鉴权（配置页携带令牌），图片代理与登录检查保持匿名访问；图片代理仅允许豆瓣域名并过滤敏感响应头；豆瓣请求恢复 .NET 默认 TLS 证书校验。
+- 日志：LLM 触发评估日志降为 Debug，避免整库刷新时逐条 Information 噪音。
+- 依赖：`Jellyfin.Controller` / `Jellyfin.Model` 引用排除 runtime 资产，插件输出目录不再携带宿主 dll。
+
 ## 5.2.2 - 2026-02-10
 
 - Fix special placement ordering for TMDb extras.

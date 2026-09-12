@@ -80,19 +80,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                 return;
             }
 
-            var claimToken = Guid.NewGuid().ToString("N");
-            var candidate = this.pendingResolver.TryClaimForUpdatedEpisode(episode, claimToken);
-            if (candidate == null)
-            {
-                return;
-            }
-
-            var originalOverviewSnapshot = (candidate.OriginalOverviewSnapshot ?? string.Empty).Trim();
-            var currentOverview = (episode.Overview ?? string.Empty).Trim();
-
             if (!this.IsMetadataAllowed(episode, out var gateDecision))
             {
-                this.pendingResolver.ReleaseClaim(candidate, claimToken);
+                // 门控拒绝是高频路径：先判断再抢占候选，避免每次拒绝都产生 claim + release 两次落盘。
                 this.logger.LogInformation(
                     "[MetaShark] 跳过剧集简介清理. reason={Reason} trigger={Trigger} itemId={ItemId} itemPath={ItemPath} updateReason={UpdateReason} detail={Detail}.",
                     "MetadataGateDenied",
@@ -103,6 +93,16 @@ namespace Jellyfin.Plugin.MetaShark.Workers
                     gateDecision?.Reason.ToString() ?? string.Empty);
                 return;
             }
+
+            var claimToken = Guid.NewGuid().ToString("N");
+            var candidate = this.pendingResolver.TryClaimForUpdatedEpisode(episode, claimToken);
+            if (candidate == null)
+            {
+                return;
+            }
+
+            var originalOverviewSnapshot = (candidate.OriginalOverviewSnapshot ?? string.Empty).Trim();
+            var currentOverview = (episode.Overview ?? string.Empty).Trim();
 
             if (!MetadataLockGuard.CanWriteField(episode, MetadataField.Overview))
             {

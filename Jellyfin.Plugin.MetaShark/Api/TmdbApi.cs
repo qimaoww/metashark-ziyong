@@ -5,6 +5,7 @@
 namespace Jellyfin.Plugin.MetaShark.Api
 {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Globalization;
     using System.IO;
@@ -36,6 +37,9 @@ namespace Jellyfin.Plugin.MetaShark.Api
         private static readonly int CacheDurationInHours = int.Parse("1", CultureInfo.InvariantCulture);
         private static readonly string DefaultApiKey = string.Concat("4219e299c89411838049ab0dab19ebd5");
         private static readonly string DefaultApiHost = string.Concat("api.tmdb.org");
+
+        // 按代理地址复用 HttpClient：原实现每次请求都新建 handler/client，重复 DNS/TLS 握手并留下 TIME_WAIT。
+        private static readonly ConcurrentDictionary<string, HttpClient> RestClients = new ConcurrentDictionary<string, HttpClient>(StringComparer.Ordinal);
         private static readonly JsonSerializerOptions EpisodePlacementJsonOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
@@ -748,19 +752,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                         url.Append("&include_image_language=").Append(Uri.EscapeDataString(normalizedImageLanguages));
                     }
 
-                    using var handler = new HttpClientHandler();
-                    handler.CheckCertificateRevocationList = true;
-                    var proxy = MetaSharkPlugin.Instance?.Configuration?.GetTmdbWebProxy();
-                    if (proxy != null)
-                    {
-                        handler.Proxy = proxy;
-                        handler.UseProxy = true;
-                    }
-
-                    using var httpClient = new HttpClient(handler, false)
-                    {
-                        Timeout = TimeSpan.FromSeconds(10),
-                    };
+                    var httpClient = GetOrCreateRestClient(MetaSharkPlugin.Instance?.Configuration?.GetTmdbWebProxy());
 
                     var requestUri = new Uri(url.ToString(), UriKind.Absolute);
                     using var response = await httpClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
@@ -974,19 +966,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                     url.Append("&language=").Append(Uri.EscapeDataString(normalizedLanguage));
                 }
 
-                using var handler = new HttpClientHandler();
-                handler.CheckCertificateRevocationList = true;
-                var proxy = MetaSharkPlugin.Instance?.Configuration?.GetTmdbWebProxy();
-                if (proxy != null)
-                {
-                    handler.Proxy = proxy;
-                    handler.UseProxy = true;
-                }
-
-                using var httpClient = new HttpClient(handler, false)
-                {
-                    Timeout = TimeSpan.FromSeconds(10),
-                };
+                var httpClient = GetOrCreateRestClient(MetaSharkPlugin.Instance?.Configuration?.GetTmdbWebProxy());
 
                 var requestUri = new Uri(url.ToString(), UriKind.Absolute);
                 using var response = await httpClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
@@ -1601,6 +1581,28 @@ namespace Jellyfin.Plugin.MetaShark.Api
             return $"person-translations-{personTmdbId.ToString(CultureInfo.InvariantCulture)}";
         }
 
+        private static HttpClient GetOrCreateRestClient(IWebProxy? proxy)
+        {
+            var key = proxy?.GetProxy(new Uri("https://api.themoviedb.org"))?.ToString() ?? "<direct>";
+            return RestClients.GetOrAdd(key, _ =>
+            {
+                var handler = new HttpClientHandler
+                {
+                    CheckCertificateRevocationList = true,
+                };
+                if (proxy != null)
+                {
+                    handler.Proxy = proxy;
+                    handler.UseProxy = true;
+                }
+
+                return new HttpClient(handler, disposeHandler: true)
+                {
+                    Timeout = TimeSpan.FromSeconds(10),
+                };
+            });
+        }
+
         private static string GetMovieSearchCacheKey(string name, int year, string language)
         {
             return $"moviesearch-{name}-{year.ToString(CultureInfo.InvariantCulture)}-{language}";
@@ -1790,20 +1792,7 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 url.Append("&country=").Append(Uri.EscapeDataString(region));
             }
 
-            using var handler = new HttpClientHandler
-            {
-                CheckCertificateRevocationList = true,
-            };
-            if (this.configurationSnapshot.Proxy != null)
-            {
-                handler.Proxy = this.configurationSnapshot.Proxy;
-                handler.UseProxy = true;
-            }
-
-            using var httpClient = new HttpClient(handler, false)
-            {
-                Timeout = TimeSpan.FromSeconds(10),
-            };
+            var httpClient = GetOrCreateRestClient(this.configurationSnapshot.Proxy);
             using var response = await httpClient.GetAsync(new Uri(url.ToString(), UriKind.Absolute), cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {

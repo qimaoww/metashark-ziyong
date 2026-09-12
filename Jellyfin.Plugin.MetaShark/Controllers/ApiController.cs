@@ -22,7 +22,6 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
     using Microsoft.Extensions.Logging;
 
     [ApiController]
-    [AllowAnonymous]
     [Route("/plugin/metashark")]
     public class ApiController : ControllerBase
     {
@@ -73,6 +72,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         /// 代理访问图片.
         /// </summary>
         /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
+        [AllowAnonymous]
         [Route("proxy/image")]
         [HttpGet]
         public async Task<Stream> ProxyImage(string url)
@@ -163,6 +163,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         /// 检查豆瓣cookie是否失效.
         /// </summary>
         /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
+        [AllowAnonymous]
         [Route("douban/checklogin")]
         [HttpGet]
         public async Task<ApiResult> CheckDoubanLogin()
@@ -174,6 +175,7 @@ namespace Jellyfin.Plugin.MetaShark.Controllers
         /// <summary>
         /// Refresh series metadata for mapped TMDB episode groups.
         /// </summary>
+        [Authorize]
         [Route("tmdb/refresh-series")]
         [HttpPost]
         public ApiResult RefreshSeriesByEpisodeGroupMap([FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] TmdbEpisodeGroupRefreshRequest? request = null)

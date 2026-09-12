@@ -105,6 +105,20 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
                 return;
             }
 
+            if (!this.IsMetadataAllowed(episode, out var gateDecision))
+            {
+                // 门控拒绝是高频路径：先判断再抢占候选，避免每次拒绝都产生 claim + release 两次落盘。
+                this.LogSkip(
+                    "MetadataGateDenied",
+                    triggerName,
+                    episode,
+                    currentTitle,
+                    string.Empty,
+                    e.UpdateReason,
+                    gateDecision?.Reason.ToString());
+                return;
+            }
+
             var candidate = this.pendingResolver.TryClaimForUpdatedEpisode(episode, claimToken);
             if (candidate == null)
             {
@@ -115,20 +129,6 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             var originalTitleSnapshot = (candidate.OriginalTitleSnapshot ?? string.Empty).Trim();
             var candidateTitle = (candidate.CandidateTitle ?? string.Empty).Trim();
             var itemPath = string.IsNullOrWhiteSpace(candidate.ItemPath) ? episode.Path ?? string.Empty : candidate.ItemPath;
-
-            if (!this.IsMetadataAllowed(episode, out var gateDecision))
-            {
-                this.pendingResolver.ReleaseClaim(candidate, claimToken);
-                this.LogSkip(
-                    "MetadataGateDenied",
-                    triggerName,
-                    episode,
-                    currentTitle,
-                    candidateTitle,
-                    e.UpdateReason,
-                    gateDecision?.Reason.ToString());
-                return;
-            }
 
             if (!MetadataLockGuard.CanWriteField(episode, MetadataField.Name))
             {

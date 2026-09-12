@@ -107,7 +107,8 @@ namespace Jellyfin.Plugin.MetaShark.Api
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    throw new OperationCanceledException(cancellationToken);
+                    // 保留原始堆栈，便于定位取消来源。
+                    throw;
                 }
                 catch (OperationCanceledException) when (requestCancellationToken.IsCancellationRequested)
                 {

@@ -794,6 +794,12 @@
                     type: 'POST',
                     url: '/plugin/metashark/tmdb/refresh-series',
                     contentType: 'application/json; charset=utf-8',
+                    beforeSend: function (xhr) {
+                        var token = window.ApiClient && ApiClient.accessToken ? ApiClient.accessToken() : null;
+                        if (token) {
+                            xhr.setRequestHeader('Authorization', 'MediaBrowser Token="' + token + '"');
+                        }
+                    },
                     data: JSON.stringify({
                         oldMapping: getEffectiveEpisodeGroupMap(oldManualMapping || '', oldLlmMapping || ''),
                         newMapping: getEffectiveEpisodeGroupMap(newManualMapping || '', newLlmMapping || '')
