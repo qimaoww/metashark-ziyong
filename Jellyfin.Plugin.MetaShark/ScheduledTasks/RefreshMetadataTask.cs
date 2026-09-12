@@ -37,6 +37,9 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         private static readonly Action<ILogger, int, Exception?> LogItemsFound =
             LoggerMessage.Define<int>(LogLevel.Information, new EventId(3, nameof(ExecuteAsync)), "[MetaShark] 找到 {Count} 个待重新刮削条目.");
 
+        private static readonly Action<ILogger, Exception?> LogScanRunning =
+            LoggerMessage.Define(LogLevel.Information, new EventId(9, nameof(ExecuteAsync)), "[MetaShark] 媒体库扫描进行中，跳过重新刮削. reason=LibraryScanRunning.");
+
         private static readonly Action<ILogger, string, Guid, Exception?> LogQueueRefresh =
             LoggerMessage.Define<string, Guid>(LogLevel.Debug, new EventId(4, nameof(ExecuteAsync)), "[MetaShark] 已排队刷新条目. name={Name} itemId={Id}.");
 
@@ -90,6 +93,15 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(progress);
+
+            // 与 Jellyfin 自带任务一致：扫描期间跳过，避免和扫描争用数据库与刷新队列。
+            if (this.libraryManager.IsScanRunning)
+            {
+                LogScanRunning(this.logger, null);
+                progress.Report(100);
+                return;
+            }
+
             LogTaskStart(this.logger, null);
 
             var itemsToRefresh = this.GetItemsNeedingMetadataRefresh();
@@ -137,6 +149,10 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
                 IsVirtualItem = false,
                 IsMissing = false,
                 Recursive = true,
+
+                // 候选判定只用 ProviderIds/Overview/图片/路径等列与导航字段，
+                // 跳过整库 Data JSON 反序列化。
+                SkipDeserialization = true,
             };
 
             var items = this.libraryManager.GetItemList(query);

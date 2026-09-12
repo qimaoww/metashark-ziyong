@@ -31,6 +31,9 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         private static readonly Action<ILogger, int, int, Exception?> LogFinished =
             LoggerMessage.Define<int, int>(LogLevel.Information, new EventId(4, nameof(ExecuteAsync)), "[MetaShark] 季刷新排队完成. Queued={Queued} Seasons={Seasons}.");
 
+        private static readonly Action<ILogger, Exception?> LogScanRunning =
+            LoggerMessage.Define(LogLevel.Information, new EventId(5, nameof(ExecuteAsync)), "[MetaShark] 媒体库扫描进行中，跳过季刷新. reason=LibraryScanRunning.");
+
         private readonly ILogger<SeasonRefreshTask> logger;
         private readonly ILibraryManager libraryManager;
         private readonly IProviderManager providerManager;
@@ -64,12 +67,24 @@ namespace Jellyfin.Plugin.MetaShark.ScheduledTasks
         public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(progress);
+
+            // 与 Jellyfin 自带任务一致：扫描期间跳过，避免和扫描争用数据库与刷新队列。
+            if (this.libraryManager.IsScanRunning)
+            {
+                LogScanRunning(this.logger, null);
+                progress.Report(100);
+                return Task.CompletedTask;
+            }
+
             LogStart(this.logger, null);
 
             var seasons = this.libraryManager.GetItemList(new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { BaseItemKind.Season },
                 Recursive = true,
+
+                // 后续只用 Id/Name 与刷新选项，跳过整库 Data JSON 反序列化。
+                SkipDeserialization = true,
             });
             if (seasons.Count == 0)
             {
