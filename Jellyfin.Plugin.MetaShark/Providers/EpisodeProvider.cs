@@ -689,9 +689,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 return null;
             }
 
-            return ChineseLocalePolicy.IsChineseRequest(normalizedRequestedLanguage)
-                ? "zh-CN"
-                : normalizedRequestedLanguage;
+            // 尊重用户明确设置的中文变体（zh-CN / zh-SG / zh-TW / zh-HK）；
+            // 通用 zh 与语言名别名交给 ResolveTmdbMetadataLanguage 按默认中文地区解析。
+            return ChineseLocalePolicy.ResolveTmdbMetadataLanguage(
+                    normalizedRequestedLanguage,
+                    null,
+                    MetaSharkPlugin.Instance?.Configuration.DefaultChineseMetadataLocale)
+                ?? normalizedRequestedLanguage;
         }
 
         private static string? ResolveEpisodeOverviewSourceLanguage(string? sourceLanguage)
@@ -818,9 +822,9 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var normalizedTitleMetadataLanguage = string.IsNullOrWhiteSpace(titleMetadataLanguage) ? null : ChineseLocalePolicy.CanonicalizeLanguage(titleMetadataLanguage);
             var detailsTitle = TrimEpisodeLocalizedValue(CreateEpisodeLocalizedValue(
                 providerTitle,
-                string.Equals(normalizedTitleMetadataLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase) ? "zh-CN" : null));
+                ChineseLocalePolicy.IsChineseMetadataLanguage(normalizedTitleMetadataLanguage) ? normalizedTitleMetadataLanguage : null));
             var trimmedProviderTitle = detailsTitle?.Value;
-            if (!ChineseLocalePolicy.IsAllowedForStrictZhCn(normalizedTitleMetadataLanguage)
+            if (!ChineseLocalePolicy.IsChineseMetadataLanguage(normalizedTitleMetadataLanguage)
                 || !IsGenericTmdbEpisodeTitle(trimmedProviderTitle))
             {
                 return (detailsTitle, null, detailsTitle);

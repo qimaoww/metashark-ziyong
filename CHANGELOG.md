@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### 修复：Jellyfin 12 新增中文语言代码的全面适配
+
+- Jellyfin 12 的语言下拉改用显示名（`Chinese` / `Chinese (Bilingual)` / `Chinese (Hong Kong)` / `Chinese (Simplified)` / `Chinese (Traditional)`），且 `Chinese (Bilingual)` 使用自定义两字母代码 `ze`。此前这些值无法被识别为中文请求，导致 TMDb 请求语言错误、分集标题来源判定失败——表现为新入库剧集的标题不会被正确覆盖（例如标题一直停留在「第 N 集」或写入非请求语言的文本）。
+- `ChineseLocalePolicy` 增加语言别名表与前缀兜底：显示名、`zho`/`chi`/`ze`、大小写变体（`zh-cn`/`zh-tw`/`zh-hk`）都能归一到 BCP-47，未登记的新变体（如 `Chinese (Classical)`）按地区/字体关键词兜底。
+- 分集标题链路改为**跟随用户明确设置的中文变体**：`zh-TW`/`zh-HK` 抓取繁体标题，`zh-CN`/`zh-SG` 抓取简体，通用 `zh` 与显示名按插件的「默认中文元数据地区」解析。此前一律强制 `zh-CN`，与 README 中「明确的 `zh-CN`、`zh-SG`、`zh-TW`、`zh-HK` 设置优先」的说明不符。
+- 新增按语言变体的脚本一致性校验：简中来源拒绝繁体文本、繁中来源拒绝简体文本、简繁混用拒绝；无繁简差异的纯中文标题（如「勇者的肋骨」）不再被误拒。原有的严格简中校验 `IsTextAllowedForStrictZhCn` 语义保持不变。
+
 ## 3.2.2 - 2026-09-12
 
 ### 新增：豆瓣相似项目提供商（Jellyfin 12）

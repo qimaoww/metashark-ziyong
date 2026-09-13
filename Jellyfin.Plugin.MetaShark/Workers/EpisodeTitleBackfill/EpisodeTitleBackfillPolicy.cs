@@ -6,6 +6,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
 {
     using System;
     using System.Linq;
+    using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.Model;
 
     public static class EpisodeTitleBackfillPolicy
@@ -17,7 +18,7 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
                 return providerTitle?.Value;
             }
 
-            if (!HasStrictZhCnTitleSource(providerTitle))
+            if (!HasChineseMetadataTitleSource(providerTitle))
             {
                 return originalMetadataTitle;
             }
@@ -33,7 +34,10 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
                 return originalMetadataTitle;
             }
 
-            return trimmedProviderTitle;
+            // 文本脚本必须与来源语言变体一致：简中来源要简体、繁中来源要繁体。
+            return ChineseLocalePolicy.IsTextAllowedForChineseMetadataLanguage(trimmedProviderTitle, providerTitle?.SourceLanguage)
+                ? trimmedProviderTitle
+                : originalMetadataTitle;
         }
 
         public static bool IsGenericTmdbEpisodeTitle(string? title)
@@ -82,9 +86,9 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             return true;
         }
 
-        private static bool HasStrictZhCnTitleSource(EpisodeLocalizedValue? providerTitle)
+        private static bool HasChineseMetadataTitleSource(EpisodeLocalizedValue? providerTitle)
         {
-            return string.Equals(providerTitle?.SourceLanguage?.Trim(), "zh-CN", StringComparison.OrdinalIgnoreCase);
+            return ChineseLocalePolicy.IsChineseMetadataLanguage(providerTitle?.SourceLanguage);
         }
     }
 }
