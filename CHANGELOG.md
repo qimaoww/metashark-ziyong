@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.3 - 2026-09-13
 
 ### 修复：Jellyfin 12 新增中文语言代码的全面适配
 
