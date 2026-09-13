@@ -36,12 +36,61 @@ namespace Jellyfin.Plugin.MetaShark.Core
             "zh-Hans",
         };
 
+        private static readonly HashSet<string> ChineseMetadataLanguages = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            TmdbChineseLocaleZhCn,
+            TmdbChineseLocaleZhSg,
+            TmdbChineseLocaleZhTw,
+            TmdbChineseLocaleZhHk,
+        };
+
         private static readonly HashSet<string> HantLanguageTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "zh-TW",
             "zh-HK",
             "zh-MO",
             "zh-Hant",
+        };
+
+        /// <summary>
+        /// Jellyfin 12 的语言下拉使用显示名（如 Chinese / Chinese (Traditional)）而不是 BCP-47 代码，
+        /// 库、服务器或条目的 PreferredMetadataLanguage 可能直接存这些值；
+        /// 若不先归一化，IsChineseRequest 会判定为非中文，导致 TMDb 请求语言无法识别、
+        /// 中文标题来源与繁简判定失效（表现为标题不被正确覆盖）。
+        /// </summary>
+        private static readonly Dictionary<string, string> LanguageAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Chinese"] = "zh",
+            ["Chinese (Simplified)"] = "zh-CN",
+            ["Chinese (China)"] = "zh-CN",
+            ["Chinese (Traditional)"] = "zh-TW",
+            ["Chinese (Taiwan)"] = "zh-TW",
+            ["Chinese (Hong Kong)"] = "zh-HK",
+            ["Chinese (Singapore)"] = "zh-SG",
+            ["Chinese (Macao)"] = "zh-MO",
+            ["Chinese (Macau)"] = "zh-MO",
+
+            // 「中英双语」按通用中文处理，具体变体仍由地区与默认中文地区决定。
+            // Jellyfin 12 为它使用自定义两字母代码 ze（见 iso6392.txt 的变体条目）。
+            ["Chinese (Bilingual)"] = "zh",
+            ["ze"] = "zh",
+
+            // ISO 639-2/T 与 639-2/B 的三字母代码。
+            ["zho"] = "zh",
+            ["chi"] = "zh",
+        };
+
+        // 地区关键词比字体关键词更具体，必须优先匹配，
+        // 否则 Chinese (Traditional, Hong Kong) 会被 Traditional 提前判成 zh-TW。
+        private static readonly (string Keyword, string Language)[] ChineseDisplayNameKeywords =
+        {
+            ("Hong Kong", TmdbChineseLocaleZhHk),
+            ("Macao", TmdbChineseLocaleZhHk),
+            ("Macau", TmdbChineseLocaleZhHk),
+            ("Singapore", TmdbChineseLocaleZhSg),
+            ("Taiwan", TmdbChineseLocaleZhTw),
+            ("Traditional", TmdbChineseLocaleZhTw),
+            ("Simplified", TmdbChineseLocaleZhCn),
         };
 
         private static readonly (char Hans, char Hant)[] DistinctiveChineseCharacterPairs =
@@ -162,6 +211,19 @@ namespace Jellyfin.Plugin.MetaShark.Core
             }
 
             var trimmed = language.Trim();
+
+            // 先把 Jellyfin 的显示名/三字母代码映射成 BCP-47，再走下面的常规规范化。
+            if (LanguageAliases.TryGetValue(trimmed, out var aliasedLanguage))
+            {
+                trimmed = aliasedLanguage;
+            }
+            else if (trimmed.StartsWith("Chinese", StringComparison.OrdinalIgnoreCase))
+            {
+                // 兜底：Jellyfin 的语言名可能新增未登记的变体（例如 Chinese (Classical)），
+                // 只要仍以 Chinese 开头就按中文处理，按关键词决定繁体变体，其余按通用中文。
+                trimmed = ResolveChineseDisplayNameFallback(trimmed);
+            }
+
             if (trimmed.Contains('_', StringComparison.Ordinal))
             {
                 return trimmed;
@@ -325,6 +387,55 @@ namespace Jellyfin.Plugin.MetaShark.Core
                 return false;
             }
 
+            var (hasHansEvidence, hasHantEvidence) = CollectChineseScriptEvidence(text);
+            return hasHansEvidence && !hasHantEvidence;
+        }
+
+        /// <summary>
+        /// 判断语言是否为可用于中文元数据的中文变体（简中 / 新加坡 / 台湾 / 香港）。
+        /// 与 <see cref="IsAllowedForStrictZhCn"/> 不同，这里接受繁体变体，
+        /// 用于跟随用户在 Jellyfin 中明确设置的中文语言（例如 zh-TW、zh-HK）。
+        /// </summary>
+        /// <param name="language">语言标签或 Jellyfin 语言名.</param>
+        public static bool IsChineseMetadataLanguage(string? language)
+        {
+            var canonicalLanguage = CanonicalizeLanguage(language);
+            return !string.IsNullOrEmpty(canonicalLanguage) && ChineseMetadataLanguages.Contains(canonicalLanguage);
+        }
+
+        /// <summary>
+        /// 按语言变体的脚本要求校验文本：简中变体要求简体、繁中变体要求繁体，
+        /// 语言无法判断脚本或文本没有明确繁简证据时放行。
+        /// </summary>
+        /// <param name="text">待校验文本.</param>
+        /// <param name="language">文本所属语言.</param>
+        public static bool IsTextAllowedForChineseMetadataLanguage(string? text, string? language)
+        {
+            if (string.IsNullOrWhiteSpace(text) || !text.HasChinese())
+            {
+                return false;
+            }
+
+            var scriptBucket = GetLanguageScriptBucket(language);
+            if (scriptBucket == ChineseScriptBucket.Unknown)
+            {
+                return true;
+            }
+
+            var (hasHansEvidence, hasHantEvidence) = CollectChineseScriptEvidence(text);
+            if (hasHansEvidence && hasHantEvidence)
+            {
+                // 简繁混用视为不可信。
+                return false;
+            }
+
+            // 注意：与 IsTextAllowedForStrictZhCn 不同，这里允许没有繁简差异证据的纯中文标题
+            // （例如「勇者的肋骨」），只拒绝与目标变体冲突的证据。
+            return scriptBucket == ChineseScriptBucket.Hans ? !hasHantEvidence : !hasHansEvidence;
+        }
+
+        private static (bool HasHans, bool HasHant) CollectChineseScriptEvidence(string text)
+        {
             var hasHansEvidence = false;
             var hasHantEvidence = false;
 
@@ -342,16 +453,31 @@ namespace Jellyfin.Plugin.MetaShark.Core
 
                 if (hasHansEvidence && hasHantEvidence)
                 {
-                    return false;
+                    break;
                 }
             }
 
-            return hasHansEvidence && !hasHantEvidence;
+            return (hasHansEvidence, hasHantEvidence);
         }
 
         private static string? GetTrimmedNonEmptyValue(string? value)
         {
             return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+
+        private static string ResolveChineseDisplayNameFallback(string displayName)
+        {
+            foreach (var (keyword, language) in ChineseDisplayNameKeywords)
+            {
+                if (displayName.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                {
+                    return language;
+                }
+            }
+
+            // Chinese / Chinese (Simplified) / Chinese (Bilingual) 等一律按通用中文处理，
+            // 具体变体由地区与默认中文地区决定。
+            return "zh";
         }
 
         private static string ResolveGenericChineseLocale(string? countryCode, string defaultLocale)

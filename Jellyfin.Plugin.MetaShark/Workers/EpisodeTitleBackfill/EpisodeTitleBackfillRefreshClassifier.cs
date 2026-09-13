@@ -105,15 +105,13 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
                 return false;
             }
 
-            return !HasStrictZhCnTitleSource(providerTitle);
+            return !HasChineseMetadataTitleSource(providerTitle);
         }
 
-        private static bool HasStrictZhCnTitleSource(EpisodeLocalizedValue? providerTitle)
+        // 中文变体（简中/新加坡/台湾/香港）都算可信来源，具体脚本一致性由文本校验负责。
+        private static bool HasChineseMetadataTitleSource(EpisodeLocalizedValue? providerTitle)
         {
-            var normalizedSourceLanguage = string.IsNullOrWhiteSpace(providerTitle?.SourceLanguage)
-                ? null
-                : ChineseLocalePolicy.CanonicalizeLanguage(providerTitle.SourceLanguage);
-            return string.Equals(normalizedSourceLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase);
+            return ChineseLocalePolicy.IsChineseMetadataLanguage(providerTitle?.SourceLanguage);
         }
 
         private static EpisodeLocalizedValue CreateEpisodeLocalizedValue(string? value, string? sourceLanguage)
