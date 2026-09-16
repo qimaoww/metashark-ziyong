@@ -455,6 +455,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
 
             var tmdbApi = new TmdbApi(loggerFactory);
             SeedEpisode(tmdbApi, 0, 1, 1, "zh-CN", "zh-CN", new TvEpisode { Name = "Zero Series Episode" });
+            SeedEpisodeTranslationTitle(tmdbApi, 0, 1, 1, "zh-CN", null);
             using var provider = CreateProvider(libraryManagerStub.Object, httpContextAccessor, tmdbApi, storeStub.Object, loggerFactory);
 
             var result = await provider.GetMetadata(info, CancellationToken.None).ConfigureAwait(false);
@@ -462,7 +463,7 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsNotNull(result.Item);
             Assert.IsTrue(result.HasMetadata);
             Assert.IsTrue(result.QueriedById, "Invalid TMDb id currently flows through ToInt() as 0 and can satisfy the TMDb episode lookup when series id 0 is cached.");
-            Assert.AreEqual("Zero Series Episode", result.Item!.Name);
+            Assert.AreEqual("第 1 集", result.Item!.Name, "即使沿用无效 ID 转零的查询行为，简体中文请求也不能写入回退的英文标题。");
             Assert.AreEqual(1, result.Item.ParentIndexNumber);
             Assert.AreEqual(1, result.Item.IndexNumber);
             storeStub.Verify(x => x.Save(It.IsAny<EpisodeTitleBackfillCandidate>()), Times.Never);
