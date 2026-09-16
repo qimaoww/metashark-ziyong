@@ -5,6 +5,13 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
+  <!-- Optional integration tests execute the real host probe and metadata merge, without a running server. -->
+  <PropertyGroup Condition="'$(JellyfinServerPath)' != ''">
+    <DefineConstants>$(DefineConstants);JELLYFIN_HOST_TESTS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(JellyfinServerPath)' != ''">
+    <Reference Include="MediaBrowser.Providers" HintPath="$(JellyfinServerPath)/MediaBrowser.Providers.dll" />
+  </ItemGroup>
   <ItemGroup>
     <!-- 插件工程用 ExcludeAssets=runtime 保持发布目录干净，测试需要这些宿主程序集参与运行。 -->
     <PackageReference Include="Jellyfin.Controller" Version="12.0.0" />

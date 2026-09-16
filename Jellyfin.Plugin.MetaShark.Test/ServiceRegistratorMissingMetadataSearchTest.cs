@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Jellyfin.Plugin.MetaShark.Providers.Compatibility;
 using Jellyfin.Plugin.MetaShark.Workers;
 using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
 using MediaBrowser.Controller;
@@ -50,6 +51,29 @@ namespace Jellyfin.Plugin.MetaShark.Test
             Assert.IsInstanceOfType(overviewStore, typeof(FileEpisodeOverviewCleanupCandidateStore));
             Assert.AreEqual("title-candidates.json", Path.GetFileName(GetStateFilePath(titleStore)));
             Assert.AreEqual("overview-candidates.json", Path.GetFileName(GetStateFilePath(overviewStore)));
+        }
+
+        [TestMethod]
+        public async Task RegisterServices_ShouldShareTitleGuardBetweenAutoDiscoveredProviders()
+        {
+            using var serviceProvider = CreateServiceProvider();
+            var guard = serviceProvider.GetRequiredService<EpisodeRefreshTitleGuard>();
+            Assert.AreSame(guard, serviceProvider.GetRequiredService<EpisodeRefreshTitleGuard>());
+            var libraryManager = Mock.Get(serviceProvider.GetRequiredService<ILibraryManager>());
+            libraryManager.Setup(x => x.GetLibraryOptions(It.IsAny<MediaBrowser.Controller.Entities.BaseItem>()))
+                .Returns(EpisodeRefreshTitleGuardTest.CreateLibraryOptions());
+
+            // Jellyfin discovers IMetadataProvider implementations and creates them through DI.
+            var capture = ActivatorUtilities.CreateInstance<EpisodeTitleSnapshotProvider>(serviceProvider);
+            var restore = ActivatorUtilities.CreateInstance<EpisodeTitleRestoreProvider>(serviceProvider);
+            Assert.IsNotNull(capture);
+            Assert.IsNotNull(restore);
+            var item = EpisodeRefreshTitleGuardTest.CreateEpisode("已有单集标题");
+            var options = EpisodeRefreshTitleGuardTest.CreateOptions();
+            Assert.AreEqual(ItemUpdateType.None, await capture.FetchAsync(item, options, CancellationToken.None));
+            item.Name = EpisodeRefreshTitleGuardTest.BookwormEmbeddedTitle;
+            Assert.AreEqual(ItemUpdateType.MetadataImport, await restore.FetchAsync(item, options, CancellationToken.None));
+            Assert.AreEqual("已有单集标题", item.Name);
         }
 
         [TestMethod]
