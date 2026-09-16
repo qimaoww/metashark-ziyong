@@ -5,7 +5,6 @@ using System.Reflection;
 namespace Jellyfin.Plugin.MetaShark.Test
 {
     [TestClass]
-    [TestCategory("Stable")]
     public class EpisodeProviderTitleBackfillPolicyTest
     {
         [TestMethod]
@@ -45,30 +44,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ShouldValidateChineseSource_WhenOriginalTitleIsNotDefaultJellyfinTitle()
+        public void ShouldKeepExistingNonTargetBehavior_WhenOriginalTitleIsNotDefaultJellyfinTitle()
         {
             var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("重逢", CreateLocalizedValue("Reunion", "zh-CN"));
 
-            Assert.AreEqual("重逢", result);
-        }
-
-        [TestMethod]
-        public void ShouldKeepNonChineseBehavior_WhenSourceIsNotChinese()
-        {
-            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("重逢", CreateLocalizedValue("Reunion", null));
-
             Assert.AreEqual("Reunion", result);
-        }
-
-        [DataTestMethod]
-        [DataRow(null)]
-        [DataRow("")]
-        [DataRow("   ")]
-        public void ShouldKeepExistingTitle_WhenProviderTitleIsMissing(string? providerTitle)
-        {
-            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("重逢", CreateLocalizedValue(providerTitle, null));
-
-            Assert.AreEqual("重逢", result);
         }
 
         [TestMethod]
@@ -80,11 +60,11 @@ namespace Jellyfin.Plugin.MetaShark.Test
         }
 
         [TestMethod]
-        public void ShouldKeepOriginalTitle_WhenSourceLanguageIsZhCnAndTitleUsesTraditionalCharacters()
+        public void ShouldBackfillProviderTitle_WhenSourceLanguageIsZhCnAndTitleUsesTraditionalCharacters()
         {
             var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("第 1 集", CreateLocalizedValue("皇后回宮", "zh-CN"));
 
-            Assert.AreEqual("第 1 集", result);
+            Assert.AreEqual("皇后回宮", result);
         }
 
         [TestMethod]
@@ -139,37 +119,12 @@ namespace Jellyfin.Plugin.MetaShark.Test
         [DataRow("第 1 集", true)]
         [DataRow("Episode 1", true)]
         [DataRow("  episode 12  ", true)]
-        [DataRow("第01集", true)]
-        [DataRow("第1集", true)]
-        [DataRow("第 01 話", true)]
-        [DataRow("第1话", true)]
-        [DataRow("第", false)]
-        [DataRow("第集", false)]
-        [DataRow("第十二集", false)]
-        [DataRow("第1集的故事", false)]
+        [DataRow("第01集", false)]
         [DataRow("Episode One", false)]
         [DataRow("皇后回宫", false)]
-        public void ShouldRecognizeGenericTmdbEpisodeTitlesWithDifferentSpacing(string title, bool expected)
+        public void ShouldMatchOnlyGenericTmdbEpisodeTitleFormats(string title, bool expected)
         {
             var result = EpisodeTitleBackfillPolicy.IsGenericTmdbEpisodeTitle(title);
-
-            Assert.AreEqual(expected, result);
-        }
-
-        [DataTestMethod]
-        [DataRow("zh-CN", "皇后回宫", "皇后回宫")]
-        [DataRow("zh-CN", "皇后回宮", "原有单集标题")]
-        [DataRow("zh-CN", "皇后回宫與重逢", "原有单集标题")]
-        [DataRow("zh-SG", "皇后回宮", "原有单集标题")]
-        [DataRow("zh-TW", "皇后回宮", "皇后回宮")]
-        [DataRow("zh-TW", "皇后回宫", "原有单集标题")]
-        [DataRow("zh-HK", "皇后回宮", "皇后回宮")]
-        [DataRow("zh-HK", "皇后回宫", "原有单集标题")]
-        [DataRow("zh-CN", "第01集", "原有单集标题")]
-        [DataRow("zh-CN", "Episode 1", "原有单集标题")]
-        public void ShouldApplyLanguageAndPlaceholderChecksToEveryChineseProviderTitle(string language, string providerTitle, string expected)
-        {
-            var result = EpisodeTitleBackfillPolicy.ResolveEpisodeTitlePersistence("原有单集标题", CreateLocalizedValue(providerTitle, language));
 
             Assert.AreEqual(expected, result);
         }

@@ -183,33 +183,6 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             var requestedMetadataLanguage = info.MetadataLanguage ?? episodeItem?.GetPreferredMetadataLanguage();
             var titleMetadataLanguage = ResolveEpisodeTargetMetadataLanguage(requestedMetadataLanguage);
 
-            var seriesItem = episodeItem?.Series;
-            var seriesPath = this.GetOriginalSeriesPath(info);
-            if (seriesItem == null && !string.IsNullOrWhiteSpace(seriesPath))
-            {
-                seriesItem = this.FindByPathCached(seriesPath, true) as Series;
-            }
-
-            var seriesOverview = seriesItem?.Overview;
-            var seasonPath = this.GetOriginalSeasonPath(info);
-            var seasonItem = !string.IsNullOrWhiteSpace(seasonPath) ? this.FindByPathCached(seasonPath, true) as Season : null;
-            var seasonOverview = seasonItem?.Overview;
-            var parentTitles = new[] { seriesItem?.Name, seriesItem?.OriginalTitle, seasonItem?.Name, seasonItem?.OriginalTitle };
-            var fallbackTitle = ChineseLocalePolicy.IsChineseMetadataLanguage(titleMetadataLanguage)
-                ? EpisodeTitleBackfillPolicy.ResolveChineseEpisodeTitleFallback(
-                    episodeNumber.Value,
-                    originalMetadataTitle,
-                    episodeItem?.Name,
-                    titleMetadataLanguage,
-                    parentTitles,
-                    new[]
-                    {
-                        string.IsNullOrWhiteSpace(info.Path) ? null : info.Name,
-                        Path.GetFileNameWithoutExtension(info.Path),
-                    })
-                : originalMetadataTitle;
-            result.Item.Name = fallbackTitle;
-
             if (!suppressLlmForImplicitSearchMissingFallback)
             {
                 await this.TryAssistEpisodeGroupMappingWithLlmAsync(seriesTmdbId, info, semantic, cancellationToken).ConfigureAwait(false);
@@ -249,13 +222,23 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             result.HasMetadata = true;
             result.QueriedById = true;
 
+            var seriesItem = episodeItem?.Series;
+            var seriesPath = this.GetOriginalSeriesPath(info);
+            if (seriesItem == null && !string.IsNullOrWhiteSpace(seriesPath))
+            {
+                seriesItem = this.FindByPathCached(seriesPath, true) as Series;
+            }
+
+            var seriesOverview = seriesItem?.Overview;
+            var seasonPath = this.GetOriginalSeasonPath(info);
+            var seasonItem = !string.IsNullOrWhiteSpace(seasonPath) ? this.FindByPathCached(seasonPath, true) as Season : null;
+            var seasonOverview = seasonItem?.Overview;
             var titleResolution = await this.ResolveEffectiveEpisodeProviderTitleAsync(
                     seriesTmdbId.ToInt(),
                     resolvedSeasonNumber,
                     resolvedEpisodeNumber,
                     titleMetadataLanguage,
                     episodeResult.Name,
-                    parentTitles,
                     cancellationToken)
                 .ConfigureAwait(false);
             var effectiveProviderTitle = titleResolution.EffectiveProviderTitle;
@@ -349,15 +332,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
 
             item.PremiereDate = episodeResult.AirDate;
             item.ProductionYear = episodeResult.AirDate?.Year;
-
-            // LLM 文本补全也不能把父级剧名/季名写回单集。
-            if (ChineseLocalePolicy.IsChineseMetadataLanguage(titleMetadataLanguage)
-                && EpisodeTitleBackfillPolicy.IsKnownNonEpisodeTitle(effectiveProviderTitle?.Value, parentTitles))
-            {
-                effectiveProviderTitle = null;
-            }
-
-            item.Name = ResolveEpisodeTitlePersistence(fallbackTitle, effectiveProviderTitle);
+            item.Name = ResolveEpisodeTitlePersistence(originalMetadataTitle, effectiveProviderTitle);
             item.CommunityRating = (float)System.Math.Round(episodeResult.VoteAverage, 1);
             ApplyLlmExternalEpisodeProviderIdWrites(item, externalIdResolutionResult);
 
@@ -842,7 +817,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
             return hasTraditional ? "traditional" : "unknown";
         }
 
-        private async Task<(EpisodeLocalizedValue? DetailsTitle, EpisodeLocalizedValue? TranslationTitle, EpisodeLocalizedValue? EffectiveProviderTitle)> ResolveEffectiveEpisodeProviderTitleAsync(int seriesTmdbId, int seasonNumber, int episodeNumber, string? titleMetadataLanguage, string? providerTitle, IEnumerable<string?> parentTitles, CancellationToken cancellationToken)
+        private async Task<(EpisodeLocalizedValue? DetailsTitle, EpisodeLocalizedValue? TranslationTitle, EpisodeLocalizedValue? EffectiveProviderTitle)> ResolveEffectiveEpisodeProviderTitleAsync(int seriesTmdbId, int seasonNumber, int episodeNumber, string? titleMetadataLanguage, string? providerTitle, CancellationToken cancellationToken)
         {
             var normalizedTitleMetadataLanguage = string.IsNullOrWhiteSpace(titleMetadataLanguage) ? null : ChineseLocalePolicy.CanonicalizeLanguage(titleMetadataLanguage);
             var detailsTitle = TrimEpisodeLocalizedValue(CreateEpisodeLocalizedValue(
@@ -850,8 +825,7 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                 ChineseLocalePolicy.IsChineseMetadataLanguage(normalizedTitleMetadataLanguage) ? normalizedTitleMetadataLanguage : null));
             var trimmedProviderTitle = detailsTitle?.Value;
             if (!ChineseLocalePolicy.IsChineseMetadataLanguage(normalizedTitleMetadataLanguage)
-                || (EpisodeTitleBackfillPolicy.IsUsableChineseEpisodeTitle(detailsTitle)
-                    && !EpisodeTitleBackfillPolicy.IsKnownNonEpisodeTitle(trimmedProviderTitle, parentTitles)))
+                || !IsGenericTmdbEpisodeTitle(trimmedProviderTitle))
             {
                 return (detailsTitle, null, detailsTitle);
             }
@@ -863,18 +837,14 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     normalizedTitleMetadataLanguage,
                     cancellationToken)
                 .ConfigureAwait(false));
-            if (string.Equals(
-                    ChineseLocalePolicy.CanonicalizeLanguage(translationTitle?.SourceLanguage),
-                    normalizedTitleMetadataLanguage,
-                    StringComparison.OrdinalIgnoreCase)
-                && EpisodeTitleBackfillPolicy.IsUsableChineseEpisodeTitle(translationTitle)
-                && !EpisodeTitleBackfillPolicy.IsKnownNonEpisodeTitle(translationTitle?.Value, parentTitles))
+            var trimmedTranslationTitle = translationTitle?.Value;
+            if (string.IsNullOrWhiteSpace(trimmedTranslationTitle)
+                || IsGenericTmdbEpisodeTitle(trimmedTranslationTitle))
             {
-                return (detailsTitle, translationTitle, translationTitle);
+                return (detailsTitle, translationTitle, detailsTitle);
             }
 
-            // 编号占位保留用于回填诊断，其余无效标题不再作为单集候选。
-            return (detailsTitle, translationTitle, IsGenericTmdbEpisodeTitle(trimmedProviderTitle) ? detailsTitle : null);
+            return (detailsTitle, translationTitle, translationTitle);
         }
 
         private async Task<(EpisodeLocalizedValue? EffectiveProviderTitle, (string? Overview, string? ResultLanguage) OverviewDecision)> TryApplyLlmEpisodeAssistAsync(
