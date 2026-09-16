@@ -88,9 +88,22 @@ namespace Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill
             int episodeNumber,
             string? originalMetadataTitle,
             string? currentMetadataTitle,
-            IEnumerable<string?> nonEpisodeTitles)
+            string? metadataLanguage,
+            IEnumerable<string?> parentTitles,
+            IEnumerable<string?> fileNameTitles)
         {
-            // 已有的独立单集名优先保留；父级标题和文件名解析出的剧名不能充当回退。
+            // 已保存且符合目标中文语言的单集名可以与文件名相同，
+            // 不能仅凭文件名就认定它是剧名；已知的父级剧名/季名仍然拒绝。
+            if (!string.IsNullOrWhiteSpace(currentMetadataTitle)
+                && !IsGenericTmdbEpisodeTitle(currentMetadataTitle)
+                && ChineseLocalePolicy.IsTextAllowedForChineseMetadataLanguage(currentMetadataTitle, metadataLanguage)
+                && !IsKnownNonEpisodeTitle(currentMetadataTitle, parentTitles))
+            {
+                return currentMetadataTitle.Trim();
+            }
+
+            // 其余标题不能使用父级标题或文件名解析出的剧名作为回退。
+            var nonEpisodeTitles = parentTitles.Concat(fileNameTitles);
             foreach (var title in new[] { currentMetadataTitle, originalMetadataTitle })
             {
                 if (!string.IsNullOrWhiteSpace(title)

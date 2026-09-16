@@ -134,6 +134,41 @@ public class EpisodeProviderTitleLanguageFallbackTest
         Assert.IsNull(harness.Store.Peek(harness.Episode.Id));
     }
 
+    [DataTestMethod]
+    [DataRow("Chinese (Simplified)", EpisodeTitle, false)]
+    [DataRow("Chinese (Simplified)", EpisodeTitle, true)]
+    [DataRow("zh-SG", "皇后回宫", false)]
+    [DataRow("Chinese (Traditional)", "皇后回宮", false)]
+    [DataRow("zh-HK", "皇后回宮", false)]
+    public async Task MissingTitle_PreservesExistingLocalizedEpisodeTitleWhenItMatchesFileName(string language, string title, bool missingEpisode)
+    {
+        using var harness = new Harness(
+            null,
+            originalTitle: title,
+            currentTitle: title,
+            language: language,
+            missingEpisode: missingEpisode,
+            fileTitle: title);
+        harness.HttpContextAccessor.HttpContext = LlmProviderFlowTestHelpers.CreateExplicitRefreshHttpContext(
+            harness.Episode.Id.ToString("N"), replaceAllMetadata: true);
+
+        var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None);
+
+        Assert.AreEqual(title, result.Item?.Name, "已有符合目标中文语言的独立单集名不能仅因与文件名一致就被丢弃。");
+    }
+
+    [DataTestMethod]
+    [DataRow(SeriesTitle)]
+    [DataRow(SeasonTitle)]
+    public async Task MissingTitle_DoesNotPreserveKnownParentTitleWhenItMatchesFileName(string title)
+    {
+        using var harness = new Harness(null, originalTitle: title, currentTitle: title, fileTitle: title);
+
+        var result = await harness.Provider.GetMetadata(harness.Info, CancellationToken.None);
+
+        Assert.AreEqual("第 18 集", result.Item?.Name, "已知父级剧名和季名不能因符合目标中文语言就被保留。");
+    }
+
     [TestMethod]
     public async Task MissingTitle_DoesNotPreservePreviouslyScrapedFilenameSeriesTitle()
     {
@@ -294,7 +329,8 @@ public class EpisodeProviderTitleLanguageFallbackTest
             bool missingEpisode = false,
             bool useGroupMapping = false,
             string? translationSourceLanguage = null,
-            ILlmMetadataAssistService? llmService = null)
+            ILlmMetadataAssistService? llmService = null,
+            string fileTitle = TraditionalSeriesTitle)
         {
             var configuration = MetaSharkPlugin.Instance!.Configuration;
             configuration.EnableTmdb = true;
@@ -303,7 +339,7 @@ public class EpisodeProviderTitleLanguageFallbackTest
             this.Info = new EpisodeInfo
             {
                 Name = originalTitle,
-                Path = $"/library/tv/Bookworm/Season 04/{TraditionalSeriesTitle} - S04E18.mkv",
+                Path = $"/library/tv/Bookworm/Season 04/{fileTitle} - S04E18.mkv",
                 ParentIndexNumber = 4,
                 IndexNumber = 18,
                 MetadataLanguage = language,

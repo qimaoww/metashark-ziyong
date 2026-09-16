@@ -200,11 +200,13 @@ namespace Jellyfin.Plugin.MetaShark.Providers
                     episodeNumber.Value,
                     originalMetadataTitle,
                     episodeItem?.Name,
-                    parentTitles.Concat(new[]
+                    titleMetadataLanguage,
+                    parentTitles,
+                    new[]
                     {
                         string.IsNullOrWhiteSpace(info.Path) ? null : info.Name,
                         Path.GetFileNameWithoutExtension(info.Path),
-                    }))
+                    })
                 : originalMetadataTitle;
             result.Item.Name = fallbackTitle;
 
