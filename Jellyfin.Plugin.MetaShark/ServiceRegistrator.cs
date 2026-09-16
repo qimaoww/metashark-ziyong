@@ -9,6 +9,7 @@ namespace Jellyfin.Plugin.MetaShark
     using Jellyfin.Plugin.MetaShark.Api;
     using Jellyfin.Plugin.MetaShark.Core;
     using Jellyfin.Plugin.MetaShark.EpisodeGroupMapping;
+    using Jellyfin.Plugin.MetaShark.Providers.Compatibility;
     using Jellyfin.Plugin.MetaShark.Providers.Llm;
     using Jellyfin.Plugin.MetaShark.Workers;
     using Jellyfin.Plugin.MetaShark.Workers.EpisodeTitleBackfill;
@@ -77,6 +78,7 @@ namespace Jellyfin.Plugin.MetaShark
             serviceCollection.AddSingleton<IPersonMissingImageRefillService, PersonMissingImageRefillService>();
             serviceCollection.AddSingleton<IMissingMetadataSearchService, MissingMetadataSearchService>();
             serviceCollection.AddSingleton<MetaSharkOrdinaryItemLibraryCapabilityResolver>();
+            serviceCollection.AddSingleton<EpisodeRefreshTitleGuard>();
             serviceCollection.AddSingleton((ctx) => new MetaSharkSharedEntityLibraryCapabilityResolver(
                 ctx.GetRequiredService<ILibraryManager>(),
                 ctx.GetService<ILinkedChildrenService>(),
