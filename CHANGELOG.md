@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.2.4 - 2026-09-25
+
+### 适配：Jellyfin 12.1
+
+- 依赖 `Jellyfin.Controller` / `Jellyfin.Model` 升级到 12.1.0，插件 manifest 的 `targetAbi` 更新为 `12.1.0.0`。
+- 12.1 是 12.0 之后的修复版本，公共 API 没有破坏性变更：`MediaBrowser.Model` 与 12.0 完全一致；`MediaBrowser.Controller` 只新增成员（`DtoOptions.StoredColumnsOnly`、`Folder.GetLinkedChildren(DtoOptions)`、`Folder.ReleaseCachedChildren`、`InternalItemsQuery.IncludeAlternateVersions`、`ILibraryManager.GetTagNames`、`ILiveTvManager.IsEnabledForUser`、`IItemRepository.GetTagNames`）；插件使用的 `IRemoteMetadataProvider` / `IRemoteImageProvider` / `IRemoteSimilarItemsProvider` / `IExternalId` / `ILinkedChildrenService` / `IBaseItemManager`、`TaskTriggerInfo`、`ProviderIdsExtensions.TrySetProviderId`、`GetSeasonNumberFromPath`、`GetItemList` 签名均未变化，插件源码无需改动即可编译运行（`Folder.ResolveLinkedChildren` 的受保护单参重载被带 `DtoOptions` 的重载取代，插件未使用）。
+- 实机验证（Jellyfin 12.1.0 + 12.0 数据副本）：升级迁移与新库结构正常；插件加载与版本识别、媒体库扫描、6 个 ItemUpdated worker、计划任务（“扫描自动创建合集”“定时搜索缺失元数据”执行完成）、`GET /Libraries/AvailableOptions` 中 MetaShark 的元数据/图片/相似项目提供商注册、插件配置页与 `GET`/`POST /Plugins/{id}/Configuration`、插件图片代理与登录检查接口、插件数据目录状态文件写入均正常，日志无插件异常。
+- 未覆盖验证：本机没有豆瓣登录 Cookie 与 TMDb API Key，豆瓣详情页被风控跳转到 `sec.douban.com`，因此真实外网元数据写入与多版本（alternate version）分集场景未做端到端验证。
+
 ## 3.2.3 - 2026-09-13
 
 ### 修复：Jellyfin 12 新增中文语言代码的全面适配
